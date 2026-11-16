@@ -9,6 +9,9 @@ const RunStateMachineScript := preload("res://scripts/core/run/run_state_machine
 const CheckpointServiceScript := preload("res://scripts/core/save/run_checkpoint_service.gd")
 const VitalsEffects := preload("res://scripts/core/run/run_effect_applier.gd")
 const Z2_CONTENT_VERSION := "z2-system-20261116"
+# The 698beba rules can resume with the default field arsenal. Other content
+# hashes still require a matching ruleset and pass normal snapshot validation.
+const Z2_PRE_FIELD_WEAPONS_HASH := "05aa08d5835587eda620ae96076e7ad7fc494f6fc7b98c6d6285accf7650d5bc"
 const StateSnapshotScript := preload("res://scripts/core/run/run_state_snapshot.gd")
 const ActionTransactionScript := preload("res://scripts/core/run/run_action_transaction.gd")
 const Z2Hooks := preload("res://scripts/core/run/z2_run_hooks.gd")
@@ -1174,7 +1177,8 @@ func _restore_durable_checkpoint(force_install: bool) -> Dictionary:
 	if not loaded.has("snapshot"):
 		return loaded
 	var checkpoint: Dictionary = loaded["snapshot"]
-	if str(checkpoint.get("content_hash", "")) != _content_hash:
+	var checkpoint_hash := str(checkpoint.get("content_hash", ""))
+	if checkpoint_hash != _content_hash and checkpoint_hash != Z2_PRE_FIELD_WEAPONS_HASH:
 		return _storage_error(_atomic_error("checkpoint_content_mismatch"))
 	# Validate even at the same revision. Retain unsaved motion when the primary
 	# is valid and current; a recovered backup must install before repair.
@@ -1332,6 +1336,8 @@ func advance_idle_frame(delta: float) -> Dictionary:
 		var durable := false
 		while _idle_accumulator + 0.000000001 >= 1.0 / 60.0:
 			_idle_accumulator = maxf(0.0, _idle_accumulator - 1.0 / 60.0)
+			if in_run_runtime != null:
+				in_run_runtime.advance_field_reload(1.0 / 60.0)
 			var advanced := advance_simulation_time(1.0 / 60.0)
 			if not bool(advanced.get("ok", false)):
 				return advanced

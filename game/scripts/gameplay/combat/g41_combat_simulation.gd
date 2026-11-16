@@ -11,6 +11,8 @@ const MAX_FRAME_DELTA := 0.25
 const MAX_CATCH_UP_STEPS := 15
 const ROOM_MIN := 0.055
 const ROOM_MAX := 0.945
+const FieldWeapons := preload("res://scripts/gameplay/combat/field_weapons.gd")
+
 const PLAYER_SPEED := 0.385
 const PLAYER_ACCELERATION := 16.0
 const PLAYER_DECELERATION := 22.0
@@ -203,6 +205,10 @@ func validate_transaction_state(state: Dictionary) -> bool:
 			return false
 		if str(hazard.get("control", "")) == "pull" and not _valid_record(hazard, {"origin": TYPE_VECTOR2}):
 			return false
+	if not FieldWeapons.valid_weapon(state.player.get("field_weapon", FieldWeapons.AXE)):
+		return false
+	if not FieldWeapons.valid_weapon(state.active_player_attack.get("weapon", FieldWeapons.AXE)):
+		return false
 	if not state.active_player_attack.is_empty():
 		if not _valid_record(state.active_player_attack, {"attack_id": TYPE_STRING, "origin": TYPE_VECTOR2, "facing": TYPE_VECTOR2, "range": TYPE_FLOAT, "cone_dot": TYPE_FLOAT, "started_tick": TYPE_INT, "resolved": TYPE_BOOL}) or not _valid_sequence_id(state.active_player_attack.attack_id, "player_attack_", state.next_player_attack_index):
 			return false
@@ -727,8 +733,10 @@ func _update_player_attack(delta: float) -> void:
 		state = &"attack_windup"
 		player["state"] = state
 		player["state_timer"] = _attack_seconds(PLAYER_ATTACK_WINDUP)
-		player["attack_cooldown"] = _attack_seconds(PLAYER_ATTACK_COOLDOWN)
 		active_player_attack = _create_player_attack_contract(queued_facing)
+		var weapon := StringName(active_player_attack.get("weapon", FieldWeapons.AXE))
+		var cooldown := float(FieldWeapons.PROFILES[weapon]["cooldown"]) if FieldWeapons.PROFILES.has(weapon) else PLAYER_ATTACK_COOLDOWN
+		player["attack_cooldown"] = _attack_seconds(cooldown)
 		player["facing"] = Vector2(active_player_attack.get("facing", player.get("facing", Vector2.RIGHT)))
 		if attack_started_resolver.is_valid():
 			var started: Variant = attack_started_resolver.call()
@@ -780,6 +788,10 @@ func _perform_player_attack() -> void:
 			step_error = {"ok": false, "reason": "invalid_attack_power"}
 			return
 		attack_power = resolved
+	var weapon := StringName(active_player_attack.get("weapon", FieldWeapons.AXE))
+	if FieldWeapons.PROFILES.has(weapon):
+		_fire_field_weapon(origin, facing, weapon, attack_power)
+		return
 	for enemy_index in range(enemies.size()):
 		var enemy := enemies[enemy_index]
 		if int(enemy.get("hp", 0)) <= 0:
@@ -798,14 +810,7 @@ func _perform_player_attack() -> void:
 		if _line_occluded(origin, Vector2(enemy.get("pos", Vector2.ZERO))):
 			blocked_ids.append(enemy_id)
 			continue
-		var damage := attack_power
-		var critical := false
-		var crit_stats := Z2Talents.critical_stats(player.get("z2_talents", {}))
-		if int(crit_stats.chance_percent) > 0:
-			critical = rng.next_float() * 100.0 < float(crit_stats.chance_percent)
-			if critical:
-				damage = maxi(1, floori(float(damage) * float(crit_stats.damage_percent) / 100.0))
-		_damage_enemy(enemy_index, damage, critical)
+		_apply_player_strike(enemy_index, attack_power)
 		hit_ids.append(enemy_id)
 	var resolved_geometry := active_player_attack.duplicate(true)
 	resolved_geometry["hit_enemy_ids"] = hit_ids
@@ -813,6 +818,47 @@ func _perform_player_attack() -> void:
 	resolved_geometry["blocked_enemy_ids"] = blocked_ids
 	resolved_geometry["blocked_count"] = blocked_ids.size()
 	_emit_event(&"player_attack_resolved", resolved_geometry)
+
+
+func _apply_player_strike(enemy_index: int, base_damage: int) -> void:
+	var crit_stats := Z2Talents.critical_stats(player.get("z2_talents", {}))
+	var critical := int(crit_stats.chance_percent) > 0 and rng.next_float() * 100.0 < float(crit_stats.chance_percent)
+	var damage := maxi(1, floori(float(base_damage) * float(crit_stats.damage_percent) / 100.0)) if critical else base_damage
+	_damage_enemy(enemy_index, damage, critical)
+
+
+func _fire_field_weapon(origin: Vector2, facing: Vector2, weapon: StringName, power: int) -> void:
+	var profile: Dictionary = FieldWeapons.PROFILES[weapon]
+	var endpoints: Array[Vector2] = []
+	var blocked: Array[Vector2] = []
+	var pellets := {}
+	for angle: float in profile["rays"]:
+		var finish := origin + facing.rotated(angle) * float(profile["range"])
+		var limit := minf(1.0, _first_obstacle_hit_fraction(origin, finish, 0.0))
+		var target := -1
+		for index in enemies.size():
+			var enemy := enemies[index]
+			if int(enemy.get("hp", 0)) <= 0:
+				continue
+			var contact := _segment_circle_hit_fraction(origin, finish, enemy["pos"], _enemy_body_radius(enemy))
+			if contact < limit:
+				target = index
+				limit = contact
+		var endpoint := origin.lerp(finish, limit)
+		endpoints.append(endpoint)
+		if target >= 0:
+			var falloff := 0.65 if weapon == FieldWeapons.SCATTER and limit > 0.60 else 1.0
+			pellets[target] = float(pellets.get(target, 0.0)) + falloff
+		elif limit < 1.0:
+			blocked.append(endpoint)
+	var hit_ids: Array[String] = []
+	for index: int in pellets:
+		hit_ids.append(String(enemies[index]["enemy_id"]))
+		_apply_player_strike(index, maxi(1, roundi(power * float(profile["power"]) * float(pellets[index]))))
+	var event := active_player_attack.duplicate(true)
+	event.merge({"hit_enemy_ids": hit_ids, "hit_count": hit_ids.size(), "shot_endpoints": endpoints,
+		"shot_obstacle_endpoints": blocked, "blocked_count": blocked.size()}, true)
+	_emit_event(&"player_attack_resolved", event)
 
 
 func _player_attack_impact_is_due() -> bool:
@@ -1258,6 +1304,8 @@ func _update_projectiles(delta: float) -> void:
 		if obstacle_hit_fraction <= 1.0 and obstacle_hit_fraction <= player_hit_fraction + GEOMETRY_EPSILON:
 			_emit_event(&"projectile_blocked", {
 				"projectile_id": projectile.get("projectile_id", ""),
+				"owner_id": projectile.get("owner_id", ""),
+				"direction": Vector2(projectile.get("velocity", Vector2.RIGHT)).normalized(),
 				"position": from.lerp(to, obstacle_hit_fraction),
 			})
 			continue
@@ -1267,6 +1315,8 @@ func _update_projectiles(delta: float) -> void:
 				return
 			_emit_event(&"projectile_hit", {
 				"projectile_id": projectile.get("projectile_id", ""),
+				"owner_id": projectile.get("owner_id", ""),
+				"direction": Vector2(projectile.get("velocity", Vector2.RIGHT)).normalized(),
 				"position": from.lerp(to, player_hit_fraction),
 			})
 			continue
@@ -1882,7 +1932,7 @@ func _create_player_attack_contract(requested_facing: Vector2 = Vector2.ZERO) ->
 		requested_facing,
 		_normalized_or(Vector2(player.get("facing", aim_input)), Vector2.RIGHT)
 	)
-	return {
+	var contract := {
 		"attack_id": attack_id,
 		"origin": Vector2(player.get("pos", Vector2.ZERO)),
 		"facing": facing,
@@ -1895,6 +1945,12 @@ func _create_player_attack_contract(requested_facing: Vector2 = Vector2.ZERO) ->
 		"shape": &"sector",
 		"target_radius_policy": &"circle_sector_intersection",
 	}
+	var weapon := StringName(player.get("field_weapon", FieldWeapons.AXE))
+	if FieldWeapons.PROFILES.has(weapon):
+		contract["weapon"] = weapon
+		contract["range"] = FieldWeapons.PROFILES[weapon]["range"]
+		contract["shape"] = &"rays"
+	return contract
 
 
 func _build_player_attack_geometry_snapshot() -> Dictionary:

@@ -73,6 +73,7 @@ const SOUTH_DOOR_PROMPT_LIFT_LOCAL := 0.13
 # back onto the authoritative attack origin instead of subtracting it twice.
 const SLASH_SOURCE_ORIGIN := Vector2(131.0, 95.0)
 const SLASH_SOURCE_RADIUS := 113.0
+var combat_art: Node2D
 var room_key: String = ""
 var projection_room_key: String = ""
 var room_type: StringName = &"Unknown"
@@ -598,7 +599,8 @@ func _sync_player_attack_visual(snapshot: Dictionary) -> void:
 	if attack_fx == null or mask == null or slash == null:
 		return
 	var geometry: Dictionary = snapshot.get("player_attack_geometry", {})
-	if geometry.is_empty() or not bool(geometry.get("visible", false)):
+	slash.self_modulate.a = 0.0 if combat_art != null else 1.0
+	if geometry.is_empty() or geometry.get("shape") == &"rays" or not bool(geometry.get("visible", false)):
 		attack_fx.visible = false
 		return
 	var origin := ActorViewScript.local_to_world(Vector2(geometry.get("origin", Vector2.ZERO)))
@@ -1590,6 +1592,8 @@ func _draw() -> void:
 	_draw_z1_hazards()
 	_draw_player_attack_geometry()
 	for raw_laser in (combat_snapshot.get("lasers", []) as Array):
+		if combat_art != null and combat_art.beams.has(String(raw_laser.get("owner_id", ""))):
+			continue
 		if not (raw_laser is Dictionary):
 			continue
 		var laser := raw_laser as Dictionary

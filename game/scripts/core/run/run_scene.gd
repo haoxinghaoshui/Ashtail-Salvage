@@ -42,6 +42,8 @@ const PlayerAppearanceConfigScript := preload("res://scripts/core/content/player
 const RunSceneModalControllerScript := preload("res://scripts/core/run/run_scene_modal_controller.gd")
 const RunScenePersistenceControllerScript := preload("res://scripts/core/run/run_scene_persistence_controller.gd")
 const SettingsPanelScript := preload("res://scripts/ui/settings/settings_panel.gd")
+const CombatArt := preload("res://scripts/presentation/voxel_a1/voxel_combat_overlay.gd")
+const FieldWeapons := preload("res://scripts/gameplay/combat/field_weapons.gd")
 const G41RoomRuntimeViewScript := preload("res://scripts/gameplay/runtime/g41_room_runtime_view.gd")
 const G41RuntimeLayoutScript := preload("res://scripts/gameplay/runtime/g41_runtime_layout.gd")
 const Art25GameplayBackdropScript := preload("res://scripts/presentation/art25_gameplay_backdrop.gd")
@@ -146,6 +148,7 @@ var tutorial_popup_panel: TutorialPopupPanel
 var room_controller: RoomSceneController
 var player_controller: PlayerController
 var room_runtime_view
+var combat_art: CombatArt
 var gameplay_backdrop: Art25GameplayBackdrop
 var screen_state: StringName = SCREEN_MAIN_MENU
 var current_layout_profile_id: StringName = &"desktop"
@@ -317,6 +320,7 @@ func _process(delta: float) -> void:
 			return
 		if room_runtime_view != null:
 			room_runtime_view.advance(delta, player_controller.get_local_position(), combat_snapshot)
+		_update_combat_art(delta, combat_snapshot)
 		if not input_blocked and run_context.run_active:
 			var combat_transition := player_controller.requested_transition(move_vector)
 			if combat_transition != Vector2i.ZERO:
@@ -333,8 +337,24 @@ func _process(delta: float) -> void:
 		runtime_controller.advance_idle_frame(delta)
 	if persistence_controller.present_error():
 		return
+	var snapshot: Dictionary = in_run_runtime.build_read_only_snapshot() if in_run_runtime != null else {}
 	if room_runtime_view != null:
-		room_runtime_view.advance(delta, player_controller.get_local_position(), in_run_runtime.build_read_only_snapshot() if in_run_runtime != null else {})
+		room_runtime_view.advance(delta, player_controller.get_local_position(), snapshot)
+	_update_combat_art(delta, snapshot)
+
+
+func _update_combat_art(delta: float, snapshot: Dictionary) -> void:
+	if combat_art == null:
+		return
+	combat_art.advance(delta, player_controller.get_local_position(), player_controller.get_facing_vector(), snapshot)
+	for id in room_runtime_view.enemy_views:
+		var view = room_runtime_view.enemy_views[id]
+		if is_instance_valid(view.art_sprite):
+			var fallback_art: bool = id not in combat_art.enemies or view.hp <= 0
+			view.art_sprite.self_modulate.a = 1.0 if fallback_art else 0.0
+	for id in room_runtime_view.projectile_views:
+		var view := room_runtime_view.projectile_views[id] as CanvasItem
+		view.modulate.a = 0.0 if combat_art.bolts.has(id) else 1.0
 
 
 func _input(event: InputEvent) -> void:
@@ -416,6 +436,8 @@ func _handle_run_action_input(event: InputEvent) -> bool:
 		return false
 	if map_overlay_panel != null and map_overlay_panel.visible:
 		return false
+	if _handle_field_weapon_input(event):
+		return true
 	var step_direction := _direction_from_input_event(event)
 	if step_direction != Vector2.ZERO and player_controller != null:
 		player_controller.play_step(step_direction)
@@ -455,6 +477,30 @@ func _handle_run_action_input(event: InputEvent) -> bool:
 			return true
 		_:
 			return false
+
+
+func _handle_field_weapon_input(event: InputEvent) -> bool:
+	if in_run_runtime == null or not run_context.run_active:
+		return false
+	if not event is InputEventKey or not event.pressed or event.echo:
+		return false
+	var physical_key: int = event.physical_keycode if event.physical_keycode != 0 else event.keycode
+	var result: Dictionary
+	match physical_key:
+		KEY_1:
+			result = in_run_runtime.equip_field_weapon(FieldWeapons.AXE)
+		KEY_2:
+			result = in_run_runtime.equip_field_weapon(FieldWeapons.RIFLE)
+		KEY_3:
+			result = in_run_runtime.equip_field_weapon(FieldWeapons.SCATTER)
+		KEY_R:
+			if in_run_runtime.field_weapons["selected"] == FieldWeapons.AXE:
+				return false
+			result = in_run_runtime.reload_field_weapon()
+		_:
+			return false
+	_show_command_feedback(result)
+	return true
 
 
 func _is_primary_pointer_attack(event: InputEvent) -> bool:
@@ -520,6 +566,13 @@ func _build_playfield_visuals() -> void:
 	player_controller = PlayerScene.instantiate() as PlayerController
 	player_controller.name = "PlayerController"
 	player_layer.add_child(player_controller)
+	if not OS.get_cmdline_user_args().has("--classic-2d"):
+		combat_art = CombatArt.new()
+		combat_art.name = "VoxelCombatArt"
+		room_runtime_view.add_child(combat_art)
+		room_runtime_view.combat_art = combat_art
+		var sprite := player_controller.get_node("Sprite") as Sprite2D
+		sprite.self_modulate.a = 0.0
 	_suppress_runtime_scene_labels()
 
 
