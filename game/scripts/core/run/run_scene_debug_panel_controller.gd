@@ -38,6 +38,8 @@ var _session_commit_id := ""
 var _focus_before_panel: Control
 var _opened_from_pause := false
 var _scenario_fixture_snapshot: Dictionary = {}
+var _production_checkpoint_service: Variant
+var _production_runtime_state: Dictionary = {}
 
 
 func bind_targets(
@@ -112,6 +114,13 @@ func start_test_room_if_requested(
 		if show_main.is_valid():
 			show_main.call()
 		return true
+	# The existing disposable debug profile never writes a production run
+	# checkpoint. Restore both runtime and binding when leaving this sandbox.
+	var runtime: Variant = _command_bus.runtime_controller
+	if runtime != null:
+		_production_runtime_state = runtime.capture_authoritative_state()
+		_production_checkpoint_service = runtime.checkpoint_service
+		runtime.checkpoint_service = null
 	_scenario_fixture_snapshot = {}
 	var route_result := RunSceneRouteControllerScript.start_from_intent(
 		intent,
@@ -127,6 +136,7 @@ func start_test_room_if_requested(
 			_show_feedback(_scenario_fixture_snapshot)
 	else:
 		_sandbox_session.end(_save_manager, _meta_progress_adapter, false)
+		_restore_production_checkpoint()
 		_show_feedback(route_result)
 		if show_main.is_valid():
 			show_main.call()
@@ -143,11 +153,24 @@ func end_test_room_if_ready() -> Dictionary:
 		_meta_progress_adapter,
 		active_run
 	)
+	if bool(result.get("ok", false)):
+		_restore_production_checkpoint()
 	_update_session_banner()
 	if not bool(result.get("ok", false)):
 		_show_feedback(result)
 	_refresh_shell()
 	return result
+
+
+func _restore_production_checkpoint() -> void:
+	if _production_runtime_state.is_empty():
+		return
+	var runtime: Variant = _command_bus.runtime_controller
+	if runtime != null:
+		runtime.install_authoritative_state(_production_runtime_state)
+		runtime.checkpoint_service = _production_checkpoint_service
+	_production_runtime_state.clear()
+	_production_checkpoint_service = null
 
 
 func is_test_room_active() -> bool:

@@ -10,6 +10,24 @@ static func level_for_pressure(pressure: int) -> int:
 	return RunBalanceCatalogScript.protocol_level_for_pressure(pressure)
 
 
+static func exploration_cost(difficulty: StringName, protocol_level: int, first_entry: bool = true) -> int:
+	if not first_entry:
+		return 0
+	var first_cost_level := 0
+	match difficulty:
+		&"simple", &"easy":
+			first_cost_level = 1
+		&"normal", &"standard":
+			first_cost_level = 2
+		&"hard":
+			first_cost_level = 3
+		&"hell":
+			first_cost_level = 4
+	if protocol_level < 1 or protocol_level > first_cost_level:
+		return 0
+	return first_cost_level - protocol_level + 1
+
+
 static func add_pressure(context: RunContext, amount: int) -> Dictionary:
 	if context == null:
 		return {"pressure": 0, "protocol_level": 5, "changed": false}

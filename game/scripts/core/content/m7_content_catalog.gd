@@ -2,28 +2,64 @@ extends RefCounted
 class_name M7ContentCatalog
 
 const M3ItemCatalogScript := preload("res://scripts/core/content/m3_item_catalog.gd")
+const Z1SupplyCatalogScript := preload("res://scripts/core/content/z1_supply_catalog.gd")
 const TutorialMapCatalogScript := preload("res://scripts/core/run/tutorial_map_catalog.gd")
+const Z1EventCatalogScript := preload("res://scripts/core/content/z1_event_catalog.gd")
+const Z1MonsterCatalogScript := preload("res://scripts/gameplay/combat/z1_monster_catalog.gd")
 
 const DEFAULT_UNLOCKED_MAPS := [
+	"tutorial_5x5",
+]
+const LEGACY_I5_DEFAULT_UNLOCKED_MAPS := [
 	"tutorial_5x5",
 	"classic_7x7_simple",
 	"classic_7x7_normal",
 	"classic_10x10_easy",
 	"classic_10x10_standard",
 ]
+const COMMISSION_EXPLORATION_EXP := 8
+# Z1 Demo cumulative experience from Lv.1 to Lv.30, in level order.
+const PROFILE_EXP_THRESHOLDS: Array[int] = [
+	0, 30, 70, 120, 180, 250, 330, 420, 520, 630,
+	755, 892, 1041, 1202, 1375, 1560, 1757, 1966, 2187, 2420,
+	2665, 2922, 3191, 3472, 3765, 4065, 4370, 4680, 4995, 5315,
+]
 
 
 static func map_definitions() -> Array[Dictionary]:
 	return [
 		_tutorial_map(),
-		_map("classic_7x7_simple", "7×7 简单", "教学 / 低压入门", 7, 10, 5, 1, 0, true, 20),
-		_map("classic_7x7_normal", "7×7 普通", "入门正式局", 7, 10, 5, 0, 1, false, 20),
-		_map("classic_10x10_easy", "10×10 简单", "低压标准局", 10, 20, 10, 0, 3, false, 30),
-		_map("classic_10x10_standard", "10×10 标准", "主展示标准局", 10, 20, 10, 0, 2, false, 30),
-		_map("classic_10x10_hard", "10×10 困难", "高压标准局", 10, 20, 10, 0, 1, false, 30),
-		_map("classic_13x13_normal", "13×13 普通", "大图普通", 13, 34, 17, 0, 4, false, 45),
-		_map("classic_13x13_hard", "13×13 困难", "大图高压", 13, 34, 17, 0, 2, false, 45),
-		_map("classic_13x13_hell", "13×13 地狱", "高失败挑战", 13, 34, 17, 0, 1, false, 45),
+		_map("classic_7x7_simple", "7×7 简单", "教学 / 低压入门", 7, 10, 5, 1, 0, true, {
+			"min_profile_level": 1, "experience_percent": 100, "experience_cap": 45,
+			"required_tutorial": true,
+		}),
+		_map("classic_7x7_normal", "7×7 普通", "入门正式局", 7, 10, 5, 0, 1, false, {
+			"min_profile_level": 3, "experience_percent": 108, "experience_cap": 55,
+			"required_clear_id": "classic_7x7_simple",
+		}),
+		_map("classic_10x10_easy", "10×10 简单", "低压标准局", 10, 20, 10, 0, 3, false, {
+			"min_profile_level": 5, "experience_percent": 100, "experience_cap": 60,
+		}),
+		_map("classic_10x10_standard", "10×10 标准", "主展示标准局", 10, 20, 10, 0, 2, false, {
+			"min_profile_level": 8, "experience_percent": 112, "experience_cap": 75,
+			"required_clear_id": "classic_10x10_easy",
+		}),
+		_map("classic_10x10_hard", "10×10 困难", "高压标准局", 10, 20, 10, 0, 1, false, {
+			"min_profile_level": 12, "experience_percent": 122, "experience_cap": 85,
+			"required_clear_id": "classic_10x10_standard",
+		}),
+		_map("classic_13x13_normal", "13×13 普通", "大图普通", 13, 34, 17, 0, 4, false, {
+			"min_profile_level": 15, "experience_percent": 108, "experience_cap": 85,
+		}),
+		_map("classic_13x13_hard", "13×13 困难", "大图高压", 13, 34, 17, 0, 2, false, {
+			"min_profile_level": 21, "experience_percent": 122, "experience_cap": 95,
+			"required_clear_id": "classic_13x13_normal",
+			"required_research_id": "research_extraction_signal",
+		}),
+		_map("classic_13x13_hell", "13×13 地狱", "高失败挑战", 13, 34, 17, 0, 1, false, {
+			"min_profile_level": 26, "experience_percent": 135, "experience_cap": 100,
+			"required_clear_id": "classic_13x13_hard", "required_achievement_id": "achievement_critical_return",
+		}),
 	]
 
 
@@ -77,12 +113,12 @@ static func map_runtime_config(map_id: String, seed_value: int, run_start_config
 
 static func commission_definitions() -> Array[Dictionary]:
 	return [
-		_commission("commission_recover_supply", "回收补给箱", "成功撤离时带回至少 2 件非消耗品。", &"recover_non_consumables", 2, 25, 25),
-		_commission("commission_route_survey", "路线勘察", "本局探索 12 个不同房间。", &"unique_rooms", 12, 20, 20),
-		_commission("commission_anomaly_cleanup", "异常清理", "击败 2 个怪物遭遇。", &"monsters_defeated", 2, 30, 30),
-		_commission("commission_open_crates", "开箱记录", "打开 2 个宝箱。", &"chests_opened", 2, 25, 25),
-		_commission("commission_event_evidence", "事件取证", "完成 2 个事件。", &"events_completed", 2, 25, 25),
-		_commission("commission_critical_extract", "临界协议撤离", "在协议阶段 1 时成功撤离。", &"critical_extract", 1, 45, 40, ["classic_10x10_hard", "classic_13x13_normal", "classic_13x13_hard", "classic_13x13_hell"]),
+		_commission("commission_recover_supply", "回收补给箱", "成功撤离时带回至少 2 件非消耗品。", &"recover_non_consumables", 2, 25),
+		_commission("commission_route_survey", "路线勘察", "本局探索 12 个不同房间。", &"unique_rooms", 12, 20),
+		_commission("commission_anomaly_cleanup", "异常清理", "击败 2 个怪物遭遇。", &"monsters_defeated", 2, 30),
+		_commission("commission_open_crates", "开箱记录", "打开 2 个宝箱。", &"chests_opened", 2, 25),
+		_commission("commission_event_evidence", "事件取证", "完成 2 个事件。", &"events_completed", 2, 25),
+		_commission("commission_critical_extract", "临界协议撤离", "在协议阶段 1 时成功撤离。", &"critical_extract", 1, 45, ["classic_10x10_hard", "classic_13x13_normal", "classic_13x13_hard", "classic_13x13_hell"]),
 	]
 
 
@@ -161,7 +197,7 @@ static func research_definitions() -> Array[Dictionary]:
 	return [
 		_research("research_anomaly_structure", "异常结构分析", "", 40, "mon_old_gear_set", "开放稳定剂购买，并显示完整怪物档案。"),
 		_research("research_protocol_formula", "协议稳定配方", "research_anomaly_structure", 60, "sp_altar_residue", "开放镇静糖购买，并显示协议压力规则详情。"),
-		_research("research_extraction_signal", "撤离信号校准", "research_protocol_formula", 90, "mon_loader_black_box", "解锁 13×13 普通，并显示撤离权规则详情。"),
+		_research("research_extraction_signal", "撤离信号校准", "research_protocol_formula", 90, "mon_loader_black_box", "显示撤离权规则详情，并满足 13×13 困难的一项开放条件。"),
 	]
 
 
@@ -203,20 +239,23 @@ static func item_definition(item_id: String) -> Dictionary:
 
 static func profile_levels() -> Array[Dictionary]:
 	return [
-		{"level": 1, "exp": 0, "title": "新进回收员"},
-		{"level": 2, "exp": 100, "title": "初级回收员"},
-		{"level": 3, "exp": 250, "title": "异常处理员", "badge": "异常处理员徽章"},
-		{"level": 4, "exp": 450, "title": "高压路线回收员"},
-		{"level": 5, "exp": 700, "title": "灰尾资深回收员", "badge": "阶段资历徽章"},
+		{"level": 1, "exp": profile_exp_for_level(1), "title": "新进回收员"},
+		{"level": 2, "exp": profile_exp_for_level(2), "title": "初级回收员"},
+		{"level": 3, "exp": profile_exp_for_level(3), "title": "异常处理员", "badge": "异常处理员徽章"},
+		{"level": 4, "exp": profile_exp_for_level(4), "title": "高压路线回收员"},
+		{"level": 5, "exp": profile_exp_for_level(5), "title": "灰尾资深回收员", "badge": "阶段资历徽章"},
 	]
 
 
 static func profile_level_for_exp(exp_value: int) -> int:
-	var level := 1
-	for definition in profile_levels():
-		if exp_value >= int(definition.get("exp", 0)):
-			level = int(definition.get("level", 1))
-	return level
+	for index in range(PROFILE_EXP_THRESHOLDS.size() - 1, 0, -1):
+		if exp_value >= PROFILE_EXP_THRESHOLDS[index]:
+			return index + 1
+	return 1
+
+
+static func profile_exp_for_level(level: int) -> int:
+	return PROFILE_EXP_THRESHOLDS[level - 1] if level >= 1 and level <= PROFILE_EXP_THRESHOLDS.size() else -1
 
 
 static func collection_sets() -> Array[Dictionary]:
@@ -248,6 +287,10 @@ static func all_codex_entry_ids() -> Array[String]:
 		result.append("monster:%s" % monster_id)
 	for event_id in ["trader", "dice", "altar", "trap"]:
 		result.append("event:%s" % event_id)
+	for monster_id in Z1MonsterCatalogScript.all_runtime_types():
+		result.append("monster:%s" % monster_id)
+	for event_id in Z1EventCatalogScript.event_ids():
+		result.append("event:%s" % event_id)
 	for item in M3ItemCatalogScript.all_items():
 		if not bool(item.get("is_virtual_record", false)):
 			result.append("item:%s" % str(item.get("item_id", "")))
@@ -255,6 +298,22 @@ static func all_codex_entry_ids() -> Array[String]:
 		result.append("rule:%s" % rule_id)
 	result.append("unique:locked_placeholder")
 	return result
+
+
+static func codex_subject(entry_id: String) -> Dictionary:
+	var subject_id := StringName(entry_id.get_slice(":", 1))
+	if entry_id.begins_with("event:"):
+		var event := Z1EventCatalogScript.definition(subject_id)
+		if not event.is_empty():
+			return {
+				"display_name": event["player_title"],
+				"asset_id": StringName("z1.event.%s" % String(event["source_id"]).to_lower()),
+			}
+	if entry_id.begins_with("monster:"):
+		var monster := Z1MonsterCatalogScript.definition(subject_id)
+		if not monster.is_empty():
+			return {"display_name": monster["display_name"], "asset_id": monster["visual_key"]}
+	return {}
 
 
 static func is_shop_unlocked(definition: Dictionary, meta: Dictionary) -> bool:
@@ -267,10 +326,10 @@ static func is_shop_unlocked(definition: Dictionary, meta: Dictionary) -> bool:
 			return true
 
 
-static func _map(id: String, display_name: String, role: String, size: int, mines: int, content_count: int, visible_exits: int, hidden_exits: int, visible_position_known: bool, success_exp: int) -> Dictionary:
+static func _map(id: String, display_name: String, role: String, size: int, mines: int, content_count: int, visible_exits: int, hidden_exits: int, visible_position_known: bool, progression: Dictionary) -> Dictionary:
 	var difficulty := id.get_slice("_", id.get_slice_count("_") - 1)
 	var labels := {"simple": "简单", "normal": "普通", "easy": "简单", "standard": "标准", "hard": "困难", "hell": "地狱"}
-	return {
+	var definition := {
 		"id": id,
 		"display_name": display_name,
 		"role": role,
@@ -283,16 +342,17 @@ static func _map(id: String, display_name: String, role: String, size: int, mine
 		"visible_exit_position_known": visible_position_known,
 		"difficulty": StringName(difficulty),
 		"difficulty_label": str(labels.get(difficulty, difficulty)),
-		"success_exp": success_exp,
 	}
+	definition.merge(progression)
+	return definition
 
 
 static func _tutorial_map() -> Dictionary:
 	return TutorialMapCatalogScript.definition()
 
 
-static func _commission(id: String, display_name: String, description: String, metric: StringName, target: int, gold: int, exp_value: int, map_ids: Array = []) -> Dictionary:
-	return {"id": id, "display_name": display_name, "description": description, "metric": metric, "target": target, "reward": {"gold": gold, "exp": exp_value}, "map_ids": map_ids.duplicate()}
+static func _commission(id: String, display_name: String, description: String, metric: StringName, target: int, gold: int, map_ids: Array = []) -> Dictionary:
+	return {"id": id, "display_name": display_name, "description": description, "metric": metric, "target": target, "reward": {"gold": gold, "exp": COMMISSION_EXPLORATION_EXP}, "map_ids": map_ids.duplicate()}
 
 
 static func _goal(id: String, display_name: String, description: String, reward: Dictionary) -> Dictionary:
@@ -305,6 +365,9 @@ static func _research(id: String, display_name: String, prerequisite: String, go
 
 static func _shop(item_id: String, price: int, unlock_kind: String = "default", unlock_value: String = "") -> Dictionary:
 	var item := item_definition(item_id)
+	var approved_price := Z1SupplyCatalogScript.out_of_run_price(item_id)
+	if approved_price >= 0:
+		price = approved_price
 	return {"item_id": item_id, "display_name": str(item.get("display_name", item_id)), "price": price, "unlock_kind": unlock_kind, "unlock_value": unlock_value}
 
 

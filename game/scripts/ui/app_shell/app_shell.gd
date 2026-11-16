@@ -21,6 +21,7 @@ signal host_route_requested(intent: Dictionary)
 signal page_changed(page_id: StringName, payload: Dictionary)
 signal meta_action_requested(action: Dictionary)
 signal ui_scale_changed(factor: float)
+signal exit_requested
 
 var _pages: Dictionary = {}
 var main_menu_shell: Control:
@@ -236,20 +237,28 @@ func _show_deploy_internal(tab_id: StringName = &"overview") -> void:
 		deploy_page.call("show_tab", tab_id)
 
 
-func show_long_term(_entry_id: StringName = NavigationIntentScript.LONG_TERM_DEFAULT_MODULE) -> void:
+func show_long_term(_entry_id: StringName = NavigationIntentScript.LONG_TERM_DEFAULT_MODULE, notification: Dictionary = {}) -> void:
 	if not _cancel_navigation_transition_for_external_page_change():
 		return
-	_show_long_term_internal(_entry_id)
+	_show_long_term_internal(_entry_id, notification)
 
 
-func _show_long_term_internal(entry_id: StringName = NavigationIntentScript.LONG_TERM_DEFAULT_MODULE) -> void:
+func _show_long_term_internal(entry_id: StringName = NavigationIntentScript.LONG_TERM_DEFAULT_MODULE, notification: Dictionary = {}) -> void:
 	_ensure_page(PageRouterScript.PAGE_LONG_TERM)
 	_current_page_id = PageRouterScript.PAGE_LONG_TERM
 	_set_page_visible(long_term_page)
 	_hide_settings(false)
 	_hide_exit_confirm(false)
 	if long_term_page != null and long_term_page.has_method("show_module"):
-		long_term_page.call("show_module", NavigationIntentScript.normalize_long_term_module_id(entry_id))
+		var module_id := NavigationIntentScript.normalize_long_term_module_id(entry_id)
+		if not notification.is_empty():
+			if not notification.has("card_id"):
+				notification = long_term_page.call("notification_route_for_module", module_id)
+			if not notification.is_empty():
+				long_term_page.call("set_archive_collapsed", false, false)
+				long_term_page.call("open_notification", notification)
+				return
+		long_term_page.call("show_module", module_id)
 
 
 func show_settings() -> bool:
@@ -526,6 +535,11 @@ func _ensure_page(page_id: StringName) -> Control:
 		page.connect("deploy_start_intent_requested", _on_deploy_start_intent_requested)
 	if page.has_signal("meta_action_requested"):
 		page.connect("meta_action_requested", _forward_meta_action.bind(page_id))
+	if page_id == PageRouterScript.PAGE_DEPLOY_PREP:
+		page.get("modal_focus_stack").stack_changed.connect(func(depth: int, _top: StringName) -> void:
+			if depth == 0:
+				call_deferred("_refresh_visible_snapshot_page")
+		)
 	return page
 
 
@@ -659,7 +673,7 @@ func _build_exit_confirm_layer() -> void:
 	exit_confirm_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	exit_confirm_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	exit_confirm_body.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-	_add_art21_modal_button(exit_confirm_panel, "ExitConfirmAccept", Rect2(392, 444, 190, 58), "确认退出", func() -> void: get_tree().quit())
+	_add_art21_modal_button(exit_confirm_panel, "ExitConfirmAccept", Rect2(392, 444, 190, 58), "确认退出", func() -> void: exit_requested.emit())
 	_add_art21_modal_button(exit_confirm_panel, "ExitConfirmCancel", Rect2(698, 444, 190, 58), "取消", func() -> void: _hide_exit_confirm())
 	_refresh_exit_confirm_text()
 
@@ -962,6 +976,11 @@ func _refresh_snapshot_page(page: Control) -> void:
 		return
 	if not page.has_method("apply_snapshot"):
 		return
+	# Background run clocks must not rebuild a confirmation the player is using.
+	# The latest snapshot remains queued until its modal closes or the run ends.
+	if page_id == PageRouterScript.PAGE_DEPLOY_PREP and bool(current_snapshot.get("run_active", false)):
+		if int(page.get("modal_focus_stack").depth()) > 0:
+			return
 	page.call("apply_snapshot", current_snapshot)
 	_page_snapshot_revisions[page_id] = _snapshot_revision
 	_snapshot_refresh_counts[page_id] = int(_snapshot_refresh_counts.get(page_id, 0)) + 1
@@ -1070,7 +1089,7 @@ func _refresh_exit_confirm_text() -> void:
 		return
 	var has_active_run := bool(current_snapshot.get("run_active", false))
 	if has_active_run:
-		exit_confirm_body.text = "检测到当前存在进行中探索。退出游戏只会关闭程序，不执行探索放弃、结算或资源变动；当前不保证重新启动后能够恢复本次探索。若要放弃探索，请进入出发探索页执行强确认。"
+		exit_confirm_body.text = "当前探索将在保存成功后退出。再次启动可继续探索，关闭期间的战斗与状态计时不会推进。本操作不执行放弃或结算。"
 	else:
 		exit_confirm_body.text = "确认退出游戏？本操作只关闭程序，不执行探索放弃、结算或资源变动。"
 

@@ -15,8 +15,6 @@ const DIFFICULTY_NORMAL := &"normal"
 const REGION_GRAYTAIL_EDGE := &"graytail_edge_preview"
 const SEED_POLICY_DEFER := &"defer_until_run_start"
 const RUN_ORIGIN_PREVIEW := &"deploy_prep_m3r"
-const MAX_EQUIPPED_ITEMS := 2
-const MAX_CARRIED_CONSUMABLES := 3
 const EMERGENCY_CLAIM_ID := &"m6_emergency_ration"
 const ACTIVE_RUN_CANONICAL_FIELDS := [
 	"map_config_id",
@@ -40,6 +38,8 @@ const ACTIVE_RUN_CANONICAL_FIELDS := [
 	"selected_loadout",
 	"carried_consumables",
 	"equipment_effects",
+	"equipment_used",
+	"equipment_capacity",
 	"bag_used",
 	"bag_limit",
 	"backpack_capacity",
@@ -94,7 +94,7 @@ static func default_config(sequence: int = 1, meta_summary: Dictionary = {}) -> 
 		"enabled_work_permits": [],
 		"enabled_intel_flags": [],
 		"bag_used": int(m3r_fields.get("bag_used", 0)),
-		"bag_limit": int(m3r_fields.get("bag_limit", 10)),
+		"bag_limit": int(m3r_fields.get("bag_limit", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY)),
 		"source_page": &"deploy_prep",
 		"created_at_or_sequence": maxi(sequence, 1),
 		"run_origin": RUN_ORIGIN_PREVIEW,
@@ -132,8 +132,8 @@ static func default_config(sequence: int = 1, meta_summary: Dictionary = {}) -> 
 	config["config_validity_preview"] = _config_validity_for(config)
 	config["initial_bag_summary"] = {
 		"used": int(config.get("bag_used", 0)),
-		"limit": int(config.get("bag_limit", 10)),
-		"label": "Carry weight %d / %d" % [int(config.get("bag_used", 0)), int(config.get("bag_limit", 10))],
+		"limit": int(config.get("bag_limit", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY)),
+		"label": "战利品 %d / %d" % [int(config.get("bag_used", 0)), int(config.get("bag_limit", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY))],
 	}
 	config["right_summary_preview"] = right_summary_preview(config)
 	config["risk_summary"] = {"level": &"m3r", "label": "M3R risk summary", "lines": _array_copy(config["right_summary_preview"].get("risk", []))}
@@ -446,17 +446,15 @@ static func _toggle_warehouse_item(config: Dictionary, instance_id: String) -> D
 			return {"config": config.duplicate(true), "changed": false, "message": str(recalculated.get("message", "移出后配置不合法。"))}
 		return {"config": recalculated.get("config", result), "changed": true, "message": "%s 已移出本次出勤。" % str(item.get("display_name", item.get("item_id", "物品")))}
 	if bool(item.get("can_equip", false)):
-		if equipment.size() >= MAX_EQUIPPED_ITEMS:
-			return {"config": config.duplicate(true), "changed": false, "message": "最多穿戴 %d 件装备。" % MAX_EQUIPPED_ITEMS}
-		var slot := str(item.get("equipment_slot", ""))
+		var slot := str(item.get("equipment_slot", "")).strip_edges()
+		if slot.is_empty():
+			return {"config": config.duplicate(true), "changed": false, "message": "该装备缺少有效部位，无法穿戴。"}
 		for raw_equipment in equipment:
 			var equipped := _dictionary_copy(raw_equipment)
-			if slot != "" and str(equipped.get("equipment_slot", "")) == slot:
+			if str(equipped.get("equipment_slot", "")).strip_edges() == slot:
 				return {"config": config.duplicate(true), "changed": false, "message": "同一装备部位不能重复穿戴。"}
 		equipment.append(item.duplicate(true))
 	else:
-		if consumables.size() >= MAX_CARRIED_CONSUMABLES:
-			return {"config": config.duplicate(true), "changed": false, "message": "出发前最多携带 %d 件补给。" % MAX_CARRIED_CONSUMABLES}
 		consumables.append(item.duplicate(true))
 	var recalculated := _recalculate_loadout(result, equipment, consumables)
 	if not bool(recalculated.get("valid", false)):
@@ -477,8 +475,6 @@ static func _toggle_emergency_claim(config: Dictionary) -> Dictionary:
 		result["enabled_claims"] = claims
 		var removed := _recalculate_loadout(result, equipment, consumables)
 		return {"config": removed.get("config", result), "changed": true, "message": "已取消本次应急压缩饼。"}
-	if consumables.size() >= MAX_CARRIED_CONSUMABLES:
-		return {"config": config.duplicate(true), "changed": false, "message": "补给栏已满，请先移出一件补给。"}
 	var ration := M3RItemUsabilityModelScript.normalize_item(M3RItemUsabilityModelScript.item_definition("con_ration"))
 	ration["instance_id"] = claim_instance_id
 	ration["source"] = "m6_emergency_claim"
@@ -497,6 +493,7 @@ static func _recalculate_loadout(config: Dictionary, equipment: Array, consumabl
 	var result := config.duplicate(true)
 	var profile := _dictionary_copy(result.get("profile_fields", {}))
 	var capacity := int(profile.get("backpack_capacity", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY))
+	var equipment_capacity := M3RItemUsabilityModelScript.BASE_EQUIPMENT_CAPACITY
 	var salvage_capacity := int(profile.get("failure_salvage_capacity", M3RItemUsabilityModelScript.BASE_FAILURE_SALVAGE_CAPACITY))
 	var mine_dmg_reduce := int(profile.get("mine_dmg_reduce", 0))
 	var pressure_reduce := int(profile.get("protocol_pressure_reduce", 0))
@@ -507,16 +504,17 @@ static func _recalculate_loadout(config: Dictionary, equipment: Array, consumabl
 		var effect := _dictionary_copy(raw_effect)
 		match str(effect.get("effect_kind", "")):
 			"backpack_capacity": capacity += int(effect.get("effect_amount", 0))
+			"equipment_capacity": equipment_capacity += int(effect.get("effect_amount", 0))
 			"salvage_capacity": salvage_capacity += int(effect.get("effect_amount", 0))
 			"mine_damage_reduce": mine_dmg_reduce += int(effect.get("effect_amount", 0))
 			"protocol_pressure_reduce": pressure_reduce += int(effect.get("effect_amount", 0))
 			"search_reward": search_reward_bonus += int(effect.get("effect_amount", 0))
 			"scan_hint": scan_hint_bonus += int(effect.get("effect_amount", 0))
 	var used := 0
-	for raw_item in consumables:
+	for raw_item in equipment + consumables:
 		used += maxi(0, int(_dictionary_copy(raw_item).get("weight", 0)))
-	if used > capacity:
-		return {"config": config.duplicate(true), "valid": false, "message": "背包超重：%d / %d。" % [used, capacity]}
+	if used > equipment_capacity:
+		return {"config": config.duplicate(true), "valid": false, "message": "共享负重超限：%d / %d（穿戴装备与补给）。" % [used, equipment_capacity]}
 	result["selected_equipment_items"] = _array_copy(equipment)
 	result["selected_consumable_items"] = _array_copy(consumables)
 	result["selected_equipment_ids"] = _instance_ids(equipment)
@@ -524,7 +522,9 @@ static func _recalculate_loadout(config: Dictionary, equipment: Array, consumabl
 	result["selected_loadout"] = _instance_ids(equipment)
 	result["carried_consumables"] = _instance_ids(consumables)
 	result["equipment_effects"] = effects
-	result["bag_used"] = used
+	result["equipment_used"] = used
+	result["equipment_capacity"] = equipment_capacity
+	result["bag_used"] = 0
 	result["bag_limit"] = capacity
 	result["backpack_capacity"] = capacity
 	result["failure_salvage_capacity"] = salvage_capacity
@@ -538,7 +538,7 @@ static func _recalculate_loadout(config: Dictionary, equipment: Array, consumabl
 	result["right_summary_preview"] = right_summary_preview(result)
 	result["risk_summary"] = {"level": &"m7", "label": "M7 risk summary", "lines": _array_copy(result["right_summary_preview"].get("risk", []))}
 	result["effect_summary"] = {"label": "M7 effect summary", "lines": _array_copy(result["right_summary_preview"].get("effect", []))}
-	result["initial_bag_summary"] = {"used": used, "limit": capacity, "label": "Carry weight %d / %d" % [used, capacity]}
+	result["initial_bag_summary"] = {"used": 0, "limit": capacity, "label": "战利品 0 / %d" % capacity}
 	return {"config": result, "valid": true, "message": "配置已更新。"}
 
 
@@ -601,9 +601,11 @@ static func build_run_start_config(config: Dictionary) -> Dictionary:
 		"enabled_services": _array_copy(source.get("enabled_services", [])),
 		"enabled_work_permits": _array_copy(source.get("enabled_work_permits", [])),
 		"enabled_intel_flags": _array_copy(source.get("enabled_intel_flags", [])),
+		"equipment_used": int(source.get("equipment_used", 0)),
+		"equipment_capacity": int(source.get("equipment_capacity", M3RItemUsabilityModelScript.BASE_EQUIPMENT_CAPACITY)),
 		"bag_used": int(source.get("bag_used", 0)),
-		"bag_limit": int(source.get("bag_limit", 10)),
-		"backpack_capacity": int(source.get("backpack_capacity", source.get("bag_limit", 10))),
+		"bag_limit": int(source.get("bag_limit", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY)),
+		"backpack_capacity": int(source.get("backpack_capacity", source.get("bag_limit", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY))),
 		"failure_salvage_capacity": int(source.get("failure_salvage_capacity", 4)),
 		"profile_fields": _dictionary_copy(source.get("profile_fields", {})),
 		"talent_interface": _array_copy(source.get("talent_interface", [])),
@@ -672,6 +674,7 @@ static func build_run_start_config(config: Dictionary) -> Dictionary:
 		result["equipment_effects"] = []
 		result["selected_objective_id"] = &""
 		result["selected_objective_label"] = "教学目标"
+		result["equipment_used"] = 0
 		result["bag_used"] = 0
 	return result
 
@@ -696,8 +699,8 @@ static func right_summary_preview(config: Dictionary) -> Dictionary:
 	return {
 		"map": ["地图：%s" % map_label, "难度：%s" % difficulty_label, "区域：%s" % region_label],
 		"objective": ["委托：%s" % str(config.get("selected_objective_label", "回收补给箱")), "达成条件并成功撤离后自动发放奖励", "当前探索：%s" % str(active_run.get("label", "no active run"))],
-		"config": ["装备实例：%s" % _join_array(equipment_ids, "无"), "消耗品实例：%s" % _join_array(consumable_ids, "无"), "背包：%d/%d" % [int(config.get("bag_used", 0)), int(config.get("bag_limit", 10))]],
-		"effect": ["已选装备在本局生效且不占背包", "携入消耗品占用背包", "所有消耗品在任意终局清除", "失败保全按重量由玩家确认"],
+		"config": ["装备实例：%s" % _join_array(equipment_ids, "无"), "消耗品实例：%s" % _join_array(consumable_ids, "无"), "共享负重：%d/%d" % [int(config.get("equipment_used", 0)), int(config.get("equipment_capacity", M3RItemUsabilityModelScript.BASE_EQUIPMENT_CAPACITY))], "战利品：%d/%d" % [int(config.get("bag_used", 0)), int(config.get("bag_limit", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY))]],
+		"effect": ["穿戴装备与补给共用负重", "未穿戴装备与战利品占用独立背包", "所有消耗品在任意终局清除", "失败保全按重量由玩家确认"],
 		"risk": ["黑色资源仅成功时转为金色资源", "放弃不保全物品但保留直接获得的金色资源", "当前进程可返回整备并继续同一局", "失败抢救确认前不会写入局外进度"],
 	}
 
@@ -721,12 +724,12 @@ static func _legacy_right_summary_preview(config: Dictionary) -> Dictionary:
 		"config": [
 			"装备：%s" % _join_array(loadout.get("equipped", []), "无"),
 			"消耗品：%s" % _join_array(loadout.get("carried_consumables", []), "无"),
-			"背包：%d/%d" % [int(config.get("bag_used", 0)), int(config.get("bag_limit", 10))],
+			"背包：%d/%d" % [int(config.get("bag_used", 0)), int(config.get("bag_limit", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY))],
 			"仓库：%d 件" % int(warehouse.get("item_count", 0)),
 		],
 		"effect": [
 			"装备将在本次探索生效",
-			"消耗品带入背包",
+			"穿戴装备与补给共用负重",
 			"未使用补给按结果结算",
 			"天赋影响背包与回收",
 		],
@@ -798,8 +801,10 @@ static func history_metadata_for(config: Dictionary) -> Dictionary:
 		"selected_objective_label": str(config.get("selected_objective_label", "Recover Cache")),
 		"selected_equipment_ids": _array_copy(config.get("selected_equipment_ids", config.get("selected_loadout", []))),
 		"selected_consumable_ids": _array_copy(config.get("selected_consumable_ids", config.get("carried_consumables", []))),
+		"equipment_used": int(config.get("equipment_used", 0)),
+		"equipment_capacity": int(config.get("equipment_capacity", M3RItemUsabilityModelScript.BASE_EQUIPMENT_CAPACITY)),
 		"bag_used": int(config.get("bag_used", 0)),
-		"bag_limit": int(config.get("bag_limit", 10)),
+		"bag_limit": int(config.get("bag_limit", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY)),
 		"read_only": true,
 		"display_only": false,
 		"preview": false,
@@ -890,13 +895,15 @@ static func _loadout_from_m3r(m3r_fields: Dictionary) -> Dictionary:
 
 static func _capacity_from_m3r(m3r_fields: Dictionary) -> Dictionary:
 	var used := int(m3r_fields.get("bag_used", 0))
-	var limit := int(m3r_fields.get("bag_limit", m3r_fields.get("backpack_capacity", 10)))
+	var limit := int(m3r_fields.get("bag_limit", m3r_fields.get("backpack_capacity", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY)))
 	return {
 		"used": used,
 		"limit": limit,
-		"label": "Carry weight %d / %d" % [used, limit],
+		"label": "战利品 %d / %d" % [used, limit],
+		"equipment_used": int(m3r_fields.get("equipment_used", 0)),
+		"equipment_capacity": int(m3r_fields.get("equipment_capacity", M3RItemUsabilityModelScript.BASE_EQUIPMENT_CAPACITY)),
 		"failure_salvage_capacity": int(m3r_fields.get("failure_salvage_capacity", 4)),
-		"capacity_scope": "Carry-in consumables use capacity; equipment enters equipped/runtime passive context.",
+		"capacity_scope": "穿戴装备与补给共用负重；未穿戴装备与战利品使用独立背包。",
 		"display_only": false,
 		"read_only": true,
 		"preview": false,
@@ -919,8 +926,8 @@ static func _permission_interface_preview() -> Dictionary:
 static func _backpack_capacity_preview() -> Dictionary:
 	return {
 		"used": 0,
-		"limit": 10,
-		"label": "Carry weight 0 / 10",
+		"limit": M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY,
+		"label": "战利品 0 / %d" % M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY,
 		"display_only": false,
 		"read_only": true,
 		"preview": false,
@@ -934,7 +941,7 @@ static func _config_validity_preview() -> Dictionary:
 		"selected_difficulty": &"simple",
 		"unlocked_map_ids": M7ContentCatalogScript.DEFAULT_UNLOCKED_MAPS,
 		"bag_used": 0,
-		"bag_limit": 10,
+		"bag_limit": M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY,
 	})
 
 
@@ -944,7 +951,9 @@ static func config_validity(config: Dictionary) -> Dictionary:
 
 static func _config_validity_for(config: Dictionary) -> Dictionary:
 	var used := int(config.get("bag_used", 0))
-	var limit := int(config.get("bag_limit", 10))
+	var limit := int(config.get("bag_limit", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY))
+	var equipment_used := int(config.get("equipment_used", 0))
+	var equipment_capacity := int(config.get("equipment_capacity", M3RItemUsabilityModelScript.BASE_EQUIPMENT_CAPACITY))
 	var map_id := str(config.get("map_config_id", ""))
 	var definition := M7ContentCatalogScript.map_definition_exact(map_id)
 	var exact := not definition.is_empty()
@@ -961,7 +970,7 @@ static func _config_validity_for(config: Dictionary) -> Dictionary:
 		and StringName(config.get("difficulty", &"")) == expected_difficulty
 		and StringName(config.get("selected_difficulty", config.get("difficulty", &""))) == expected_difficulty
 	)
-	var within_capacity := used <= limit
+	var within_capacity := used <= limit and equipment_used <= equipment_capacity
 	var valid := within_capacity and exact and unlocked and difficulty_matches
 	var reason_code := &"ok"
 	if not exact:
@@ -972,7 +981,9 @@ static func _config_validity_for(config: Dictionary) -> Dictionary:
 		reason_code = &"map_locked"
 	elif not difficulty_matches:
 		reason_code = &"difficulty_mismatch"
-	elif not within_capacity:
+	elif equipment_used > equipment_capacity:
+		reason_code = &"equipment_overweight"
+	elif used > limit:
 		reason_code = &"backpack_overweight"
 	return {
 		"label": "M6 出勤配置合法" if valid else "出勤配置需要调整",
@@ -982,7 +993,8 @@ static func _config_validity_for(config: Dictionary) -> Dictionary:
 			"difficulty matches catalog: %s" % difficulty_matches,
 			"warehouse instances selected by player",
 			"equipment slots and carried supplies validated",
-			"carry weight %d / %d" % [used, limit],
+			"shared weight %d / %d" % [equipment_used, equipment_capacity],
+			"loot weight %d / %d" % [used, limit],
 			"RunStartConfig can be handed to the existing route adapter",
 		],
 		"can_start": valid,

@@ -466,7 +466,7 @@ func _test_persistent_idempotency_across_controller_rebuild() -> void:
 	_expect(bool(first.get("ok", false)), "persistent purchase did not commit")
 	var gold_after_first := int(adapter.data.get("gold", -1))
 	var warehouse_count_after_first := (adapter.data.get("warehouse_items", []) as Array).size()
-	_expect(gold_after_first == 88, "persistent purchase debited an unexpected amount")
+	_expect(gold_after_first == 94, "persistent purchase debited an unexpected amount")
 
 	var raw_save: Variant = JSON.parse_string(FileAccess.get_file_as_string(PERSISTENT_IDEMPOTENCY_PATH))
 	_expect(raw_save is Dictionary, "persistent purchase did not leave a readable atomic save")

@@ -37,6 +37,10 @@ func _run() -> void:
 		_finish()
 		return
 
+	var adapter = run_scene.get("runtime_controller").get("meta_progress_adapter")
+	adapter.data["tutorial_completed"] = true
+	adapter.data["unlocked_map_ids"] = ["tutorial_5x5", "classic_7x7_simple"]
+	_require(adapter.save(), "post-tutorial combat fixture did not save")
 	await _tap_key(KEY_ENTER)
 	_require(await _wait_screen(&"deploy_shell", 6.0), "real Enter input did not reach the production deploy page")
 	var deploy_page := _deploy_page()
@@ -575,6 +579,10 @@ func _latest_event_of_type_after(runtime, event_type: StringName, after_index: i
 
 
 func _set_only_fixed_seed(deploy_page: Control) -> void:
+	var snapshot: Dictionary = deploy_page.get("current_snapshot").duplicate(true)
+	snapshot["meta_progress_summary"] = run_scene.get("runtime_controller").call("meta_progress_summary")
+	deploy_page.call("apply_snapshot", snapshot)
+	deploy_page.call("_on_map_requested", &"classic_7x7_simple")
 	var current_model: Dictionary = deploy_page.get("current_model")
 	var config: Dictionary = (current_model.get("config", {}) as Dictionary).duplicate(true)
 	config["seed_value"] = FIXED_SEED

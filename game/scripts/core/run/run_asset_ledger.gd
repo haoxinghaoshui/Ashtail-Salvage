@@ -12,6 +12,8 @@ const LOCATION_SETTLEMENT_POOL := &"settlement_pool"
 const LOCATION_LOST := &"lost"
 const LOCATION_CONSUMED := &"consumed"
 const LOCATION_CLEARED := &"cleared"
+const LOCATION_CONSIGNED := &"consigned"
+const LOCATION_PLEDGED := &"pledged"
 
 const CURRENCY_BLACK := &"black_coin"
 const CURRENCY_GOLD := &"gold_coin"
@@ -26,16 +28,20 @@ var room_floor_items: Dictionary = {}
 var status_effects: Array[Dictionary] = []
 var settlement_log: Array[Dictionary] = []
 var warehouse_lite: Array[Dictionary] = []
-var backpack_capacity: int = 10
-var failure_salvage_capacity: int = 4
+var backpack_capacity: int = 100
+var equipment_capacity: int = 100
+var failure_salvage_capacity: int = 40
 var black_to_gold_rate: float = 1.0
 var next_instance_index: int = 1
+var run_id: String = ""
 
 
 func setup(config: Dictionary) -> void:
 	reset()
-	backpack_capacity = int(config.get("backpack_capacity", 10))
-	failure_salvage_capacity = int(config.get("failure_salvage_capacity", 4))
+	run_id = String(config.get("run_id", ""))
+	backpack_capacity = int(config.get("backpack_capacity", 100))
+	equipment_capacity = int(config.get("equipment_capacity", 100))
+	failure_salvage_capacity = int(config.get("failure_salvage_capacity", 40))
 	black_to_gold_rate = float(config.get("black_to_gold_rate", 1.0))
 	_define_default_currencies()
 	_add_starting_loadout(config)
@@ -49,10 +55,12 @@ func reset() -> void:
 	status_effects.clear()
 	settlement_log.clear()
 	warehouse_lite.clear()
-	backpack_capacity = 10
-	failure_salvage_capacity = 4
+	backpack_capacity = 100
+	equipment_capacity = 100
+	failure_salvage_capacity = 40
 	black_to_gold_rate = 1.0
 	next_instance_index = 1
+	run_id = ""
 
 
 func _define_default_currencies() -> void:
@@ -97,12 +105,21 @@ func get_currency(currency_id: StringName) -> int:
 
 
 func create_item_instance(item_def: Dictionary, location_state: StringName, room_pos: Vector2i = Vector2i(-999, -999)) -> Dictionary:
-	var instance_id := String(item_def.get("instance_id", "item_%04d_%s" % [next_instance_index, String(item_def.get("item_id", "unknown"))]))
-	next_instance_index += 1
+	item_def = M3ItemCatalog.normalize_instance_units(item_def)
+	var instance_id := String(item_def.get("instance_id", ""))
+	if not instance_id.is_empty() and item_instances.has(instance_id):
+		return {}
+	if instance_id.is_empty():
+		# Fresh rewards must remain distinct when different runs repeat a drop order.
+		var instance_token := Crypto.new().generate_random_bytes(16).hex_encode()
+		instance_id = "item_%s_%04d_%s" % [instance_token, next_instance_index, String(item_def.get("item_id", "unknown"))]
+	var acquired_sequence := next_instance_index
 	var rarity := _normalize_rarity(StringName(item_def.get("rarity", &"common")))
 	var item_type := StringName(item_def.get("item_type", &"collectible"))
 	var unique_item := rarity == &"unique" or bool(item_def.get("is_unique", false))
-	var normalized := {
+	# Retain instance-bound counters and provenance through admission/normalization.
+	var normalized := item_def.duplicate(true)
+	normalized.merge({
 		"instance_id": instance_id,
 		"item_id": String(item_def.get("item_id", item_def.get("id", "unknown_item"))),
 		"display_name": String(item_def.get("display_name", item_def.get("item_id", item_def.get("id", "Unknown Item")))),
@@ -137,7 +154,11 @@ func create_item_instance(item_def: Dictionary, location_state: StringName, room
 		"visual_only": bool(item_def.get("visual_only", false)),
 		"location_state": location_state,
 		"room_pos": room_pos,
-	}
+		"origin_run_id": String(item_def.get("origin_run_id", run_id)),
+		"origin_action_id": String(item_def.get("origin_action_id", "")),
+		"acquired_sequence": int(item_def.get("acquired_sequence", acquired_sequence)),
+		"counters": item_def.get("counters", {}).duplicate(true) if item_def.get("counters", {}) is Dictionary else {},
+	}, true)
 	if bool(normalized.get("carry_in_equipment", false)):
 		normalized["registered_for_run"] = true
 		normalized["equip_allowed_now"] = true
@@ -148,18 +169,32 @@ func create_item_instance(item_def: Dictionary, location_state: StringName, room
 	if bool(normalized.get("acquired_in_run", false)) and bool(normalized.get("can_equip", false)):
 		normalized["equip_allowed_now"] = false
 	item_instances[instance_id] = normalized
+	next_instance_index += 1
 	if location_state == LOCATION_ROOM_FLOOR:
 		_register_room_floor_item(instance_id, room_pos)
 	return normalized.duplicate(true)
 
 
-func add_reward_items(item_defs: Array, preferred_location: StringName, room_pos: Vector2i, source: String = "") -> Dictionary:
+func add_reward_items(item_defs: Array, preferred_location: StringName, room_pos: Vector2i, source: String = "", origin: Dictionary = {}) -> Dictionary:
+	# Validate explicit identities before creating any part of the batch.
+	var seen := {}
+	for raw_def in item_defs:
+		if not raw_def is Dictionary:
+			return {"ok": false, "status": &"invalid_item", "reason": "item_definition_not_dictionary"}
+		var instance_id := String(raw_def.get("instance_id", ""))
+		if not instance_id.is_empty():
+			if seen.has(instance_id) or item_instances.has(instance_id):
+				return {"ok": false, "status": &"duplicate_instance", "reason": "duplicate_item_instance", "instance_id": instance_id}
+			seen[instance_id] = true
 	var inventory_items: Array[Dictionary] = []
 	var equipped_items: Array[Dictionary] = []
 	var ground_items: Array[Dictionary] = []
 	var blocked_reasons: Array[String] = []
 	for raw_def in item_defs:
-		var item_def: Dictionary = raw_def.duplicate(true)
+		var item_def := M3ItemCatalog.normalize_instance_units(raw_def)
+		for field in ["origin_run_id", "origin_action_id", "acquired_sequence"]:
+			if not item_def.has(field) and origin.has(field):
+				item_def[field] = origin[field]
 		if source != "":
 			item_def["source"] = source
 		if not bool(item_def.get("registered_for_run", false)):
@@ -185,6 +220,8 @@ func add_reward_items(item_defs: Array, preferred_location: StringName, room_pos
 			ground_items.append(floor_item)
 			blocked_reasons.append(String(capacity_check.get("reason", "blocked_capacity")))
 	return {
+		"ok": true,
+		"status": &"items_added",
 		"inventory_items": inventory_items,
 		"equipped_items": equipped_items,
 		"ground_items": ground_items,
@@ -194,11 +231,14 @@ func add_reward_items(item_defs: Array, preferred_location: StringName, room_pos
 
 
 func can_fit_item(item_def: Dictionary) -> Dictionary:
+	item_def = M3ItemCatalog.normalize_instance_units(item_def)
 	var weight := maxi(0, int(item_def.get("weight", 1)))
-	var used := get_backpack_used()
-	if used + weight > backpack_capacity:
-		return {"ok": false, "status": &"blocked_capacity", "reason": "blocked_capacity", "used": used, "weight": weight, "capacity": backpack_capacity}
-	return {"ok": true, "used": used, "weight": weight, "capacity": backpack_capacity}
+	var shared := _is_consumable(item_def)
+	var used := get_equipment_used() if shared else get_backpack_used()
+	var limit := equipment_capacity if shared else backpack_capacity
+	if used + weight > limit:
+		return {"ok": false, "status": &"blocked_capacity", "reason": "equipment_capacity_exceeded" if shared else "blocked_capacity", "used": used, "weight": weight, "capacity": limit}
+	return {"ok": true, "used": used, "weight": weight, "capacity": limit}
 
 
 func pickup_ground_item(instance_id: String, room_pos: Vector2i) -> Dictionary:
@@ -257,18 +297,13 @@ func replace_ground_item_with_inventory_item(ground_instance_id: String, drop_in
 	var drop_item: Dictionary = item_instances[target_drop_id]
 	if StringName(drop_item.get("location_state", &"")) != LOCATION_INVENTORY:
 		return {"ok": false, "status": &"not_in_inventory", "reason": "drop_item_not_in_inventory"}
-	var projected_used := get_backpack_used() - int(drop_item.get("weight", 0)) + int(ground_item.get("weight", 0))
-	if projected_used > backpack_capacity:
+	var moves := {target_drop_id: LOCATION_ROOM_FLOOR, target_ground_id: LOCATION_INVENTORY}
+	var projected := _preview_item_moves(moves)
+	if not bool(projected.get("ok", false)):
 		return {"ok": false, "status": &"blocked_capacity", "reason": "replacement_still_over_capacity", "ground_item": ground_item.duplicate(true), "drop_item": drop_item.duplicate(true), "capacity": get_capacity_snapshot()}
-	var drop_result := drop_inventory_item(target_drop_id, room_pos)
-	if not bool(drop_result.get("ok", false)):
-		return drop_result
-	var pickup_result := pickup_ground_item(target_ground_id, room_pos)
-	if not bool(pickup_result.get("ok", false)):
-		pickup_result["drop_result"] = drop_result
-		return pickup_result
-	var picked_item: Dictionary = pickup_result.get("item", ground_item)
-	var dropped_item: Dictionary = drop_result.get("item", drop_item)
+	_commit_item_moves(moves, projected, room_pos)
+	var picked_item: Dictionary = item_instances[target_ground_id]
+	var dropped_item: Dictionary = item_instances[target_drop_id]
 	settlement_log.append({"type": &"replace_ground_item", "picked_instance_id": target_ground_id, "dropped_instance_id": target_drop_id, "room_pos": room_pos})
 	return {"ok": true, "status": &"replaced", "item": picked_item.duplicate(true), "dropped_item": dropped_item.duplicate(true), "ground_item": picked_item.duplicate(true), "capacity": get_capacity_snapshot()}
 
@@ -287,6 +322,40 @@ func consume_inventory_item(instance_id: String) -> Dictionary:
 	return {"ok": true, "status": &"consumed", "item": item.duplicate(true), "capacity": get_capacity_snapshot()}
 
 
+func transfer_event_items(instance_ids: Array, destination: StringName) -> Dictionary:
+	if destination not in [LOCATION_CONSUMED, LOCATION_CONSIGNED, LOCATION_PLEDGED] or instance_ids.is_empty():
+		return {"ok": false, "reason": "invalid_event_transfer"}
+	var seen := {}
+	for raw_id in instance_ids:
+		var instance_id := String(raw_id)
+		var item: Dictionary = item_instances.get(instance_id, {})
+		if seen.has(instance_id) or StringName(item.get("location_state", &"")) != LOCATION_INVENTORY:
+			return {"ok": false, "reason": "event_item_unavailable", "message": "选中的物品已不在背包中。"}
+		seen[instance_id] = true
+	var moved: Array[Dictionary] = []
+	for instance_id in seen:
+		var item: Dictionary = item_instances[instance_id]
+		item["location_state"] = destination
+		item_instances[instance_id] = item
+		moved.append(item.duplicate(true))
+	settlement_log.append({"type": &"event_item_transfer", "destination": destination, "instance_ids": seen.keys()})
+	return {"ok": true, "items": moved, "capacity": get_capacity_snapshot()}
+
+
+func deliver_inventory_item(instance_id: String, expected_item_id: String, source: String) -> Dictionary:
+	if not item_instances.has(instance_id):
+		return {"ok": false, "reason": "item_not_found"}
+	var item: Dictionary = item_instances[instance_id]
+	if StringName(item.get("location_state", &"")) != LOCATION_INVENTORY:
+		return {"ok": false, "reason": "item_not_in_inventory"}
+	if expected_item_id.is_empty() or str(item.get("item_id", "")) != expected_item_id:
+		return {"ok": false, "reason": "wrong_delivery_item"}
+	item["location_state"] = LOCATION_CONSUMED
+	item_instances[instance_id] = item
+	settlement_log.append({"type": &"deliver_item", "instance_id": instance_id, "item_id": expected_item_id, "source": source})
+	return {"ok": true, "status": &"delivered", "item": item.duplicate(true), "capacity": get_capacity_snapshot()}
+
+
 func equip_inventory_item(instance_id: String) -> Dictionary:
 	if not item_instances.has(instance_id):
 		return {"ok": false, "status": &"not_found", "reason": "item_not_found"}
@@ -299,10 +368,20 @@ func equip_inventory_item(instance_id: String) -> Dictionary:
 		return {"ok": false, "status": &"blocked_registration", "reason": "equipment_requires_extraction_registration", "item": item.duplicate(true), "capacity": get_capacity_snapshot()}
 	if not bool(item.get("equip_allowed_now", false)):
 		return {"ok": false, "status": &"blocked_registration", "reason": "equipment_requires_extraction_registration", "item": item.duplicate(true), "capacity": get_capacity_snapshot()}
-	item["location_state"] = LOCATION_EQUIPPED
-	item_instances[instance_id] = item
+	var moves := {instance_id: LOCATION_EQUIPPED}
+	var slot := String(item.get("equipment_slot", "")).strip_edges()
+	if slot.is_empty():
+		return {"ok": false, "status": &"blocked_slot", "reason": "empty_equipment_slot"}
+	for equipped in get_items_by_location(LOCATION_EQUIPPED):
+		if String(equipped.get("equipment_slot", "")).strip_edges() == slot:
+			moves[String(equipped["instance_id"])] = LOCATION_INVENTORY
+	var projected := _preview_item_moves(moves)
+	if not bool(projected.get("ok", false)):
+		return projected
+	var equipment_changes := _equipment_changes_for_moves(moves)
+	_commit_item_moves(moves, projected)
 	settlement_log.append({"type": &"equip", "instance_id": instance_id})
-	return {"ok": true, "status": &"equipped", "item": item.duplicate(true), "capacity": get_capacity_snapshot()}
+	return {"ok": true, "status": &"equipped", "item": item_instances[instance_id].duplicate(true), "equipment_changes": equipment_changes, "capacity": get_capacity_snapshot()}
 
 
 func unequip_item(instance_id: String) -> Dictionary:
@@ -311,13 +390,66 @@ func unequip_item(instance_id: String) -> Dictionary:
 	var item: Dictionary = item_instances[instance_id]
 	if StringName(item.get("location_state", &"")) != LOCATION_EQUIPPED:
 		return {"ok": false, "status": &"not_equipped", "reason": "item_not_equipped"}
-	var capacity_check := can_fit_item(item)
-	if not bool(capacity_check.get("ok", false)):
-		return {"ok": false, "status": &"blocked_capacity", "reason": "blocked_capacity", "item": item.duplicate(true), "capacity": get_capacity_snapshot()}
-	item["location_state"] = LOCATION_INVENTORY
-	item_instances[instance_id] = item
+	var moves := {instance_id: LOCATION_INVENTORY}
+	var projected := _preview_item_moves(moves)
+	if not bool(projected.get("ok", false)):
+		return projected
+	var equipment_changes := _equipment_changes_for_moves(moves)
+	_commit_item_moves(moves, projected)
 	settlement_log.append({"type": &"unequip", "instance_id": instance_id})
-	return {"ok": true, "status": &"unequipped", "item": item.duplicate(true), "capacity": get_capacity_snapshot()}
+	return {"ok": true, "status": &"unequipped", "item": item_instances[instance_id].duplicate(true), "equipment_changes": equipment_changes, "capacity": get_capacity_snapshot()}
+
+
+func _preview_item_moves(moves: Dictionary) -> Dictionary:
+	var bag_limit := backpack_capacity
+	var shared_limit := equipment_capacity
+	var salvage_limit := failure_salvage_capacity
+	var bag_used := 0
+	var shared_used := 0
+	for instance_id in item_instances:
+		var item: Dictionary = item_instances[instance_id]
+		var before := StringName(item.get("location_state", &""))
+		var after := StringName(moves.get(instance_id, before))
+		var equipment_delta := int(after == LOCATION_EQUIPPED) - int(before == LOCATION_EQUIPPED)
+		var amount := int(item.get("effect_amount", 0)) * equipment_delta
+		match String(item.get("effect_kind", "")):
+			"backpack_capacity": bag_limit += amount
+			"equipment_capacity": shared_limit += amount
+			"salvage_capacity": salvage_limit += amount
+		var weight := maxi(0, int(item.get("weight", 0)))
+		if after == LOCATION_EQUIPPED or (after == LOCATION_INVENTORY and _is_consumable(item)):
+			shared_used += weight
+		elif after == LOCATION_INVENTORY:
+			bag_used += weight
+	if bag_used > bag_limit or shared_used > shared_limit or salvage_limit < 0:
+		return {"ok": false, "status": &"blocked_capacity", "reason": "equipment_capacity_exceeded" if shared_used > shared_limit else "blocked_capacity", "capacity": get_capacity_snapshot()}
+	return {"ok": true, "backpack_capacity": bag_limit, "equipment_capacity": shared_limit, "failure_salvage_capacity": salvage_limit}
+
+
+func _equipment_changes_for_moves(moves: Dictionary) -> Array[Dictionary]:
+	var changes: Array[Dictionary] = []
+	for instance_id in moves:
+		var item: Dictionary = item_instances[instance_id]
+		var before := StringName(item.get("location_state", &""))
+		var after := StringName(moves[instance_id])
+		if (before == LOCATION_EQUIPPED) != (after == LOCATION_EQUIPPED):
+			changes.append({"item": item.duplicate(true), "from": before, "to": after})
+	return changes
+
+
+func _commit_item_moves(moves: Dictionary, projected: Dictionary, room_pos: Vector2i = Vector2i(-999, -999)) -> void:
+	for instance_id in moves:
+		var item: Dictionary = item_instances[instance_id]
+		if StringName(item.get("location_state", &"")) == LOCATION_ROOM_FLOOR:
+			_unregister_room_floor_item(instance_id, item.get("room_pos", Vector2i.ZERO))
+		item["location_state"] = moves[instance_id]
+		if StringName(moves[instance_id]) == LOCATION_ROOM_FLOOR:
+			item["room_pos"] = room_pos
+			_register_room_floor_item(instance_id, room_pos)
+		item_instances[instance_id] = item
+	backpack_capacity = int(projected["backpack_capacity"])
+	equipment_capacity = int(projected["equipment_capacity"])
+	failure_salvage_capacity = int(projected["failure_salvage_capacity"])
 
 
 func get_best_sellable_inventory_item() -> Dictionary:
@@ -356,6 +488,7 @@ func sell_best_inventory_item(confirm_high_value: bool = false) -> Dictionary:
 func build_failure_preview() -> Dictionary:
 	var candidates := _settlement_candidate_items()
 	var cleared_consumables := _terminal_consumables()
+	var forfeited := get_items_by_location(LOCATION_PLEDGED)
 	return {
 		"ok": true,
 		"outcome": &"failure",
@@ -374,12 +507,13 @@ func build_failure_preview() -> Dictionary:
 		"settlement_pool": candidates,
 		"cleared_consumables": cleared_consumables,
 		"cleared_consumable_count": cleared_consumables.size(),
-		"lost_item_count": candidates.size(),
-		"lost_item_value": _sum_item_value(candidates),
+		"lost_item_count": candidates.size() + forfeited.size(),
+		"lost_item_value": _sum_item_value(candidates) + _sum_item_value(forfeited),
 	}
 
 
 func settle_success() -> Dictionary:
+	var event_delivery := _settle_event_items(&"success")
 	var black_before := get_currency(CURRENCY_BLACK)
 	var safe_before := get_currency(CURRENCY_GOLD)
 	var converted_gold := int(floor(float(black_before) * black_to_gold_rate))
@@ -390,7 +524,8 @@ func settle_success() -> Dictionary:
 	if long_term_gold_gained > 0:
 		add_currency(CURRENCY_LONG_TERM_GOLD, long_term_gold_gained, "settlement_writeback_preview")
 	var cleared_consumables := _clear_terminal_consumables()
-	var extracted_items: Array[Dictionary] = []
+	var extracted_items: Array[Dictionary] = event_delivery.get("delivered", []).duplicate(true)
+	var forfeited_items: Array[Dictionary] = event_delivery.get("forfeited", []).duplicate(true)
 	var floor_lost_items: Array[Dictionary] = []
 	for instance_id in item_instances.keys():
 		var item: Dictionary = item_instances[instance_id]
@@ -424,6 +559,10 @@ func settle_success() -> Dictionary:
 		"currency_delta": {"black_coin": -black_before, "gold_coin": converted_gold, "safe_yield": safe_before, "long_term_gold": long_term_gold_gained},
 		"extracted_items": extracted_items,
 		"warehouse_items": extracted_items,
+		"event_item_delivery": event_delivery,
+		"lost_items": forfeited_items,
+		"lost_item_count": forfeited_items.size() + floor_lost_items.size() + cleared_consumables.size(),
+		"lost_item_value": _sum_item_value(forfeited_items) + _sum_item_value(floor_lost_items) + _sum_item_value(cleared_consumables),
 		"cleared_consumables": cleared_consumables,
 		"cleared_consumable_count": cleared_consumables.size(),
 		"room_floor_lost_items": floor_lost_items,
@@ -438,6 +577,7 @@ func settle_failure(selected_instance_ids: Array = []) -> Dictionary:
 	var validation := _validate_salvage_selection(candidates, selected_instance_ids)
 	if not bool(validation.get("ok", false)):
 		return validation
+	var event_delivery := _settle_event_items(&"failure")
 	var black_before := get_currency(CURRENCY_BLACK)
 	var safe_before := get_currency(CURRENCY_GOLD)
 	currency_balances[CURRENCY_BLACK] = 0
@@ -454,8 +594,8 @@ func settle_failure(selected_instance_ids: Array = []) -> Dictionary:
 			var pool_item: Dictionary = item_instances[candidate_id]
 			pool_item["location_state"] = LOCATION_SETTLEMENT_POOL
 			item_instances[candidate_id] = pool_item
-	var salvaged_items: Array[Dictionary] = []
-	var lost_items: Array[Dictionary] = []
+	var salvaged_items: Array[Dictionary] = event_delivery.get("delivered", []).duplicate(true)
+	var lost_items: Array[Dictionary] = event_delivery.get("forfeited", []).duplicate(true)
 	var room_floor_lost_items: Array[Dictionary] = []
 	for instance_id in item_instances.keys():
 		var item: Dictionary = item_instances[instance_id]
@@ -500,6 +640,8 @@ func settle_failure(selected_instance_ids: Array = []) -> Dictionary:
 		"selected_salvage_weight": int(validation.get("selected_weight", 0)),
 		"settlement_pool": candidates,
 		"salvaged_items": salvaged_items,
+		"warehouse_items": salvaged_items,
+		"event_item_delivery": event_delivery,
 		"salvaged_item": {} if salvaged_items.is_empty() else salvaged_items[0],
 		"salvaged_item_count": salvaged_items.size(),
 		"lost_items": lost_items,
@@ -515,13 +657,14 @@ func settle_failure(selected_instance_ids: Array = []) -> Dictionary:
 
 
 func settle_abandon(reason: String = "abandoned") -> Dictionary:
+	var event_delivery := _settle_event_items(&"abandon")
 	var black_before := get_currency(CURRENCY_BLACK)
 	var safe_before := get_currency(CURRENCY_GOLD)
 	currency_balances[CURRENCY_BLACK] = 0
 	if safe_before > 0:
 		add_currency(CURRENCY_LONG_TERM_GOLD, safe_before, "abandon_gold_writeback_preview")
 	var cleared_consumables := _clear_terminal_consumables()
-	var lost_items: Array[Dictionary] = []
+	var lost_items: Array[Dictionary] = event_delivery.get("forfeited", []).duplicate(true)
 	var room_floor_lost_items: Array[Dictionary] = []
 	for instance_id in item_instances.keys():
 		var item: Dictionary = item_instances[instance_id]
@@ -554,6 +697,7 @@ func settle_abandon(reason: String = "abandoned") -> Dictionary:
 		"currency_semantics": _currency_semantics(),
 		"salvage_capacity": 0,
 		"salvaged_items": [],
+		"event_item_delivery": event_delivery,
 		"salvaged_item_count": 0,
 		"lost_items": lost_items,
 		"cleared_consumables": cleared_consumables,
@@ -565,6 +709,28 @@ func settle_abandon(reason: String = "abandoned") -> Dictionary:
 		"status_effects": effect_result,
 		"settlement_log": settlement_log.duplicate(true),
 	}
+
+
+func _settle_event_items(outcome: StringName) -> Dictionary:
+	var delivered: Array[Dictionary] = []
+	var forfeited: Array[Dictionary] = []
+	for instance_id in item_instances:
+		var item: Dictionary = item_instances[instance_id]
+		var location := StringName(item.get("location_state", &""))
+		if location not in [LOCATION_CONSIGNED, LOCATION_PLEDGED]:
+			continue
+		var keep := location == LOCATION_CONSIGNED
+		if location == LOCATION_PLEDGED and outcome == &"success" and get_currency(CURRENCY_BLACK) >= 16:
+			spend_currency(CURRENCY_BLACK, 16, "event_pledge_redemption")
+			keep = true
+		item["location_state"] = LOCATION_WAREHOUSE if keep else LOCATION_LOST
+		item_instances[instance_id] = item
+		if keep:
+			delivered.append(item.duplicate(true))
+			warehouse_lite.append(item.duplicate(true))
+		else:
+			forfeited.append(item.duplicate(true))
+	return {"delivered": delivered, "forfeited": forfeited}
 
 
 func settle_status_effects() -> Array[Dictionary]:
@@ -621,7 +787,7 @@ func _add_starting_loadout(config: Dictionary) -> void:
 
 
 func _starting_item_def(raw_item: Dictionary, source: String) -> Dictionary:
-	var result := raw_item.duplicate(true)
+	var result := M3ItemCatalog.normalize_instance_units(raw_item)
 	result["source"] = String(result.get("source", source))
 	result["source_label"] = String(result.get("source_label", source))
 	result["reward_location"] = &"inventory"
@@ -692,14 +858,23 @@ func get_inventory_and_equipped_items(include_consumables: bool = true) -> Array
 func get_backpack_used() -> int:
 	var used := 0
 	for item in item_instances.values():
-		if StringName(item.get("location_state", &"")) == LOCATION_INVENTORY:
-			used += int(item.get("weight", 0))
+		if StringName(item.get("location_state", &"")) == LOCATION_INVENTORY and not _is_consumable(item):
+			used += maxi(0, int(item.get("weight", 0)))
 	return used
 
 
 func get_capacity_snapshot() -> Dictionary:
 	var used := get_backpack_used()
-	return {"used": used, "capacity": backpack_capacity, "remaining": maxi(0, backpack_capacity - used)}
+	return {"used": used, "capacity": backpack_capacity, "remaining": maxi(0, backpack_capacity - used), "equipment_used": get_equipment_used(), "equipment_capacity": equipment_capacity, "equipment_remaining": maxi(0, equipment_capacity - get_equipment_used())}
+
+
+func get_equipment_used() -> int:
+	var used := 0
+	for item in item_instances.values():
+		var location := StringName(item.get("location_state", &""))
+		if location == LOCATION_EQUIPPED or (location == LOCATION_INVENTORY and _is_consumable(item)):
+			used += maxi(0, int(item.get("weight", 0)))
+	return used
 
 
 func get_public_snapshot(current_pos: Vector2i) -> Dictionary:
@@ -715,6 +890,9 @@ func get_public_snapshot(current_pos: Vector2i) -> Dictionary:
 		"long_term_gold": get_currency(CURRENCY_LONG_TERM_GOLD),
 		"long_term_gold_preview": get_currency(CURRENCY_LONG_TERM_GOLD),
 		"backpack_capacity": backpack_capacity,
+		"equipment_capacity": equipment_capacity,
+		"equipment_used": get_equipment_used(),
+		"equipment_remaining": maxi(0, equipment_capacity - get_equipment_used()),
 		"backpack_used": get_backpack_used(),
 		"backpack_remaining": maxi(0, backpack_capacity - get_backpack_used()),
 		"inventory_items": get_items_by_location(LOCATION_INVENTORY),
@@ -831,8 +1009,6 @@ func _sum_item_value(items: Array) -> int:
 
 
 func _replacement_drop_candidate_id(ground_item: Dictionary) -> String:
-	var ground_weight := int(ground_item.get("weight", 1))
-	var current_used := get_backpack_used()
 	var best_id := ""
 	var best_value := 2147483647
 	var best_weight := -1
@@ -841,7 +1017,8 @@ func _replacement_drop_candidate_id(ground_item: Dictionary) -> String:
 		if StringName(item.get("location_state", &"")) != LOCATION_INVENTORY:
 			continue
 		var item_weight := int(item.get("weight", 0))
-		if current_used - item_weight + ground_weight > backpack_capacity:
+		var moves := {instance_id: LOCATION_ROOM_FLOOR, String(ground_item.get("instance_id", "")): LOCATION_INVENTORY}
+		if not bool(_preview_item_moves(moves).get("ok", false)):
 			continue
 		var item_value := int(item.get("base_value", 0))
 		if item_value < best_value or (item_value == best_value and item_weight > best_weight):

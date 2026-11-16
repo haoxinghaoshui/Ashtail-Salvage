@@ -1,6 +1,8 @@
 extends RefCounted
 class_name M3ItemCatalog
 
+const Z1SupplyCatalogScript := preload("res://scripts/core/content/z1_supply_catalog.gd")
+
 # M5 minimum item pack. Data is centralized so tuning later does not scatter
 # display names, weights, value placeholders, source labels, flavor, or drop tables.
 
@@ -24,6 +26,20 @@ static func all_items() -> Array[Dictionary]:
 	result.append_array(collectible_items())
 	result.append_array(monster_drop_items())
 	result.append_array(special_items())
+	result.append_array(Z1SupplyCatalogScript.all_items())
+	return result
+
+
+static func normalize_instance_units(source: Dictionary) -> Dictionary:
+	var result := source.duplicate(true)
+	var item_id := str(source.get("item_id", ""))
+	for definition in all_items():
+		if str(definition.get("item_id", "")) != item_id:
+			continue
+		result["weight"] = definition["weight"]
+		if Z1SupplyCatalogScript.CAPACITY_EFFECTS.has(item_id):
+			result["effect_amount"] = definition["effect_amount"]
+		return result
 	return result
 
 
@@ -31,9 +47,9 @@ static func equipment_items() -> Array[Dictionary]:
 	return [
 		item("eq_old_vest", "旧背心", TYPE_EQUIPMENT, "带回后可登记；下局降低触雷伤害。", 3, 42, &"tier_3", ["equipment", "mine", "armor"], SOURCE_MONSTER, {"can_equip": true, "equipment_slot": "armor", "effect_kind": "mine_damage_reduce", "effect_amount": 10, "flavor": "内衬被烧过三次，仍然能挡住最坏的一下。"}),
 		item("eq_edge_opener", "开刃器", TYPE_EQUIPMENT, "带回后可登记；下局提高搜索收益判断。", 2, 34, &"tier_2", ["equipment", "search", "tool"], SOURCE_CHEST, {"can_equip": true, "equipment_slot": "tool", "effect_kind": "search_reward", "effect_amount": 1, "flavor": "边缘磨得很薄，适合撬开旧封条。"}),
-		item("eq_recovery_bag", "回收袋", TYPE_EQUIPMENT, "带回后可登记；下局背包容量 +2。", 3, 48, &"tier_3", ["equipment", "capacity", "bag"], SOURCE_ALTAR, {"can_equip": true, "equipment_slot": "rig", "effect_kind": "backpack_capacity", "effect_amount": 2, "flavor": "袋口有旧编号，容量比看起来更大。"}),
+		item("eq_recovery_bag", "回收袋", TYPE_EQUIPMENT, "带回后可登记；下局背包容量 +20。", 3, 48, &"tier_3", ["equipment", "capacity", "bag"], SOURCE_ALTAR, {"can_equip": true, "equipment_slot": "rig", "effect_kind": "backpack_capacity", "effect_amount": 20, "flavor": "袋口有旧编号，容量比看起来更大。"}),
 		item("eq_goggles", "护目镜", TYPE_EQUIPMENT, "带回后可登记；下局增加扫描提示。", 2, 36, &"tier_2", ["equipment", "scanner"], SOURCE_CHEST, {"can_equip": true, "equipment_slot": "head", "effect_kind": "scan_hint", "effect_amount": 1, "flavor": "镜片里残留着上一支队伍的路线。"}),
-		item("eq_signal_pin", "信号针", TYPE_EQUIPMENT, "带回后可登记；下局提高失败抢救容量。", 1, 44, &"tier_3", ["equipment", "salvage"], SOURCE_EVENT, {"can_equip": true, "equipment_slot": "device", "effect_kind": "salvage_capacity", "effect_amount": 1, "flavor": "针头仍会向安全出口轻微偏转。"}),
+		item("eq_signal_pin", "信号针", TYPE_EQUIPMENT, "带回后可登记；下局失败抢救容量 +10。", 1, 44, &"tier_3", ["equipment", "salvage"], SOURCE_EVENT, {"can_equip": true, "equipment_slot": "device", "effect_kind": "salvage_capacity", "effect_amount": 10, "flavor": "针头仍会向安全出口轻微偏转。"}),
 		item("eq_insulated_sleeve", "绝缘套", TYPE_EQUIPMENT, "带回后可登记；下局降低协议压力突增。", 2, 32, &"tier_2", ["equipment", "pressure"], SOURCE_SEARCH, {"can_equip": true, "equipment_slot": "gear", "effect_kind": "protocol_pressure_reduce", "effect_amount": 3, "flavor": "套口写着一行褪色的安全条款。"}),
 	]
 
@@ -159,7 +175,7 @@ static func item(item_id: String, display_name: String, item_type: StringName, s
 		"main_type": item_type,
 		"rarity": rarity,
 		"collectible_level": int(extra.get("collectible_level", 0)),
-		"weight": maxi(0, weight),
+		"weight": maxi(0, int(Z1SupplyCatalogScript.EXISTING_WEIGHTS.get(item_id, weight))),
 		"value_state": &"known_value",
 		"base_value": maxi(0, base_value),
 		"tags": tags.duplicate(true),

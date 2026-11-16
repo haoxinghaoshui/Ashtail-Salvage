@@ -326,8 +326,10 @@ func _check_door_geometry_states_and_proximity() -> void:
 	view.free()
 
 	var room_source := FileAccess.get_file_as_string("res://scripts/gameplay/runtime/g41_room_runtime_view.gd")
-	_require(not room_source.contains("Color(color.r, color.g, color.b"), "door states still render as colored collision rectangles")
-	_require(room_source.contains("_draw_available_door_cue") and room_source.contains("_draw_blocked_door_cue"), "player-readable door cue renderers are absent")
+	var door_source := room_source.get_slice("func _draw_door_projection", 1).get_slice("func _ray_endpoint_inside_room", 0)
+	_require(not door_source.is_empty(), "door projection renderer is absent")
+	_require(not door_source.contains("Color(color.r, color.g, color.b"), "door states still render as colored collision rectangles")
+	_require(door_source.contains("_draw_available_door_cue") and door_source.contains("_draw_blocked_door_cue"), "player-readable door cue renderers are absent")
 	var run_source := FileAccess.get_file_as_string("res://scripts/core/run/run_scene.gd")
 	_require(run_source.contains("player_controller.set_door_projections(room_runtime_view.get_door_projections())"), "production RunScene does not wire the view's door geometry into PlayerController")
 

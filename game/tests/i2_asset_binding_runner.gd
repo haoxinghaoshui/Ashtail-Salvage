@@ -32,6 +32,7 @@ const PROTOCOL_COPY_PRESSURE_GAP := 2.0
 const RECT_EPSILON := 0.5
 
 var manifest_by_path: Dictionary = {}
+var manifest_by_id: Dictionary = {}
 var checked_paths: Dictionary = {}
 var verified_hash_count := 0
 
@@ -48,7 +49,7 @@ func _run() -> void:
 	await _check_result_runtime(failures)
 	await _check_protocol_runtime(failures)
 	if failures.is_empty():
-		print("I2_ASSET_BINDING=PASS result_states=3 protocol_levels=5 protocol_scales=100,150 protocol_frame=single_horizontal_safe item_bindings=43 verified_hashes=%d" % verified_hash_count)
+		print("I2_ASSET_BINDING=PASS result_states=3 protocol_levels=5 protocol_scales=100,150 protocol_frame=single_horizontal_safe item_bindings=63 verified_hashes=%d" % verified_hash_count)
 		quit(0)
 		return
 	for failure in failures:
@@ -77,6 +78,9 @@ func _read_manifest(failures: Array[String]) -> Dictionary:
 		var godot_path := String(row.get("godot_path", ""))
 		if godot_path != "":
 			rows_by_path[godot_path] = row
+		var asset_id := String(row.get("asset_id", ""))
+		if not asset_id.is_empty():
+			manifest_by_id[asset_id] = row
 	return rows_by_path
 
 
@@ -91,19 +95,27 @@ func _check_item_bindings(failures: Array[String]) -> void:
 	RuntimeTextureCacheScript.clear_for_tests()
 	var all_items: Array[Dictionary] = ItemCatalogScript.all_items()
 	var unique_texture_paths: Dictionary = {}
-	if all_items.size() != 43:
-		failures.append("item_catalog_count=%d_expected=43" % all_items.size())
+	if all_items.size() != 63:
+		failures.append("item_catalog_count=%d_expected=63" % all_items.size())
 	for item in all_items:
 		var item_id := String(item.get("item_id", ""))
 		if not ItemVisualCatalogScript.has_explicit_mapping(item_id):
 			failures.append("item_mapping_missing=%s" % item_id)
 			continue
 		var texture_path := ItemVisualCatalogScript.texture_path(item)
+		var z1_row: Dictionary = {}
 		if texture_path.begins_with("res://assets/items/"):
-			failures.append("item_binding_reopened_unregistered_source=%s:%s" % [item_id, texture_path])
-			continue
+			z1_row = manifest_by_id.get("z1.item.%s" % item_id, {})
+			if (
+				not texture_path.begins_with("res://assets/items/z1/")
+				or z1_row.get("godot_path", "") != texture_path
+				or z1_row.get("linked_data", "") != item_id
+				or z1_row.get("type", "") != "texture"
+			):
+				failures.append("item_binding_reopened_unregistered_source=%s:%s" % [item_id, texture_path])
+				continue
 		unique_texture_paths[texture_path] = true
-		_check_registered_path(texture_path, failures)
+		_check_registered_path(texture_path, failures, z1_row)
 		var first_texture := ItemVisualCatalogScript.texture_for(item)
 		var cached_texture := ItemVisualCatalogScript.texture_for(item)
 		if first_texture == null or first_texture.resource_path != texture_path:
@@ -355,19 +367,21 @@ func _contains_with_epsilon(outer: Rect2, inner: Rect2) -> bool:
 	return outer.grow(RECT_EPSILON).encloses(inner)
 
 
-func _check_registered_path(path: String, failures: Array[String]) -> void:
+func _check_registered_path(path: String, failures: Array[String], z1_row: Dictionary = {}) -> void:
 	if checked_paths.has(path):
 		return
 	checked_paths[path] = true
 	if not manifest_by_path.has(path):
 		failures.append("manifest_path_missing=%s" % path)
 		return
-	var row: Dictionary = manifest_by_path[path]
+	var row: Dictionary = manifest_by_path[path] if z1_row.is_empty() else z1_row
 	var license_status := String(row.get("license_status", ""))
 	var source_status := String(row.get("source_status", ""))
-	if not DIRECT_LICENSE_STATUSES.has(license_status):
+	var valid_license := DIRECT_LICENSE_STATUSES.has(license_status) if z1_row.is_empty() else license_status == "internal_ai_generated"
+	var valid_source := DIRECT_SOURCE_STATUSES.has(source_status) if z1_row.is_empty() else source_status == "z1_generated"
+	if not valid_license:
 		failures.append("manifest_license_not_direct=%s:%s" % [path, license_status])
-	if not DIRECT_SOURCE_STATUSES.has(source_status):
+	if not valid_source:
 		failures.append("manifest_source_status_not_direct=%s:%s" % [path, source_status])
 	if String(row.get("replacement_needed", "")).to_lower() != "false":
 		failures.append("manifest_replacement_required=%s" % path)

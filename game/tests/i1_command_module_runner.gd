@@ -2,6 +2,7 @@ extends SceneTree
 
 const M3ItemCatalogScript := preload("res://scripts/core/content/m3_item_catalog.gd")
 const RunAssetLedgerScript := preload("res://scripts/core/run/run_asset_ledger.gd")
+const RunBalanceCatalogScript := preload("res://scripts/core/run/run_balance_catalog.gd")
 const RunRuntimeControllerScript := preload("res://scripts/core/run/run_runtime_controller.gd")
 
 const ITEM_ACTIONS := [
@@ -122,7 +123,7 @@ func _validate_current_item_semantics() -> void:
 		"run_start_config": {
 			"selected_equipment_items": [equipment],
 			"selected_consumable_items": [],
-			"backpack_capacity": 10,
+			"backpack_capacity": RunBalanceCatalogScript.DEFAULT_BACKPACK_CAPACITY,
 			"failure_salvage_capacity": 2,
 		}
 	}
@@ -154,15 +155,16 @@ func _validate_current_item_semantics() -> void:
 	_assert_location(ledger, "i1_pickup_drop_item", RunAssetLedgerScript.LOCATION_ROOM_FLOOR, "drop")
 	_assert_last_reward(context, drop, "drop")
 
-	var carried_def: Dictionary = M3ItemCatalogScript.collectible_items()[1].duplicate(true)
+	var carried_def: Dictionary = M3ItemCatalogScript.collectible_items()[2].duplicate(true)
 	carried_def["instance_id"] = "i1_replace_carried"
 	carried_def["reward_location"] = RunAssetLedgerScript.LOCATION_INVENTORY
-	var ground_def: Dictionary = M3ItemCatalogScript.collectible_items()[2].duplicate(true)
+	var ground_def: Dictionary = M3ItemCatalogScript.collectible_items()[1].duplicate(true)
 	ground_def["instance_id"] = "i1_replace_ground"
-	ledger.backpack_capacity = 10
 	ledger.add_reward_items([carried_def], RunAssetLedgerScript.LOCATION_INVENTORY, context.get_current_pos(), "i1_command_module")
 	ledger.add_reward_items([ground_def], RunAssetLedgerScript.LOCATION_ROOM_FLOOR, context.get_current_pos(), "i1_command_module")
 	ledger.backpack_capacity = ledger.get_backpack_used()
+	if bool(ledger.can_fit_item(ground_def).get("ok", true)):
+		_fail("replacement fixture ground item fit before dropping the carried item")
 	var replace: Dictionary = bus.dispatch(&"replace_ground_item", {
 		"ground_instance_id": "i1_replace_ground",
 		"drop_instance_id": "i1_replace_carried",
@@ -185,11 +187,14 @@ func _validate_current_item_semantics() -> void:
 	_assert_location(ledger, "i1_use_consumable", RunAssetLedgerScript.LOCATION_CONSUMED, "use")
 	_assert_last_reward(context, use, "use")
 
+	var before_blocked: Dictionary = controller.capture_authoritative_state()
 	var blocked: Dictionary = bus.dispatch(&"pickup_ground_item", {"instance_id": "missing_item"})
-	if bool(blocked.get("ok", true)) or context.blocked_reason != "item_not_found":
-		_fail("blocked pickup did not preserve reason/context policy: %s" % JSON.stringify(blocked))
-	if context.last_message != "Pickup blocked: item_not_found.":
-		_fail("blocked pickup message changed: %s" % context.last_message)
+	if bool(blocked.get("ok", true)) or str(blocked.get("reason", "")) != "item_not_found":
+		_fail("blocked pickup lost its rejection reason")
+	if str(blocked.get("action_result", {}).get("message", "")) != "Pickup blocked: item_not_found.":
+		_fail("blocked pickup lost its returned feedback message")
+	if controller.capture_authoritative_state() != before_blocked or not blocked.get("produced_transactions", []).is_empty():
+		_fail("blocked pickup changed authority or published uncommitted facts")
 
 
 func _validate_static_boundary() -> void:

@@ -26,20 +26,29 @@ static func apply_damage(context: RunContext, amount: int, reason: String = "", 
 	if context == null:
 		return 0
 	var damage: int = maxi(0, amount)
-	RunEffectApplierScript.apply_damage(context, damage, reason if reason != "" else "hp_depleted", fail_authority)
-	return damage
+	return RunEffectApplierScript.apply_damage(context, damage, reason if reason != "" else "hp_depleted", fail_authority)
 
 
 static func take_mine_hit(context: RunContext, fail_authority = null) -> int:
+	var result := apply_mine_hit(context, fail_authority)
+	return int(result.get("facts", {}).get("actual_hp_loss", 0)) if bool(result.get("ok", false)) else 0
+
+
+static func apply_mine_hit(context: RunContext, fail_authority = null) -> Dictionary:
 	if context == null:
-		return 0
+		return {"ok": false, "reason": "no_active_run", "facts": {}}
 	var immune := context.mine_immunity > 0
 	var damage: int = RunBalanceCatalogScript.mine_damage(context.mine_dmg_reduce, immune)
-	if context.mine_immunity > 0:
+	var alive_before := context.hp > 0
+	var result := RunEffectApplierScript.apply_damage_packet(context, {"amount": damage, "damage_type": "mine", "source_id": "mine"})
+	if not bool(result.ok):
+		return result
+	if immune and alive_before:
 		context.mine_immunity -= 1
 		context.run_stats["mine_immunity_used"] = int(context.run_stats.get("mine_immunity_used", 0)) + 1
-	apply_damage(context, damage, "mine", fail_authority)
-	return damage
+	if context.hp <= 0 and context.run_active and not context.failed:
+		_fail_run(context, "mine", fail_authority)
+	return result
 
 
 static func fight_enemy(context: RunContext, pos: Vector2i, adjacent_mines: int, fail_authority = null) -> Dictionary:
@@ -48,10 +57,13 @@ static func fight_enemy(context: RunContext, pos: Vector2i, adjacent_mines: int,
 	var enemy_state := build_enemy_state(context, pos, adjacent_mines)
 	var enemy_power: int = int(enemy_state.get("enemy_power", 0))
 	var player_power := context.power
-	var damage: int = maxi(0, enemy_power - context.power)
-	apply_damage(context, damage, "monster", fail_authority)
-	if context.failed:
-		context.run_stats["combat_damage"] = int(context.run_stats.get("combat_damage", 0)) + damage
+	var applied := RunEffectApplierScript.apply_damage_packet(context, {"amount": maxi(0, enemy_power - context.power), "source_id": "monster", "damage_type": "physical"})
+	if not bool(applied.ok):
+		return applied
+	var damage := int(applied.facts.actual_hp_loss)
+	context.run_stats["combat_damage"] = int(context.run_stats.get("combat_damage", 0)) + damage
+	if context.hp <= 0:
+		_fail_run(context, "monster", fail_authority)
 		return {
 			"ok": true,
 			"fought": true,
@@ -66,7 +78,6 @@ static func fight_enemy(context: RunContext, pos: Vector2i, adjacent_mines: int,
 		}
 	var reward_gold := reward_gold_for_enemy_power(enemy_power)
 	var reward_result := RunRuleService.apply_combat_reward(context, pos, reward_gold)
-	context.run_stats["combat_damage"] = int(context.run_stats.get("combat_damage", 0)) + damage
 	var power_gain := grant_monster_clear_progress(context)
 	return {
 		"ok": true,

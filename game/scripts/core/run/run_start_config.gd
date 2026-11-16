@@ -35,6 +35,9 @@ const SUPPORTED_PREVIEW_FIELDS := [
 	"bag_used",
 	"bag_limit",
 	"backpack_capacity",
+	"equipment_capacity",
+	"equipment_used",
+	"max_hp",
 	"failure_salvage_capacity",
 	"profile_fields",
 	"talent_interface",
@@ -84,9 +87,12 @@ static func default_config() -> Dictionary:
 		"warehouse_lite": {},
 		"codex_lite": {},
 		"bag_used": 0,
-		"bag_limit": 10,
-		"backpack_capacity": 10,
-		"failure_salvage_capacity": 4,
+		"bag_limit": 100,
+		"backpack_capacity": 100,
+		"equipment_capacity": 100,
+		"equipment_used": 0,
+		"max_hp": 100,
+		"failure_salvage_capacity": 40,
 		"profile_fields": {},
 		"talent_interface": [],
 		"active_talent_effects": [],
@@ -138,6 +144,18 @@ static func normalize(payload: Dictionary) -> Dictionary:
 	result["preview"] = bool(preview.get("preview", false))
 	result["display_only"] = bool(preview.get("display_only", false))
 	result["read_only"] = bool(preview.get("read_only", false))
+	var shared_used := 0
+	for field in ["selected_equipment_items", "selected_consumable_items"]:
+		var items: Array[Dictionary] = []
+		for raw_item in _array_from(result.get(field, [])):
+			var item := M3RItemUsabilityModelScript.normalize_item(raw_item)
+			# Warehouse normalization may synthesize a display ID; admission must not.
+			item["instance_id"] = str(_dictionary_from(raw_item).get("instance_id", ""))
+			items.append(item)
+			shared_used += maxi(0, int(item.get("weight", 0)))
+		result[field] = items
+	result["bag_used"] = 0
+	result["equipment_used"] = shared_used
 	return result
 
 
@@ -157,14 +175,12 @@ static func validate(config: Dictionary) -> Dictionary:
 		issues.append("unknown_map_config_id")
 	var equipment := _array_from(normalized.get("selected_equipment_items", []))
 	var consumables := _array_from(normalized.get("selected_consumable_items", []))
-	if equipment.size() > 2:
-		issues.append("equipment_count_exceeds_2")
-	if consumables.size() > 3:
-		issues.append("consumable_count_exceeds_3")
 	var instance_ids: Dictionary = {}
 	var equipment_slots: Dictionary = {}
+	var equipment_weight := 0
 	for raw_item in equipment:
 		var item := _dictionary_from(raw_item)
+		equipment_weight += maxi(0, int(item.get("weight", 0)))
 		var instance_id := str(item.get("instance_id", ""))
 		if instance_id == "" or instance_ids.has(instance_id):
 			issues.append("duplicate_or_empty_equipment_instance")
@@ -172,10 +188,12 @@ static func validate(config: Dictionary) -> Dictionary:
 			instance_ids[instance_id] = true
 		if item.has("can_equip") and not bool(item.get("can_equip", false)):
 			issues.append("non_equipment_in_equipment_selection")
-		var slot := str(item.get("equipment_slot", ""))
-		if slot != "" and equipment_slots.has(slot):
+		var slot := str(item.get("equipment_slot", "")).strip_edges()
+		if slot.is_empty():
+			issues.append("empty_equipment_slot")
+		elif equipment_slots.has(slot):
 			issues.append("duplicate_equipment_slot:%s" % slot)
-		elif slot != "":
+		else:
 			equipment_slots[slot] = true
 	var carried_weight := 0
 	for raw_item in consumables:
@@ -188,8 +206,8 @@ static func validate(config: Dictionary) -> Dictionary:
 		if item.has("can_consume") and not bool(item.get("can_consume", false)):
 			issues.append("non_consumable_in_consumable_selection")
 		carried_weight += maxi(0, int(item.get("weight", 0)))
-	if carried_weight > int(normalized.get("backpack_capacity", normalized.get("bag_limit", 10))):
-		issues.append("carry_weight_exceeds_backpack_capacity")
+	if equipment_weight + carried_weight > int(normalized.get("equipment_capacity", 100)):
+		issues.append("shared_weight_exceeds_equipment_capacity")
 	return {
 		"ok": issues.is_empty(),
 		"issues": issues,
@@ -205,6 +223,9 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 	var normalized := _dictionary_from(structural.get("config", {}))
 	var issues: Array[String] = []
 	for raw_issue in _array_from(structural.get("issues", [])):
+		# Recheck capacity below using owned instances and their actual bonuses.
+		if str(raw_issue) == "shared_weight_exceeds_equipment_capacity":
+			continue
 		issues.append(str(raw_issue))
 	var map_id := str(normalized.get("map_config_id", ""))
 	var map_definition := M7ContentCatalogScript.map_definition_exact(map_id)
@@ -284,20 +305,23 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 		else:
 			selected_consumables.append(item)
 
-	if selected_equipment.size() > 2:
-		issues.append("equipment_count_exceeds_2")
-	if selected_consumables.size() > 3:
-		issues.append("consumable_count_exceeds_3")
 	var equipment_slots: Dictionary = {}
 	for item in selected_equipment:
-		var slot := str(item.get("equipment_slot", ""))
-		if slot != "" and equipment_slots.has(slot):
+		var slot := str(item.get("equipment_slot", "")).strip_edges()
+		if slot.is_empty():
+			issues.append("empty_equipment_slot")
+		elif equipment_slots.has(slot):
 			issues.append("duplicate_equipment_slot:%s" % slot)
-		elif slot != "":
+		else:
 			equipment_slots[slot] = true
 
 	var profile := M3RItemUsabilityModelScript.build_profile_interfaces(meta_summary)
+	var selected_equipment_weight := 0
+	for item in selected_equipment:
+		selected_equipment_weight += maxi(0, int(item.get("weight", 0)))
 	var equipment_effects := M3RItemUsabilityModelScript.build_equipment_effects(selected_equipment)
+	var equipment_capacity := M3RItemUsabilityModelScript.BASE_EQUIPMENT_CAPACITY
+	var max_hp := 100
 	var backpack_capacity := int(profile.get(
 		"backpack_capacity",
 		M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY
@@ -312,6 +336,10 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 	var scan_hint_bonus := int(profile.get("scan_hint_bonus", 0))
 	for effect in equipment_effects:
 		match str(effect.get("effect_kind", "")):
+			"max_hp":
+				max_hp += int(effect.get("effect_amount", 0))
+			"equipment_capacity":
+				equipment_capacity += int(effect.get("effect_amount", 0))
 			"backpack_capacity":
 				backpack_capacity += int(effect.get("effect_amount", 0))
 			"salvage_capacity":
@@ -327,8 +355,8 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 	var carried_weight := 0
 	for item in selected_consumables:
 		carried_weight += maxi(0, int(item.get("weight", 0)))
-	if carried_weight > backpack_capacity:
-		issues.append("carry_weight_exceeds_authoritative_capacity")
+	if selected_equipment_weight + carried_weight > equipment_capacity:
+		issues.append("shared_weight_exceeds_authoritative_capacity")
 
 	var commission_offer_seed := M7ContentCatalogScript.commission_offer_seed(
 		map_id,
@@ -370,9 +398,12 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 	normalized["equipment_effects"] = equipment_effects.duplicate(true)
 	normalized["warehouse_lite"] = M3RItemUsabilityModelScript.build_warehouse_lite(meta_summary)
 	normalized["codex_lite"] = M3RItemUsabilityModelScript.build_codex_lite(meta_summary)
-	normalized["bag_used"] = carried_weight
+	normalized["bag_used"] = 0
 	normalized["bag_limit"] = backpack_capacity
 	normalized["backpack_capacity"] = backpack_capacity
+	normalized["equipment_capacity"] = equipment_capacity
+	normalized["equipment_used"] = selected_equipment_weight + carried_weight
+	normalized["max_hp"] = maxi(1, max_hp)
 	normalized["failure_salvage_capacity"] = failure_salvage_capacity
 	normalized["profile_fields"] = profile.duplicate(true)
 	normalized["talent_interface"] = _array_from(profile.get("talent_directions", []))

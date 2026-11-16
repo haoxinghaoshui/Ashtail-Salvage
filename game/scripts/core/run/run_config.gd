@@ -27,8 +27,9 @@ static func standard_10x10(run_start_config: Dictionary = {}) -> Dictionary:
 		"mine_hits_are_fatal": false,
 		"reveal_on_move": true,
 		"move_requires_revealed": false,
-		"backpack_capacity": 10,
-		"failure_salvage_capacity": 4,
+		"backpack_capacity": M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY,
+		"equipment_capacity": M3RItemUsabilityModelScript.BASE_EQUIPMENT_CAPACITY,
+		"failure_salvage_capacity": M3RItemUsabilityModelScript.BASE_FAILURE_SALVAGE_CAPACITY,
 		"black_to_gold_rate": 1.0,
 		"rule_modifiers": [
 			RunModifierSpec.make(

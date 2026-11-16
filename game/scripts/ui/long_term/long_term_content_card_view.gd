@@ -52,10 +52,18 @@ func apply_visual_state(state: StringName) -> void:
 	var selected := state == &"selected"
 	var locked := state == &"locked"
 	var accent := Color(0.32, 0.95, 0.88, 1.0) if selected else (Color(0.43, 0.45, 0.43, 1.0) if locked else Color(0.90, 0.66, 0.25, 1.0))
+	var state_accent := accent
+	if card_data.get("presentation_kind") == &"talent_unlock_node":
+		if bool(card_data.get("unlocked", false)):
+			state_accent = Color(0.32, 0.95, 0.88)
+		elif bool(card_data.get("available", false)):
+			state_accent = Color(0.97, 0.75, 0.36)
+		else:
+			state_accent = Color(0.62, 0.66, 0.62)
 	if art_frame != null:
 		var frame_style := StyleBoxFlat.new()
 		frame_style.bg_color = Color(0.018, 0.075, 0.078, 0.96) if selected else Color(0.012, 0.043, 0.046, 0.94)
-		frame_style.border_color = accent
+		frame_style.border_color = accent if selected else state_accent
 		frame_style.set_border_width_all(2 if selected else 1)
 		frame_style.set_corner_radius_all(2)
 		art_frame.add_theme_stylebox_override("panel", frame_style)
@@ -67,18 +75,21 @@ func apply_visual_state(state: StringName) -> void:
 			Color(0.57, 1.0, 0.95, 1.0) if selected else (Color(0.66, 0.69, 0.65, 1.0) if locked else Color(1.0, 0.84, 0.54, 1.0))
 		)
 	if state_label != null:
-		state_label.add_theme_color_override("font_color", Color(0.68, 0.72, 0.68) if locked else Color(0.84, 0.88, 0.80))
+		var state_color := Color(0.68, 0.72, 0.68) if locked else Color(0.84, 0.88, 0.80)
+		if card_data.get("presentation_kind") == &"talent_unlock_node":
+			state_color = state_accent
+		state_label.add_theme_color_override("font_color", state_color)
 	if status_bar != null:
-		status_bar.color = accent
+		status_bar.color = state_accent
 	if tree_node != null:
 		var node_style := StyleBoxFlat.new()
-		node_style.bg_color = accent
+		node_style.bg_color = state_accent
 		node_style.border_color = Color(0.05, 0.12, 0.12, 1.0)
 		node_style.set_border_width_all(1)
 		node_style.set_corner_radius_all(4)
 		tree_node.add_theme_stylebox_override("panel", node_style)
 	for edge in tree_edges:
-		edge.color = Color(accent.r, accent.g, accent.b, 0.72)
+		edge.color = Color(state_accent.r, state_accent.g, state_accent.b, 0.72)
 	add_theme_font_size_override("font_size", 1)
 	for color_name in ["font_color", "font_hover_color", "font_focus_color", "font_pressed_color", "font_hover_pressed_color", "font_disabled_color"]:
 		add_theme_color_override(color_name, Color(1, 1, 1, 0))

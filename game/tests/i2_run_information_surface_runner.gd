@@ -120,7 +120,7 @@ func _check_quick_bag(surface: RunSurface, profile: Dictionary) -> void:
 	else:
 		_check(false, "Quick-bag ScrollContainer is missing")
 	_check(surface.backpack_capacity_label.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "Burden summary is not centered")
-	_check(surface.backpack_capacity_label.text.contains("负重"), "Burden summary is missing")
+	_check(surface.backpack_capacity_label.text.contains("共享") and surface.backpack_capacity_label.text.contains("战利品"), "Shared and loot capacity summaries are missing")
 
 
 func _check_mine_risk_and_protocol(surface: RunSurface, profile: Dictionary) -> void:

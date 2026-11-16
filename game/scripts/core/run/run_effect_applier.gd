@@ -23,6 +23,10 @@ const EFFECT_RUN_EXTRACT := &"run_extract"
 const EFFECT_DEBUG_MARKER := &"debug_marker"
 
 const RunStateMachineScript := preload("res://scripts/core/run/run_state_machine.gd")
+const Z1SupplyRules := preload("res://scripts/core/run/z1_supply_rule_service.gd")
+const StateSnapshotScript := preload("res://scripts/core/run/run_state_snapshot.gd")
+const VitalsScript := preload("res://scripts/core/run/run_vitals_resolver.gd")
+const StatusScript := preload("res://scripts/core/run/run_status_service.gd")
 
 
 static func effect(effect_type: StringName, source: String, payload: Dictionary = {}, target: Variant = null) -> Dictionary:
@@ -54,23 +58,46 @@ static func effect_mine_mark_triggered(pos: Vector2i) -> Dictionary:
 static func apply_effects(context: RunContext, effects: Array, runtime_authority = null) -> Dictionary:
 	if context == null:
 		return {"ok": false, "reason": "no_active_run", "effect_results": []}
+	var before := StateSnapshotScript.capture_context(context)
+	var preview := false
+	var terminal_effect: Dictionary = {}
 	var effect_results: Array[Dictionary] = []
 	var produced_transactions: Array = []
 	var ok := true
 	var reason := ""
+	var lethal_reason := "hp_depleted"
+	var facts: Array = []
 	for raw_effect in effects:
 		var effect_dict: Dictionary = _dictionary(raw_effect)
 		var effect_type := StringName(effect_dict.get("type", &""))
+		preview = preview or bool(effect_dict.get("read_only_preview", false))
+		if effect_type in [EFFECT_RUN_FAIL, EFFECT_RUN_EXTRACT]:
+			terminal_effect = effect_dict
+			continue
+		var hp_before := context.hp
 		var result := _apply_one(context, effect_type, effect_dict, runtime_authority)
+		if hp_before > 0 and context.hp <= 0:
+			lethal_reason = str(_dictionary(effect_dict.get("payload", {})).get("reason", effect_dict.get("source", "hp_depleted")))
+		if not _dictionary(result.get("facts", {})).is_empty():
+			facts.append(result.facts.duplicate(true))
 		effect_results.append(result)
 		produced_transactions.append_array(_array(result.get("produced_transactions", [])))
 		if not bool(result.get("ok", true)):
 			ok = false
 			reason = String(result.get("reason", effect_type))
 			break
+	if not ok or preview:
+		StateSnapshotScript.install_context(context, before)
+		produced_transactions.clear()
+		facts.clear()
+	elif not terminal_effect.is_empty():
+		_apply_one(context, StringName(terminal_effect["type"]), terminal_effect, runtime_authority)
+	elif context.hp <= 0 and context.run_active and not context.failed:
+		_apply_run_fail(context, {"reason": lethal_reason}, runtime_authority)
 	return {
 		"ok": ok,
 		"reason": reason,
+		"facts": facts,
 		"effect_results": effect_results,
 		"produced_transactions": produced_transactions,
 		"transactions": produced_transactions,
@@ -80,12 +107,169 @@ static func apply_effects(context: RunContext, effects: Array, runtime_authority
 
 static func apply_damage(context: RunContext, amount: int, reason: String = "", runtime_authority = null) -> int:
 	var damage := maxi(0, amount)
-	apply_effects(context, [effect_hp_delta(-damage, reason if reason != "" else "damage")], runtime_authority)
-	return damage
+	var source := reason if reason != "" else "damage"
+	var result := apply_effects(context, [effect(EFFECT_HP_DELTA, source, {"amount": -damage, "reason": source, "damage_type": _legacy_damage_type(source)})], runtime_authority)
+	return int(result.get("last_result", {}).get("facts", {}).get("actual_hp_loss", 0)) if bool(result.get("ok", false)) else 0
+
+
+static func capture_vitals(context: RunContext) -> Dictionary:
+	if context == null:
+		return {}
+	return {"hp": context.hp, "max_hp": context.max_hp, "shield": context.shield,
+		"pressure": context.pressure, "protocol_level": context.protocol_level,
+		"counters": context.vitals_counters.duplicate(true), "statuses": context.temporary_statuses.duplicate(true),
+		"modifiers": context.vitals_modifiers.duplicate(true)}
+
+
+static func install_vitals(context: RunContext, state: Dictionary) -> void:
+	context.hp = int(state.hp)
+	context.max_hp = int(state.max_hp)
+	context.shield = int(state.get("shield", 0))
+	context.pressure = int(state.get("pressure", 0))
+	context.protocol_level = int(state.get("protocol_level", ProtocolService.level_for_pressure(context.pressure)))
+	context.vitals_counters = _dictionary(state.get("counters", {}))
+	context.temporary_statuses = _array(state.get("statuses", []))
+	context.vitals_modifiers = _dictionary(state.get("modifiers", context.vitals_modifiers))
+
+
+static func apply_damage_packet(context: RunContext, packet: Dictionary) -> Dictionary:
+	return _apply_packet(context, packet, "damage")
+
+
+static func apply_heal_packet(context: RunContext, packet: Dictionary) -> Dictionary:
+	return _apply_packet(context, packet, "heal")
+
+
+static func apply_pressure_packet(context: RunContext, packet: Dictionary) -> Dictionary:
+	return _apply_packet(context, packet, "pressure")
+
+
+static func _apply_packet(context: RunContext, packet: Dictionary, kind: String) -> Dictionary:
+	if context == null:
+		return {"ok": false, "reason": "no_active_run", "state": {}, "facts": {}}
+	var result := _resolve_packet(context, capture_vitals(context), packet, kind)
+	if bool(result.ok):
+		install_vitals(context, result.state)
+		_record_vitals(context, kind, result.facts)
+	return result
+
+
+static func _resolve_packet(context: RunContext, state: Dictionary, packet: Dictionary, kind: String) -> Dictionary:
+	if not context.vitals_modifiers.get(kind, {}) is Dictionary:
+		return {"ok": false, "reason": "invalid_vitals_modifiers", "state": state, "facts": {}}
+	var composed := _dictionary(context.vitals_modifiers.get(kind, {}))
+	composed.merge(packet.duplicate(true), true)
+	composed.source_id = str(packet.get("source_id", packet.get("reason", kind)))
+	var result: Dictionary
+	match kind:
+		"damage":
+			var damage_type := str(composed.get("damage_type", _legacy_damage_type(str(composed.get("reason", composed.source_id)))))
+			# Exploration is an involuntary HP loss; reuse DOT's shield-bypass path.
+			composed.damage_type = "dot" if damage_type == "exploration" else damage_type
+			result = VitalsScript.resolve_damage(state, composed)
+			if bool(result.ok):
+				result.facts.damage_type = damage_type
+				result.facts.actual = result.facts.actual_hp_loss
+		"heal":
+			result = VitalsScript.resolve_heal(state, composed)
+			if bool(result.ok):
+				result.facts.actual = result.facts.actual_heal
+		"pressure":
+			if not composed.get("flat_reductions", []) is Array:
+				return {"ok": false, "reason": "invalid_packet", "state": state, "facts": {}}
+			var reductions := _array(composed.get("flat_reductions", []))
+			if context.protocol_pressure_reduce > 0:
+				reductions.append({"amount": context.protocol_pressure_reduce})
+			if context.asset_ledger != null:
+				var legacy := Z1SupplyRules.pressure_reduction(context, str(composed.get("reason", composed.source_id)))
+				if legacy > 0:
+					reductions.append({"amount": legacy})
+			composed.flat_reductions = reductions
+			result = VitalsScript.resolve_pressure(state, composed)
+			if bool(result.ok):
+				result.facts.actual = result.facts.actual_pressure_delta
+	if bool(result.ok):
+		result.facts.nominal = composed.amount
+		result.facts.kind = kind
+	return result
+
+
+static func _legacy_damage_type(reason: String) -> String:
+	if reason in ["mine", "mine_triggered"]:
+		return "mine"
+	if reason == "dot" or reason.ends_with("_dot"):
+		return "dot"
+	if reason in ["altar", "event_altar"]:
+		return "hp_payment"
+	return "physical"
+
+
+static func _record_vitals(context: RunContext, kind: String, facts: Dictionary) -> void:
+	context.record_event(StringName("vitals_" + kind), str(context.active_command.get("command_id", "")),
+		StringName(context.active_command.get("actor_id", &"player")), str(facts.get("source_id", kind)), facts)
+
+
+static func advance_statuses(context: RunContext, delta: float, trigger: Dictionary) -> Dictionary:
+	if context == null:
+		return {"ok": false, "reason": "no_active_run", "facts": {}, "changed": false, "durability_required": false}
+	var before := capture_vitals(context)
+	# Validate every optional periodic field before producing any candidate effect.
+	for status in context.temporary_statuses:
+		if not status is Dictionary:
+			return _status_failure(before, "invalid_status")
+		for key in ["dot_per_second", "heal_per_second", "dot_remainder", "heal_remainder"]:
+			var value: Variant = status.get(key, 0.0)
+			if not (value is int or value is float) or not is_finite(float(value)) or float(value) < 0.0 or (key.ends_with("remainder") and float(value) >= 1.0):
+				return _status_failure(before, "invalid_periodic_status")
+	var result := StatusScript.advance(before, delta, trigger)
+	if not bool(result.ok):
+		return _status_failure(before, str(result.reason))
+	var candidate: Dictionary = result.state
+	var facts: Dictionary = result.facts
+	facts.packets = []
+	var durable: bool = not facts.started.is_empty() or not facts.ended.is_empty() or not facts.hits_consumed.is_empty()
+	for status in candidate.statuses:
+		var seconds := float(facts.active_seconds.get(str(status.id), 0.0))
+		if seconds <= 0.0:
+			continue
+		for periodic_kind in ["dot", "heal"]:
+			var rate := float(status.get(periodic_kind + "_per_second", 0.0))
+			if rate <= 0.0:
+				continue
+			var remainder_key: String = periodic_kind + "_remainder"
+			var accrued := float(status.get(remainder_key, 0.0)) + rate * seconds
+			var units := floori(accrued + 0.000000001)
+			status[remainder_key] = maxf(0.0, accrued - float(units))
+			if units <= 0:
+				continue
+			var packet := {"amount": units, "source_id": str(status.get("source_id", status.id)), "damage_type": "dot"}
+			var applied := _resolve_packet(context, candidate, packet, "damage" if periodic_kind == "dot" else "heal")
+			if not bool(applied.ok):
+				return _status_failure(before, str(applied.reason))
+			# Preserve the status array being advanced while installing candidate resource fields.
+			var statuses: Array = candidate.statuses
+			candidate = applied.state
+			candidate.statuses = statuses
+			facts.packets.append(applied.facts)
+			durable = durable or int(applied.facts.actual) != 0 or not _dictionary(applied.facts.get("consumed_counters", {})).is_empty()
+	var changed := candidate != before
+	if changed:
+		install_vitals(context, candidate)
+	for fact in facts.packets:
+		_record_vitals(context, str(fact.kind), fact)
+	if durable:
+		context.record_event(&"status_advanced", str(context.active_command.get("command_id", "")), &"player", "simulation_time", facts)
+	return {"ok": true, "reason": "", "state": candidate, "facts": facts, "changed": changed, "durability_required": durable}
+
+
+static func _status_failure(state: Dictionary, reason: String) -> Dictionary:
+	return {"ok": false, "reason": reason, "state": state.duplicate(true), "facts": {}, "changed": false, "durability_required": false}
 
 
 static func _apply_one(context: RunContext, effect_type: StringName, effect_dict: Dictionary, runtime_authority = null) -> Dictionary:
 	var payload: Dictionary = _dictionary(effect_dict.get("payload", {}))
+	if not payload.has("source_id"):
+		payload.source_id = str(effect_dict.get("source", payload.get("reason", "")))
 	match effect_type:
 		EFFECT_HP_DELTA:
 			return _apply_hp_delta(context, payload, runtime_authority)
@@ -120,23 +304,25 @@ static func _apply_one(context: RunContext, effect_type: StringName, effect_dict
 	return _result(effect_type, false, "unknown_effect_type", {}, {})
 
 
-static func _apply_hp_delta(context: RunContext, payload: Dictionary, runtime_authority = null) -> Dictionary:
-	var before := context.hp
+static func _apply_hp_delta(context: RunContext, payload: Dictionary, _runtime_authority = null) -> Dictionary:
+	var before := capture_vitals(context)
 	var amount := int(payload.get("amount", 0))
-	context.hp = clampi(context.hp + amount, 0, context.max_hp)
-	var fail_result: Dictionary = {}
-	if context.hp <= 0 and context.run_active and not context.failed:
-		fail_result = _apply_run_fail(context, {"reason": String(payload.get("reason", "hp_depleted"))}, runtime_authority)
-	return _result(EFFECT_HP_DELTA, true, "", {"hp": before}, {"hp": context.hp, "amount": amount, "fail_result": fail_result})
+	var packet := payload.duplicate(true)
+	packet.amount = absi(amount)
+	if amount == 0:
+		# Legacy zero deltas are no-ops, not a new healing source for flat bonuses.
+		packet.flat_bonus = 0
+	var applied := apply_damage_packet(context, packet) if amount < 0 or payload.has("damage_type") else apply_heal_packet(context, packet)
+	return _result(EFFECT_HP_DELTA, bool(applied.ok), str(applied.reason), before,
+		{"hp": context.hp, "amount": amount, "facts": applied.facts, "fail_result": {}})
 
 
 static func _apply_pressure_delta(context: RunContext, payload: Dictionary) -> Dictionary:
 	var before := {"pressure": context.pressure, "protocol_level": context.protocol_level}
-	var amount := int(payload.get("amount", 0))
-	if amount > 0:
-		amount = maxi(0, amount - context.protocol_pressure_reduce)
-	var pressure_result := ProtocolService.add_pressure(context, amount)
-	return _result(EFFECT_PROTOCOL_PRESSURE_DELTA, true, "", before, pressure_result)
+	var applied := apply_pressure_packet(context, payload)
+	return _result(EFFECT_PROTOCOL_PRESSURE_DELTA, bool(applied.ok), str(applied.reason), before,
+		{"pressure": context.pressure, "protocol_level": context.protocol_level, "changed": before.protocol_level != context.protocol_level,
+		"penalty": false, "facts": applied.facts})
 
 
 static func _apply_currency_delta(context: RunContext, currency_id: StringName, payload: Dictionary, effect_dict: Dictionary) -> Dictionary:
@@ -235,6 +421,7 @@ static func _result(effect_type: StringName, ok: bool, reason: String, before: D
 		"reason": reason,
 		"before": before.duplicate(true),
 		"after": after.duplicate(true),
+		"facts": _dictionary(after.get("facts", {})),
 		"produced_transactions": _array(after.get("produced_transactions", after.get("transactions", []))),
 	}
 

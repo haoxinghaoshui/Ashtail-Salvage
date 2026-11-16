@@ -11,6 +11,7 @@ var failures: Array[String] = []
 var evidence: Array[Dictionary] = []
 var main: Node
 var run_scene: Node
+var profile_id := ""
 var adapter
 var baseline_data: Dictionary = {}
 var completed_data: Dictionary = {}
@@ -25,6 +26,7 @@ func _initialize() -> void:
 func _run() -> void:
 	root.size = Vector2i(1280, 720)
 	root.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	_prepare_isolated_meta_progress()
 	var packed := load("res://scenes/main/main.tscn") as PackedScene
 	_require(packed != null, "production_main_missing")
 	if packed == null:
@@ -38,7 +40,14 @@ func _run() -> void:
 	if run_scene == null:
 		await _finish()
 		return
-	_bind_isolated_meta_progress()
+	adapter = run_scene.get("meta_progress_adapter")
+	_require(adapter != null and adapter.active_profile_id == profile_id, "production_profile_identity_mismatch")
+	var controller = run_scene.get("runtime_controller")
+	_require(controller != null, "production_runtime_controller_missing")
+	if controller != null:
+		_require(controller.checkpoint_service != null and controller.checkpoint_service.meta_adapter == adapter, "production_checkpoint_adapter_mismatch")
+	baseline_data = adapter.data.duplicate(true)
+
 	_record("main_ready")
 	_require(StringName(run_scene.get("screen_state")) == &"main_menu", "journey_not_on_main_menu")
 	await _tap_key(KEY_ENTER)
@@ -78,10 +87,16 @@ func _run() -> void:
 	await _finish()
 
 
-func _bind_isolated_meta_progress() -> void:
+func _prepare_isolated_meta_progress() -> void:
+	var profile_manager := SaveManager.new()
+	profile_manager.load_manifest()
+	profile_id = "i3r_tutorial_%s" % Crypto.new().generate_random_bytes(16).hex_encode()
+	_require(bool(profile_manager.switch_profile(profile_id).get("ok", false)), "isolated_profile_selection_failed")
 	adapter = MetaProgressAdapterScript.new()
-	adapter.set_active_profile_path(save_path, "i3r_tutorial_player_journey")
-	adapter.clear()
+	_require(bool(profile_manager.configure_meta_adapter(adapter).get("ok", false)), "isolated_profile_adapter_configuration_failed")
+	_require(bool(adapter.initialize_z2_profile(RunRuntimeController.Z2_CONTENT_VERSION).get("ok", false)), "isolated_z2_profile_initialization_failed")
+	save_path = adapter.active_meta_progress_path
+
 	adapter.data["gold"] = 321
 	adapter.data["run_count"] = 8
 	adapter.data["extract_count"] = 3
@@ -94,11 +109,7 @@ func _bind_isolated_meta_progress() -> void:
 	_require(adapter.save(), "isolated_meta_seed_save_failed")
 	adapter.load_or_create_default()
 	baseline_data = adapter.data.duplicate(true)
-	var controller = run_scene.get("runtime_controller")
-	_require(controller != null, "production_runtime_controller_missing")
-	if controller != null:
-		controller.bind_meta_progress_adapter(adapter)
-	run_scene.set("meta_progress_adapter", adapter)
+	_require(bool(profile_manager.save_manifest().get("ok", false)), "isolated_profile_manifest_save_failed")
 
 
 func _select_tutorial_from_visible_catalog(replay: bool) -> bool:
@@ -257,22 +268,60 @@ func _validate_tutorial_result(cycle: int) -> void:
 	_require(not bool(model.get("retry_save_allowed", true)), "tutorial_result_retry_exposed:%d" % cycle)
 	_require(not str(model.get("persistence_text", "")).contains("请重试"), "tutorial_result_false_retry_copy:%d" % cycle)
 	var current_data: Dictionary = adapter.data.duplicate(true)
+	_check_terminal_journal(current_data, snapshot, cycle)
 	if cycle == 0:
 		_require(bool(current_data.get("tutorial_completed", false)), "production_completion_marker_not_saved")
-		var normalized := current_data.duplicate(true)
+		var normalized := _progress_without_terminal_journal(current_data)
+		_require((normalized.get("unlocked_map_ids", []) as Array).has("classic_7x7_simple"), "production_completion_first_map_missing")
+		normalized["unlocked_map_ids"] = baseline_data["unlocked_map_ids"]
 		normalized["tutorial_completed"] = false
-		_require(normalized == baseline_data, "production_completion_polluted_non_tutorial_meta")
+		_require(normalized == _progress_without_terminal_journal(baseline_data), "production_completion_polluted_non_tutorial_meta")
 		completed_data = current_data.duplicate(true)
 	else:
-		_require(current_data == completed_data, "production_replay_polluted_meta")
+		_require(_progress_without_terminal_journal(current_data) == _progress_without_terminal_journal(completed_data), "production_replay_polluted_meta")
 	var reloaded := MetaProgressAdapterScript.new()
-	reloaded.set_active_profile_path(save_path, "i3r_tutorial_player_journey_reload")
+	reloaded.set_active_profile_path(save_path, profile_id)
 	var current_normalized: Variant = _json_normalized(current_data)
 	var reloaded_normalized: Variant = _json_normalized(reloaded.data)
 	_require(
 		reloaded_normalized == current_normalized,
 		"production_tutorial_save_not_reloadable:%d" % cycle
 	)
+
+
+func _check_terminal_journal(current_data: Dictionary, snapshot: Dictionary, cycle: int) -> void:
+	var previous: Dictionary = baseline_data if cycle == 0 else completed_data
+	var previous_receipts: Dictionary = previous.get("run_receipts", {})
+	var receipts: Dictionary = current_data.get("run_receipts", {})
+	var run_id := str(snapshot.get("run_id", ""))
+	_require(not run_id.is_empty() and not previous_receipts.has(run_id), "tutorial_journal_run_identity_reused:%d" % cycle)
+	_require(receipts.has(run_id) and receipts.size() == previous_receipts.size() + 1, "tutorial_journal_receipt_count_wrong:%d" % cycle)
+	var preserved := receipts.duplicate(true)
+	preserved.erase(run_id)
+	_require(preserved == previous_receipts, "tutorial_journal_changed_previous_receipts:%d" % cycle)
+	var receipt: Dictionary = receipts.get(run_id, {})
+	var result: Dictionary = receipt.get("result", {})
+	_require(int(receipt.get("schema_version", 0)) == 1 and str(receipt.get("profile_id", "")) == profile_id and str(receipt.get("run_id", "")) == run_id, "tutorial_journal_receipt_identity_wrong:%d" % cycle)
+	_require(str(receipt.get("fingerprint", "")).length() == 64, "tutorial_journal_receipt_fingerprint_missing:%d" % cycle)
+	_require(bool(result.get("ok", false)) and bool(result.get("tutorial_completed", false)), "tutorial_journal_receipt_result_wrong:%d" % cycle)
+	_require(str(result.get("result_id", "")) == str(snapshot.get("result_id", "")) and str(result.get("status", "")) == ("tutorial_completed" if cycle == 0 else "tutorial_replay_complete"), "tutorial_journal_receipt_outcome_wrong:%d" % cycle)
+	_require(current_data.get("admission", null) is Dictionary and (current_data["admission"] as Dictionary).is_empty(), "tutorial_journal_admission_not_released:%d" % cycle)
+	_require(str(current_data.get("checkpoint_cleanup_run_id", "")) == run_id, "tutorial_journal_cleanup_identity_wrong:%d" % cycle)
+	var checkpoint_path := save_path.get_base_dir().path_join("run_checkpoint.json")
+	_require(not FileAccess.file_exists(checkpoint_path) and not FileAccess.file_exists(checkpoint_path + ".bak"), "tutorial_journal_checkpoint_not_cleaned:%d" % cycle)
+	var changed_fields: Array[String] = []
+	for key in current_data:
+		if current_data.get(key) != previous.get(key):
+			changed_fields.append(str(key))
+	evidence.append({"step": "terminal_journal_%d" % cycle, "run_id": run_id, "profile_id": profile_id, "receipt_count": receipts.size(), "changed_meta_fields": changed_fields})
+
+
+func _progress_without_terminal_journal(value: Dictionary) -> Dictionary:
+	var progress := value.duplicate(true)
+	progress.erase("run_receipts")
+	progress.erase("checkpoint_cleanup_run_id")
+	return progress
+
 
 
 func _json_normalized(value: Variant) -> Variant:
@@ -486,7 +535,7 @@ func _write_evidence() -> String:
 		"fixed_seed": TutorialMapCatalogScript.FIXED_SEED,
 		"input_transport": "Input.parse_input_event",
 		"cycles": ["tutorial_completed", "tutorial_replay_complete"],
-		"zero_growth_pollution": completed_data == adapter.data,
+		"zero_growth_pollution": _progress_without_terminal_journal(completed_data) == _progress_without_terminal_journal(adapter.data),
 		"steps": evidence,
 		"failures": failures,
 	}, "\t"))
@@ -505,6 +554,14 @@ func _finish() -> void:
 	if feedback != null:
 		_require(await _wait_until(func() -> bool: return feedback.get_child_count() == 0, 3.0), "tutorial_feedback_not_finished")
 	var written_evidence := _write_evidence()
+	if is_instance_valid(run_scene):
+		var runtime = run_scene.get("in_run_runtime")
+		if runtime != null:
+			runtime.call("bind", null)
+		var bus = run_scene.get("command_bus")
+		if bus != null:
+			bus.call("bind_runtime_controller", null)
+
 	if main != null and is_instance_valid(main):
 		main.free()
 	main = null

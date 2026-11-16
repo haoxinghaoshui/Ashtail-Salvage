@@ -49,6 +49,9 @@ var cached_shadow_scale := Vector2.ONE
 var cached_shadow_position := Vector2.ZERO
 var enemy_visual_enabled := false
 var projectile_visual_radius := 0.0
+var visual_lift := 0.0
+var visual_facing := Vector2.RIGHT
+var counter_charge := 0
 
 const ENEMY_STATUS_Z := 800
 
@@ -70,6 +73,9 @@ func configure(next_subject: StringName, snapshot: Dictionary) -> void:
 	hp = clampi(int(snapshot.get("hp", hp)), 0, max_hp)
 	enemy_name = String(snapshot.get("enemy_name", ""))
 	enemy_power = int(snapshot.get("enemy_power", -1))
+	visual_lift = float(snapshot.get("visual_lift", 0.0))
+	visual_facing = Vector2(snapshot.get("facing", Vector2.RIGHT))
+	counter_charge = int(snapshot.get("counter_charge", 0))
 	position = local_to_world(Vector2(snapshot.get("pos", Vector2(0.5, 0.5))))
 	if not contract_nodes_ready:
 		_ensure_contract_nodes()
@@ -342,7 +348,7 @@ func _apply_placeholder() -> void:
 		# Runtime state remains available to tests and accessibility hooks, but
 		# production art communicates it through poses instead of debug copy.
 		state_label.visible = false
-	var show_health := subject in [&"slime", &"slimeling", &"bat", &"drone"] and hp > 0
+	var show_health := enemy_visual_enabled and hp > 0
 	if health_background != null:
 		health_background.visible = show_health
 	if health_fill != null:
@@ -473,7 +479,9 @@ func _apply_enemy_visual_frame(reduce_motion: bool, motion_phase: float) -> void
 	var bob_amount := 1.6 if subject in [&"bat", &"drone"] else 0.8
 	if visual_state in [&"dead", &"defeated"]:
 		bob_amount = 0.0
-	art_sprite.position = cached_visual_offset + Vector2(0, motion_phase * bob_amount)
+	art_sprite.position = cached_visual_offset + Vector2(0, motion_phase * bob_amount - visual_lift)
+	if String(subject).begins_with("z1_monster_"):
+		art_sprite.flip_h = visual_facing.x < 0.0
 	if visual_state == &"hurt":
 		art_sprite.modulate = Color(1.0, 0.58, 0.50, 1.0)
 	elif visual_state in [&"warning", &"aim"]:
@@ -485,6 +493,8 @@ func _apply_enemy_visual_frame(reduce_motion: bool, motion_phase: float) -> void
 		art_sprite.modulate = Color(0.76, 0.72, 0.68, 0.92)
 	else:
 		art_sprite.modulate = Color.WHITE
+	if counter_charge > 0 and visual_state not in [&"hurt", &"dead", &"defeated"]:
+		art_sprite.modulate = Color(1.18, 0.91, 0.55, 1.0)
 	_apply_enemy_shadow(motion_phase, bob_amount)
 	# The entry envelope is finished during the 300-frame formal warmup. Avoid
 	# paying its transform/node lookup cost for every enemy on every later frame.

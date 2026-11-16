@@ -14,8 +14,12 @@ const ACTION_USE := &"use_consumable"
 const ACTION_EQUIP := &"equip_item"
 const ACTION_UNEQUIP := &"unequip_item"
 
+var combat_active_query: Callable
+
 
 func execute(context: RunContext, action: StringName, payload: Dictionary = {}) -> Dictionary:
+	if action in [ACTION_EQUIP, ACTION_UNEQUIP] and combat_active_query.is_valid() and bool(combat_active_query.call()):
+		return {"action_result": _blocked(&"blocked_combat", "equipment_locked_in_combat"), "emit_state": false}
 	match action:
 		ACTION_PICKUP:
 			return _rule_outcome(
@@ -74,6 +78,7 @@ func _equipment_outcome(context: RunContext, instance_id: String, equip: bool) -
 		result = context.asset_ledger.equip_inventory_item(instance_id)
 	else:
 		result = context.asset_ledger.unequip_item(instance_id)
+	RunInventory.apply_equipment_change(context, result)
 	context.asset_ledger.sync_compat_fields(context)
 	if bool(result.get("ok", false)):
 		context.blocked_reason = ""

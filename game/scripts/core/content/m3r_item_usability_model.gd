@@ -9,8 +9,9 @@ const GROUP_CONSUMABLE := &"consumable"
 const GROUP_COLLECTIBLE := &"collectible"
 const GROUP_SPECIAL := &"special"
 
-const BASE_BACKPACK_CAPACITY := 10
-const BASE_FAILURE_SALVAGE_CAPACITY := 4
+const BASE_BACKPACK_CAPACITY := 100
+const BASE_EQUIPMENT_CAPACITY := 100
+const BASE_FAILURE_SALVAGE_CAPACITY := 40
 
 
 static func normalize_warehouse_items(meta_summary: Dictionary = {}) -> Array[Dictionary]:
@@ -38,6 +39,7 @@ static func normalize_item(raw_item: Variant) -> Dictionary:
 	var result := definition.duplicate(true)
 	for key in source.keys():
 		result[key] = source[key]
+	result = M3ItemCatalogScript.normalize_instance_units(result)
 	if item_id == "":
 		item_id = str(result.get("item_id", "warehouse_item"))
 	result["item_id"] = item_id
@@ -53,6 +55,7 @@ static func normalize_item(raw_item: Variant) -> Dictionary:
 	result["source"] = str(result.get("source", "warehouse"))
 	result["source_label"] = str(result.get("source_label", result.get("source", "warehouse")))
 	result["tags"] = _array_from(result.get("tags", []))
+	result["counters"] = _dictionary_from(result.get("counters", {}))
 	result["can_equip"] = bool(result.get("can_equip", item_type == GROUP_EQUIPMENT))
 	result["can_consume"] = bool(result.get("can_consume", item_type == GROUP_CONSUMABLE))
 	result["can_sell"] = bool(result.get("can_sell", item_type == GROUP_COLLECTIBLE))
@@ -262,6 +265,7 @@ static func build_profile_interfaces(meta_summary: Dictionary = {}) -> Dictionar
 		"talent_directions": talents,
 		"active_talent_effects": active_talents,
 		"backpack_capacity": backpack_capacity,
+		"equipment_capacity": BASE_EQUIPMENT_CAPACITY,
 		"failure_salvage_capacity": failure_salvage_capacity,
 		"mine_dmg_reduce": mine_dmg_reduce,
 		"protocol_pressure_reduce": pressure_reduce,
@@ -290,6 +294,8 @@ static func build_run_start_fields(meta_summary: Dictionary = {}) -> Dictionary:
 		"selected_consumable_ids": _item_ids(selected_consumables),
 		"equipment_effects": _duplicate_array(loadout.get("equipment_effects", [])),
 		"backpack_capacity": int(capacity.get("limit", profile.get("backpack_capacity", BASE_BACKPACK_CAPACITY))),
+		"equipment_capacity": BASE_EQUIPMENT_CAPACITY,
+		"equipment_used": 0,
 		"failure_salvage_capacity": int(capacity.get("failure_salvage_capacity", profile.get("failure_salvage_capacity", BASE_FAILURE_SALVAGE_CAPACITY))),
 		"bag_used": int(capacity.get("used", 0)),
 		"bag_limit": int(capacity.get("limit", BASE_BACKPACK_CAPACITY)),
@@ -320,6 +326,9 @@ static func runtime_config_patch(run_start_config: Dictionary = {}) -> Dictionar
 		"selected_consumable_ids": _item_ids(consumables),
 		"equipment_effects": _duplicate_array(run_start_config.get("equipment_effects", build_equipment_effects(equipment))),
 		"backpack_capacity": int(run_start_config.get("backpack_capacity", BASE_BACKPACK_CAPACITY)),
+		"equipment_capacity": int(run_start_config.get("equipment_capacity", BASE_EQUIPMENT_CAPACITY)),
+		"equipment_used": int(run_start_config.get("equipment_used", 0)),
+		"max_hp": int(run_start_config.get("max_hp", 100)),
 		"failure_salvage_capacity": int(run_start_config.get("failure_salvage_capacity", BASE_FAILURE_SALVAGE_CAPACITY)),
 		"profile_fields": _dictionary_from(run_start_config.get("profile_fields", {})),
 		"profile_level": int(run_start_config.get("profile_level", 1)),

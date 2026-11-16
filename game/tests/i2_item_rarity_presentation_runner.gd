@@ -2,6 +2,7 @@ extends SceneTree
 
 const ItemCatalog := preload("res://scripts/core/content/m3_item_catalog.gd")
 const ItemRarityDescriptor := preload("res://scripts/presentation/item_rarity_descriptor.gd")
+const ItemVisualCatalog := preload("res://scripts/presentation/art24/art24_item_visual_catalog.gd")
 const DeployPrepModel := preload("res://scripts/ui/deploy_prep/deploy_prep_model.gd")
 const DeployPrepCardView := preload("res://scripts/ui/deploy_prep/deploy_prep_card_view.gd")
 const LootResultPanel := preload("res://scripts/ui/loot_result/loot_result_panel.gd")
@@ -94,7 +95,7 @@ func _check_formal_catalog() -> void:
 		&"tier_5": 0,
 		&"tier_6": 0,
 	}
-	_check(items.size() == 43, "formal item count drifted from 43")
+	_check(items.size() == 63, "formal item count drifted from 63")
 	for item in items:
 		var descriptor: Dictionary = ItemRarityDescriptor.describe_item(item)
 		var key := StringName(descriptor.get("normalized_key", &"unknown"))
@@ -106,11 +107,11 @@ func _check_formal_catalog() -> void:
 		_check(not String(descriptor.get("display_text", "")).contains("tier_"), "formal item leaked a raw rarity key: %s" % item.get("item_id", ""))
 	_check(items == before, "presentation descriptor mutated the formal item catalog")
 	var expected_counts := {
-		&"tier_1": 7,
-		&"tier_2": 10,
-		&"tier_3": 12,
-		&"tier_4": 6,
-		&"tier_5": 4,
+		&"tier_1": 10,
+		&"tier_2": 21,
+		&"tier_3": 16,
+		&"tier_4": 7,
+		&"tier_5": 5,
 		&"tier_6": 4,
 	}
 	_check(counts == expected_counts, "formal rarity distribution drifted: %s" % counts)
@@ -162,6 +163,9 @@ func _check_deploy_consumers() -> void:
 	await process_frame
 	var title_label := card.get_node_or_null("CardTitle") as Label
 	var edge := card.get_node_or_null("CardRarityEdge") as ColorRect
+	var artwork := card.get_node_or_null("CardArtwork") as TextureRect
+	var expected_artwork := ItemVisualCatalog.texture_for(tier_6)
+	_check(artwork != null and expected_artwork != null and artwork.texture == expected_artwork, "Deploy T6 card did not use the actual item artwork")
 	var tier_6_descriptor: Dictionary = ItemRarityDescriptor.describe(&"tier_6")
 	var tier_6_collectible_level := int(tier_6.get("collectible_level", 0))
 	_check(title_label != null and title_label.get_theme_color("font_color") == tier_6_descriptor.get("color"), "Deploy card title did not consume the shared rarity color")
@@ -279,7 +283,7 @@ func _frames(count: int) -> void:
 
 func _finish() -> void:
 	if failures.is_empty():
-		print("I2_ITEM_RARITY_PRESENTATION=PASS formal_items=43 tiers=6 aliases=common,uncommon,rare,epic,legendary,mythic consumers=deploy,result,world unique=locked collectible_level=deploy,result,world rarity_marker=independent")
+		print("I2_ITEM_RARITY_PRESENTATION=PASS formal_items=63 tiers=6 aliases=common,uncommon,rare,epic,legendary,mythic consumers=deploy,result,world unique=locked collectible_level=deploy,result,world rarity_marker=independent")
 		quit(0)
 		return
 	for failure in failures:

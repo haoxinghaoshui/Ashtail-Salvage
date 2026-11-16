@@ -151,12 +151,14 @@ func build(model: Dictionary = {}, initial_snapshot: Dictionary = {}) -> void:
 
 
 func apply_snapshot(snapshot: Dictionary) -> void:
+	var previous_message := str(current_model.get("action_message", ""))
 	_save_active_view_state()
 	current_snapshot = snapshot.duplicate(true)
 	var previous_tab := _active_tab()
 	current_model = DeployPrepModelScript.refresh_from_snapshot(current_model, current_snapshot)
 	current_model = DeployPrepModelScript.model_with_tab(current_model, previous_tab)
 	_restore_model_state(previous_tab)
+	current_model = DeployPrepModelScript.model_with_action_message(current_model, previous_message)
 	_refresh_all(true)
 
 
@@ -298,6 +300,7 @@ func set_ui_scale_factor(value: float) -> void:
 	if not current_model.is_empty():
 		_refresh_wallet()
 		_refresh_detail_projection()
+		_refresh_workspace_visibility(_active_tab() == DeployTabModelScript.TAB_MAP)
 		_refresh_summary()
 		_refresh_actions()
 
@@ -1201,10 +1204,11 @@ func _refresh_detail_artwork(empty: bool) -> void:
 		return
 	var row := _dictionary_from(current_model.get("selected_card_detail", {}))
 	var card_id := StringName(row.get("id", current_model.get("selected_card", &"")))
-	var art_ref: Dictionary
 	if row.has("item_id"):
-		art_ref = Art09ManifestAssetMappingScript.inventory_item_icon_ref(row)
-	elif Art25ContentAssetContractScript.handles_deploy_card(card_id):
+		detail_artwork.texture = DeployPrepCardViewScript.item_artwork(row)
+		return
+	var art_ref: Dictionary
+	if Art25ContentAssetContractScript.handles_deploy_card(card_id):
 		art_ref = Art25ContentAssetContractScript.deploy_card_ref(card_id)
 	else:
 		art_ref = Art22DeployPrepAssetContractScript.card_art_ref(_active_tab(), card_id, StringName(row.get("art_filter_id", row.get("filter_id", &""))))
@@ -1274,7 +1278,7 @@ func _detail_action_reason(action: Dictionary) -> String:
 		&"empty_batch": return "请先勾选至少一件可售物品"
 		&"transaction_pending": return "上一项基地操作仍在确认"
 		&"only_available_in_run": return "只能在探索中使用"
-		&"supply_slots_full": return "携带栏已满"
+		&"equipment_overweight": return "共享负重不足"
 	return "当前不可操作"
 
 

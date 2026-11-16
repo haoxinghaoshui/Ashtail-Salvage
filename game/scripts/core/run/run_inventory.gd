@@ -10,6 +10,8 @@ class_name RunInventory
 static func setup_stats(context: RunContext) -> void:
 	if context == null:
 		return
+	if context.asset_ledger != null:
+		context.asset_ledger.run_id = String(context.run_id)
 	context.run_stats = {
 		"moves": 0,
 		"searched_rooms": 0,
@@ -28,6 +30,45 @@ static func setup_stats(context: RunContext) -> void:
 		"map_open_count": 0,
 		"flags_placed": 0,
 	}
+
+
+static func apply_equipment_change(context: RunContext, result: Dictionary) -> void:
+	if context == null or not bool(result.get("ok", false)):
+		return
+	var deltas := {}
+	for change in result.get("equipment_changes", []):
+		var item: Dictionary = change.get("item", {})
+		var direction := int(StringName(change.get("to", &"")) == RunAssetLedger.LOCATION_EQUIPPED) - int(StringName(change.get("from", &"")) == RunAssetLedger.LOCATION_EQUIPPED)
+		var kind := String(item.get("effect_kind", ""))
+		deltas[kind] = int(deltas.get(kind, 0)) + direction * int(item.get("effect_amount", 0))
+	# Apply a same-slot exchange as one aggregate change, then clamp HP once.
+	# Retain the contribution below the floor so re-equipping cannot refund a
+	# permanent max-HP payment made while the equipment was worn.
+	var raw_max_hp := context.max_hp - context.max_hp_equipment_floor_debt + int(deltas.get("max_hp", 0))
+	context.max_hp = maxi(1, raw_max_hp)
+	context.max_hp_equipment_floor_debt = maxi(0, 1 - raw_max_hp)
+	context.hp = mini(context.hp, context.max_hp)
+	context.power += int(deltas.get("power", 0))
+	context.mine_dmg_reduce += int(deltas.get("mine_damage_reduce", 0))
+	context.protocol_pressure_reduce += int(deltas.get("protocol_pressure_reduce", 0))
+	context.search_reward_bonus += int(deltas.get("search_reward", 0))
+	context.scan_hint_bonus += int(deltas.get("scan_hint", 0))
+
+
+static func claim_departure_shield(ledger: RunAssetLedger, current_run_id: String) -> int:
+	if ledger == null or current_run_id.is_empty():
+		return 0
+	var granted := 0
+	for item in ledger.get_items_by_location(RunAssetLedger.LOCATION_EQUIPPED):
+		if not bool(item.get("carry_in_equipment", false)) or String(item.get("effect_kind", "")) != "departure_shield":
+			continue
+		var counters: Dictionary = item.get("counters", {}).duplicate(true)
+		if String(counters.get("departure_shield_run_id", "")) == current_run_id:
+			continue
+		granted += maxi(0, int(item.get("effect_amount", 0)))
+		counters["departure_shield_run_id"] = current_run_id
+		ledger.item_instances[String(item["instance_id"])]["counters"] = counters
+	return granted
 
 
 static func record_move(context: RunContext) -> void:

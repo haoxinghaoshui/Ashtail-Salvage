@@ -198,13 +198,15 @@ func apply_snapshot(snapshot: Dictionary) -> void:
 		item_backdrop.visible = item_backdrop.texture != null and visible_item_count < 6
 		var watermark_alpha := 0.12 if visible_item_count == 0 else (0.075 if visible_item_count <= 2 else 0.04)
 		item_backdrop.modulate = Color(0.72, 0.96, 0.91, watermark_alpha)
-	summary_label.text = "背包 %s/%s　黑色资源 %s　金色资源 %s\n物品 %s　装备 %s" % [
+	summary_label.text = "共享负重 %s/%s　战利品 %s/%s\n物品 %s　装备 %s　黑资 %s　金币 %s" % [
+		snapshot.get("equipment_used", 0),
+		snapshot.get("equipment_capacity", 100),
 		snapshot.get("backpack_used", 0),
 		snapshot.get("backpack_capacity", 0),
-		snapshot.get("run_black_coin", snapshot.get("black_coin", 0)),
-		snapshot.get("gold_coin", snapshot.get("safe_yield", 0)),
 		inventory_items.size(),
 		equipped_items.size(),
+		snapshot.get("run_black_coin", snapshot.get("black_coin", 0)),
+		snapshot.get("gold_coin", snapshot.get("safe_yield", 0)),
 	]
 	Art10UISkinKitScript.apply_label(summary_label, 15, PresentationTheme.text_color())
 	_set_scaled_font(summary_label, 15)

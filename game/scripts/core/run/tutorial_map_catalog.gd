@@ -1,6 +1,7 @@
 extends RefCounted
 class_name TutorialMapCatalog
 
+const SupplyCatalog := preload("res://scripts/core/content/z1_supply_catalog.gd")
 const MAP_ID := "tutorial_5x5"
 const FIXED_SEED := 777
 
@@ -44,8 +45,10 @@ static func runtime_config(run_start_config: Dictionary = {}) -> Dictionary:
 		sanitized_start[key] = []
 	sanitized_start["selected_objective_id"] = &""
 	sanitized_start["selected_objective_label"] = "教学目标"
-	sanitized_start["backpack_capacity"] = 10
-	sanitized_start["failure_salvage_capacity"] = 4
+	sanitized_start["bag_limit"] = SupplyCatalog.BASE_BACKPACK_CAPACITY
+	sanitized_start["backpack_capacity"] = SupplyCatalog.BASE_BACKPACK_CAPACITY
+	sanitized_start["equipment_capacity"] = SupplyCatalog.BASE_EQUIPMENT_CAPACITY
+	sanitized_start["failure_salvage_capacity"] = SupplyCatalog.BASE_FAILURE_SALVAGE_CAPACITY
 	sanitized_start["mine_dmg_reduce"] = 0
 	sanitized_start["protocol_pressure_reduce"] = 0
 	sanitized_start["search_reward_bonus"] = 0
@@ -70,8 +73,9 @@ static func runtime_config(run_start_config: Dictionary = {}) -> Dictionary:
 		"mine_hits_are_fatal": false,
 		"reveal_on_move": true,
 		"move_requires_revealed": false,
-		"backpack_capacity": 10,
-		"failure_salvage_capacity": 4,
+		"backpack_capacity": SupplyCatalog.BASE_BACKPACK_CAPACITY,
+		"equipment_capacity": SupplyCatalog.BASE_EQUIPMENT_CAPACITY,
+		"failure_salvage_capacity": SupplyCatalog.BASE_FAILURE_SALVAGE_CAPACITY,
 		"talent_interface": [],
 		"active_talent_effects": [],
 		"mine_dmg_reduce": 0,

@@ -6,6 +6,7 @@ const NavigationIntentScript := preload("res://scripts/ui/app_shell/navigation_i
 const PageRouterScript := preload("res://scripts/ui/app_shell/page_router.gd")
 const DeployConfigScript := preload("res://scripts/ui/deploy_prep/deploy_config.gd")
 const RuntimeTextureCacheScript := preload("res://scripts/presentation/runtime_texture_cache.gd")
+const PRODUCTION_COMBAT_TEXTURE_COUNT := 211
 
 
 class FakeContext:
@@ -85,8 +86,8 @@ func _rejecting_admission() -> Dictionary:
 	return {
 		"ok": false,
 		"reason_code": &"combat_actor_assets_unavailable",
-		"cached": 70,
-		"declared": 71,
+		"cached": PRODUCTION_COMBAT_TEXTURE_COUNT - 1,
+		"declared": PRODUCTION_COMBAT_TEXTURE_COUNT,
 	}
 
 
@@ -133,7 +134,7 @@ func _expect_running_runtime_routes_once_and_deduplicates(failures: Array[String
 
 
 func _expect_active_run_projection_is_canonical_and_locked(failures: Array[String]) -> void:
-	var canonical_source := DeployConfigScript.default_config()
+	var canonical_source := DeployConfigScript.default_config(1, {"unlocked_map_ids": ["classic_7x7_simple"]})
 	var canonical := DeployConfigScript.build_run_start_config(canonical_source)
 	var canonical_equipment := {
 		"instance_id": "canonical-equipment",
@@ -205,10 +206,20 @@ func _expect_production_run_scene_admission_wiring(failures: Array[String]) -> v
 	await _frames(3)
 	var admission: Dictionary = run_scene.get("last_combat_texture_preflight_report")
 	var show_check: Dictionary = run_scene.get("last_combat_texture_prewarm_report")
-	_expect(bool(admission.get("ok", false)) and int(admission.get("cached", -1)) == 71, "production RunScene did not execute the 71-texture admission preflight", failures)
+	_expect(
+		bool(admission.get("ok", false)) and int(admission.get("cached", -1)) == PRODUCTION_COMBAT_TEXTURE_COUNT,
+		"production RunScene did not execute the %d-texture admission preflight" % PRODUCTION_COMBAT_TEXTURE_COUNT,
+		failures
+	)
 	_expect(context != null and bool(context.run_active) and StringName(context.phase) == &"running", "production route did not commit running authority after admission", failures)
 	_expect(StringName(run_scene.get("screen_state")) == &"run", "production route did not expose Run after admission", failures)
-	_expect(bool(show_check.get("ok", false)) and int(show_check.get("already_cached", -1)) == 71 and int(show_check.get("loaded", -1)) == 0, "production show-time verification was not load-idempotent", failures)
+	_expect(
+		bool(show_check.get("ok", false))
+		and int(show_check.get("already_cached", -1)) == PRODUCTION_COMBAT_TEXTURE_COUNT
+		and int(show_check.get("loaded", -1)) == 0,
+		"production show-time verification was not load-idempotent",
+		failures
+	)
 	var room_runtime_view: Variant = run_scene.get("room_runtime_view")
 	if room_runtime_view != null:
 		room_runtime_view.call("clear_runtime")

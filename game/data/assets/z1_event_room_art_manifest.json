@@ -1,0 +1,2381 @@
+{
+  "schema_version": 1,
+  "rooms": {
+    "z1_event_e01": {
+      "id": "e01",
+      "floor_path": "res://assets/z1/event_rooms/e01/floor.png",
+      "floor_rect": [
+        0.13499999999999995,
+        0.3014788732394366,
+        0.55,
+        0.4570422535211268
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e01/wall.png",
+      "wall_rect": [
+        0.15203703703703703,
+        0.11499999999999999,
+        0.23592592592592596,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e01/station.png",
+      "station_anchor": [
+        0.34,
+        0.47
+      ],
+      "station_size": [
+        0.1866393442622951,
+        0.23
+      ],
+      "station_pivot": [
+        0.5,
+        0.9918032786885246
+      ],
+      "body_rect": [
+        0.26254467213114757,
+        0.414,
+        0.1549106557377049,
+        0.056
+      ],
+      "interaction_pos": [
+        0.34,
+        0.5419999999999999
+      ],
+      "loot_anchor": [
+        0.34,
+        0.618
+      ]
+    },
+    "z1_event_e02": {
+      "id": "e02",
+      "floor_path": "res://assets/z1/event_rooms/e02/floor.png",
+      "floor_rect": [
+        0.35485655737704913,
+        0.30500000000000005,
+        0.4702868852459017,
+        0.45
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e02/wall.png",
+      "wall_rect": [
+        0.6328099173553718,
+        0.12,
+        0.1943801652892562,
+        0.12
+      ],
+      "station_path": "res://assets/z1/event_rooms/e02/station.png",
+      "station_anchor": [
+        0.68,
+        0.43
+      ],
+      "station_size": [
+        0.27,
+        0.21467213114754102
+      ],
+      "station_pivot": [
+        0.5,
+        0.9896907216494846
+      ],
+      "body_rect": [
+        0.5679500000000001,
+        0.374,
+        0.2241,
+        0.056
+      ],
+      "interaction_pos": [
+        0.68,
+        0.502
+      ],
+      "loot_anchor": [
+        0.68,
+        0.578
+      ]
+    },
+    "z1_event_e03": {
+      "id": "e03",
+      "floor_path": "res://assets/z1/event_rooms/e03/floor.png",
+      "floor_rect": [
+        0.21999999999999997,
+        0.34147887323943665,
+        0.5800000000000001,
+        0.4370422535211268
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e03/wall.png",
+      "wall_rect": [
+        0.14500000000000002,
+        0.14484693877551022,
+        0.22999999999999998,
+        0.1103061224489796
+      ],
+      "station_path": "res://assets/z1/event_rooms/e03/station.png",
+      "station_anchor": [
+        0.5,
+        0.41
+      ],
+      "station_size": [
+        0.2328630705394191,
+        0.23
+      ],
+      "station_pivot": [
+        0.5,
+        0.991701244813278
+      ],
+      "body_rect": [
+        0.4033618257261411,
+        0.354,
+        0.19327634854771783,
+        0.056
+      ],
+      "interaction_pos": [
+        0.5,
+        0.482
+      ],
+      "loot_anchor": [
+        0.5,
+        0.5579999999999999
+      ]
+    },
+    "z1_event_e04": {
+      "id": "e04",
+      "floor_path": "res://assets/z1/event_rooms/e04/floor.png",
+      "floor_rect": [
+        0.1185022026431718,
+        0.28500000000000003,
+        0.5629955947136565,
+        0.45
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e04/wall.png",
+      "wall_rect": [
+        0.6264227642276423,
+        0.11499999999999999,
+        0.20715447154471545,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e04/station.png",
+      "station_anchor": [
+        0.31,
+        0.43
+      ],
+      "station_size": [
+        0.23,
+        0.21491803278688526
+      ],
+      "station_pivot": [
+        0.5,
+        0.9912280701754386
+      ],
+      "body_rect": [
+        0.21455000000000002,
+        0.374,
+        0.1909,
+        0.056
+      ],
+      "interaction_pos": [
+        0.31,
+        0.502
+      ],
+      "loot_anchor": [
+        0.31,
+        0.578
+      ]
+    },
+    "z1_event_e05": {
+      "id": "e05",
+      "floor_path": "res://assets/z1/event_rooms/e05/floor.png",
+      "floor_rect": [
+        0.32499999999999996,
+        0.36221830985915493,
+        0.51,
+        0.35556338028169016
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e05/wall.png",
+      "wall_rect": [
+        0.15000000000000002,
+        0.13051020408163266,
+        0.22,
+        0.11897959183673469
+      ],
+      "station_path": "res://assets/z1/event_rooms/e05/station.png",
+      "station_anchor": [
+        0.655,
+        0.48
+      ],
+      "station_size": [
+        0.18545081967213115,
+        0.25
+      ],
+      "station_pivot": [
+        0.4972375690607735,
+        0.9918032786885246
+      ],
+      "body_rect": [
+        0.5780379098360656,
+        0.424,
+        0.15392418032786884,
+        0.056
+      ],
+      "interaction_pos": [
+        0.655,
+        0.5519999999999999
+      ],
+      "loot_anchor": [
+        0.655,
+        0.628
+      ]
+    },
+    "z1_event_e06": {
+      "id": "e06",
+      "floor_path": "res://assets/z1/event_rooms/e06/floor.png",
+      "floor_rect": [
+        0.35209016393442616,
+        0.29500000000000004,
+        0.47581967213114756,
+        0.45
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e06/wall.png",
+      "wall_rect": [
+        0.6434848484848484,
+        0.10500000000000001,
+        0.19303030303030305,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e06/station.png",
+      "station_anchor": [
+        0.67,
+        0.4
+      ],
+      "station_size": [
+        0.15442622950819673,
+        0.24
+      ],
+      "station_pivot": [
+        0.4968152866242038,
+        0.9918032786885246
+      ],
+      "body_rect": [
+        0.6059131147540984,
+        0.34400000000000003,
+        0.12817377049180328,
+        0.056
+      ],
+      "interaction_pos": [
+        0.67,
+        0.47200000000000003
+      ],
+      "loot_anchor": [
+        0.67,
+        0.548
+      ],
+      "station_open_path": "res://assets/z1/event_rooms/e06/station_open.png",
+      "station_open_size": [
+        0.21049180327868852,
+        0.24
+      ],
+      "station_open_pivot": [
+        0.6308411214953271,
+        0.9918032786885246
+      ]
+    },
+    "z1_event_e07": {
+      "id": "e07",
+      "floor_path": "res://assets/z1/event_rooms/e07/floor.png",
+      "floor_rect": [
+        0.17098360655737702,
+        0.32999999999999996,
+        0.4780327868852459,
+        0.48
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e07/wall.png",
+      "wall_rect": [
+        0.15383333333333335,
+        0.11499999999999999,
+        0.21233333333333332,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e07/station.png",
+      "station_anchor": [
+        0.36,
+        0.51
+      ],
+      "station_size": [
+        0.20549180327868855,
+        0.23
+      ],
+      "station_pivot": [
+        0.5,
+        0.9918032786885246
+      ],
+      "body_rect": [
+        0.27472090163934426,
+        0.454,
+        0.17055819672131148,
+        0.056
+      ],
+      "interaction_pos": [
+        0.36,
+        0.582
+      ],
+      "loot_anchor": [
+        0.36,
+        0.658
+      ]
+    },
+    "z1_event_e08": {
+      "id": "e08",
+      "floor_path": "res://assets/z1/event_rooms/e08/floor.png",
+      "floor_rect": [
+        0.23216216216216218,
+        0.345,
+        0.5756756756756757,
+        0.45
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e08/wall.png",
+      "wall_rect": [
+        0.642,
+        0.11499999999999999,
+        0.196,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e08/station.png",
+      "station_anchor": [
+        0.63,
+        0.47
+      ],
+      "station_size": [
+        0.27,
+        0.21688524590163938
+      ],
+      "station_pivot": [
+        0.5,
+        0.9897959183673469
+      ],
+      "body_rect": [
+        0.51795,
+        0.414,
+        0.2241,
+        0.056
+      ],
+      "interaction_pos": [
+        0.63,
+        0.5419999999999999
+      ],
+      "loot_anchor": [
+        0.63,
+        0.618
+      ]
+    },
+    "z1_event_e09": {
+      "id": "e09",
+      "floor_path": "res://assets/z1/event_rooms/e09/floor.png",
+      "floor_rect": [
+        0.15999999999999998,
+        0.3498943661971831,
+        0.62,
+        0.3602112676056338
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e09/wall.png",
+      "wall_rect": [
+        0.1610135135135135,
+        0.13,
+        0.157972972972973,
+        0.14
+      ],
+      "station_path": "res://assets/z1/event_rooms/e09/station.png",
+      "station_anchor": [
+        0.34,
+        0.39
+      ],
+      "station_size": [
+        0.23,
+        0.18758196721311476
+      ],
+      "station_pivot": [
+        0.5,
+        0.9899497487437185
+      ],
+      "body_rect": [
+        0.24455000000000005,
+        0.334,
+        0.1909,
+        0.056
+      ],
+      "interaction_pos": [
+        0.34,
+        0.462
+      ],
+      "loot_anchor": [
+        0.34,
+        0.538
+      ]
+    },
+    "z1_event_e10": {
+      "id": "e10",
+      "floor_path": "res://assets/z1/event_rooms/e10/floor.png",
+      "floor_rect": [
+        0.2922466960352423,
+        0.31000000000000005,
+        0.5755066079295154,
+        0.45999999999999996
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e10/wall.png",
+      "wall_rect": [
+        0.6296850393700787,
+        0.135,
+        0.20062992125984253,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e10/station.png",
+      "station_anchor": [
+        0.64,
+        0.43
+      ],
+      "station_size": [
+        0.22245901639344265,
+        0.23
+      ],
+      "station_pivot": [
+        0.5,
+        0.9918032786885246
+      ],
+      "body_rect": [
+        0.5476795081967213,
+        0.374,
+        0.1846409836065574,
+        0.056
+      ],
+      "interaction_pos": [
+        0.64,
+        0.502
+      ],
+      "loot_anchor": [
+        0.64,
+        0.578
+      ]
+    },
+    "z1_event_e11": {
+      "id": "e11",
+      "floor_path": "res://assets/z1/event_rooms/e11/floor.png",
+      "floor_rect": [
+        0.135,
+        0.3618196202531645,
+        0.59,
+        0.41636075949367085
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e11/wall.png",
+      "wall_rect": [
+        0.15892523364485983,
+        0.125,
+        0.14214953271028039,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e11/station.png",
+      "station_anchor": [
+        0.36,
+        0.47
+      ],
+      "station_size": [
+        0.26,
+        0.16719546742209632
+      ],
+      "station_pivot": [
+        0.5127478753541076,
+        0.9911894273127754
+      ],
+      "body_rect": [
+        0.2521,
+        0.41649745042492914,
+        0.2158,
+        0.05350254957507082
+      ],
+      "interaction_pos": [
+        0.36,
+        0.5419999999999999
+      ],
+      "loot_anchor": [
+        0.36,
+        0.618
+      ]
+    },
+    "z1_event_e12": {
+      "id": "e12",
+      "floor_path": "res://assets/z1/event_rooms/e12/floor.png",
+      "floor_rect": [
+        0.285,
+        0.3500153374233129,
+        0.59,
+        0.3999693251533742
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e12/wall.png",
+      "wall_rect": [
+        0.6590338164251207,
+        0.11499999999999999,
+        0.14193236714975846,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e12/station.png",
+      "station_anchor": [
+        0.67,
+        0.44
+      ],
+      "station_size": [
+        0.27,
+        0.15743661971830986
+      ],
+      "station_pivot": [
+        0.4971830985915493,
+        0.9903381642512077
+      ],
+      "body_rect": [
+        0.5579500000000001,
+        0.38962028169014085,
+        0.2241,
+        0.050379718309859156
+      ],
+      "interaction_pos": [
+        0.67,
+        0.512
+      ],
+      "loot_anchor": [
+        0.67,
+        0.588
+      ]
+    },
+    "z1_event_e13": {
+      "id": "e13",
+      "floor_path": "res://assets/z1/event_rooms/e13/floor.png",
+      "floor_rect": [
+        0.22999999999999998,
+        0.3480185758513932,
+        0.56,
+        0.4039628482972137
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e13/wall.png",
+      "wall_rect": [
+        0.17471938775510204,
+        0.125,
+        0.15056122448979592,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e13/station.png",
+      "station_anchor": [
+        0.51,
+        0.45
+      ],
+      "station_size": [
+        0.25,
+        0.20373134328358208
+      ],
+      "station_pivot": [
+        0.40746268656716417,
+        0.9926739926739927
+      ],
+      "body_rect": [
+        0.40625,
+        0.394,
+        0.2075,
+        0.056
+      ],
+      "interaction_pos": [
+        0.51,
+        0.522
+      ],
+      "loot_anchor": [
+        0.51,
+        0.598
+      ]
+    },
+    "z1_event_e14": {
+      "id": "e14",
+      "floor_path": "res://assets/z1/event_rooms/e14/floor.png",
+      "floor_rect": [
+        0.125,
+        0.39918960244648316,
+        0.55,
+        0.36162079510703365
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e14/wall.png",
+      "wall_rect": [
+        0.6061379310344828,
+        0.11499999999999999,
+        0.2277241379310345,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e14/station.png",
+      "station_anchor": [
+        0.35,
+        0.52
+      ],
+      "station_size": [
+        0.22,
+        0.22540983606557377
+      ],
+      "station_pivot": [
+        0.45286885245901637,
+        0.992
+      ],
+      "body_rect": [
+        0.2587,
+        0.464,
+        0.18259999999999998,
+        0.056
+      ],
+      "interaction_pos": [
+        0.35,
+        0.592
+      ],
+      "loot_anchor": [
+        0.35,
+        0.668
+      ]
+    },
+    "z1_event_e15": {
+      "id": "e15",
+      "floor_path": "res://assets/z1/event_rooms/e15/floor.png",
+      "floor_rect": [
+        0.28,
+        0.3493617021276596,
+        0.56,
+        0.38127659574468087
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e15/wall.png",
+      "wall_rect": [
+        0.6425,
+        0.125,
+        0.195,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e15/station.png",
+      "station_anchor": [
+        0.64,
+        0.46
+      ],
+      "station_size": [
+        0.26,
+        0.19766081871345031
+      ],
+      "station_pivot": [
+        0.5,
+        0.9923076923076923
+      ],
+      "body_rect": [
+        0.5321,
+        0.404,
+        0.2158,
+        0.056
+      ],
+      "interaction_pos": [
+        0.64,
+        0.532
+      ],
+      "loot_anchor": [
+        0.64,
+        0.608
+      ]
+    },
+    "z1_event_e16": {
+      "id": "e16",
+      "floor_path": "res://assets/z1/event_rooms/e16/floor.png",
+      "floor_rect": [
+        0.285,
+        0.286468023255814,
+        0.59,
+        0.42706395348837206
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e16/wall.png",
+      "wall_rect": [
+        0.6726530612244898,
+        0.12,
+        0.1346938775510204,
+        0.12
+      ],
+      "station_path": "res://assets/z1/event_rooms/e16/station.png",
+      "station_anchor": [
+        0.73,
+        0.36
+      ],
+      "station_size": [
+        0.21,
+        0.1415360501567398
+      ],
+      "station_pivot": [
+        0.5015673981191222,
+        0.9906976744186047
+      ],
+      "body_rect": [
+        0.64285,
+        0.31470846394984325,
+        0.17429999999999998,
+        0.04529153605015674
+      ],
+      "interaction_pos": [
+        0.73,
+        0.432
+      ],
+      "loot_anchor": [
+        0.73,
+        0.508
+      ]
+    },
+    "z1_event_e17": {
+      "id": "e17",
+      "floor_path": "res://assets/z1/event_rooms/e17/floor.png",
+      "floor_rect": [
+        0.16499999999999998,
+        0.3447398843930636,
+        0.53,
+        0.4105202312138729
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e17/wall.png",
+      "wall_rect": [
+        0.16000000000000003,
+        0.1354251012145749,
+        0.22,
+        0.1291497975708502
+      ],
+      "station_path": "res://assets/z1/event_rooms/e17/station.png",
+      "station_anchor": [
+        0.32,
+        0.43
+      ],
+      "station_size": [
+        0.1494809688581315,
+        0.24
+      ],
+      "station_pivot": [
+        0.49722222222222223,
+        0.9930795847750865
+      ],
+      "body_rect": [
+        0.2579653979238754,
+        0.374,
+        0.12406920415224915,
+        0.056
+      ],
+      "interaction_pos": [
+        0.32,
+        0.502
+      ],
+      "loot_anchor": [
+        0.32,
+        0.578
+      ]
+    },
+    "z1_event_e18": {
+      "id": "e18",
+      "floor_path": "res://assets/z1/event_rooms/e18/floor.png",
+      "floor_rect": [
+        0.26500000000000007,
+        0.33386235955056187,
+        0.57,
+        0.39227528089887637
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e18/wall.png",
+      "wall_rect": [
+        0.656875,
+        0.125,
+        0.14625,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e18/station.png",
+      "station_anchor": [
+        0.58,
+        0.43
+      ],
+      "station_size": [
+        0.26530909090909094,
+        0.24
+      ],
+      "station_pivot": [
+        0.5,
+        0.9927272727272727
+      ],
+      "body_rect": [
+        0.46989672727272724,
+        0.374,
+        0.22020654545454546,
+        0.056
+      ],
+      "interaction_pos": [
+        0.58,
+        0.502
+      ],
+      "loot_anchor": [
+        0.58,
+        0.578
+      ]
+    },
+    "z1_event_e19": {
+      "id": "e19",
+      "floor_path": "res://assets/z1/event_rooms/e19/floor.png",
+      "floor_rect": [
+        0.16000000000000003,
+        0.3477714285714286,
+        0.58,
+        0.38445714285714283
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e19/wall.png",
+      "wall_rect": [
+        0.1865675675675676,
+        0.125,
+        0.14686486486486486,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e19/station.png",
+      "station_anchor": [
+        0.36,
+        0.46
+      ],
+      "station_size": [
+        0.25,
+        0.15153631284916202
+      ],
+      "station_pivot": [
+        0.5,
+        0.9907834101382489
+      ],
+      "body_rect": [
+        0.25625,
+        0.41150837988826816,
+        0.2075,
+        0.04849162011173185
+      ],
+      "interaction_pos": [
+        0.36,
+        0.532
+      ],
+      "loot_anchor": [
+        0.36,
+        0.608
+      ]
+    },
+    "z1_event_e20": {
+      "id": "e20",
+      "floor_path": "res://assets/z1/event_rooms/e20/floor.png",
+      "floor_rect": [
+        0.25500000000000006,
+        0.3542672413793104,
+        0.57,
+        0.3914655172413793
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e20/wall.png",
+      "wall_rect": [
+        0.6791743119266055,
+        0.11499999999999999,
+        0.12165137614678899,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e20/station.png",
+      "station_anchor": [
+        0.65,
+        0.46
+      ],
+      "station_size": [
+        0.24,
+        0.21769230769230768
+      ],
+      "station_pivot": [
+        0.5,
+        0.9929328621908127
+      ],
+      "body_rect": [
+        0.5504,
+        0.404,
+        0.1992,
+        0.056
+      ],
+      "interaction_pos": [
+        0.65,
+        0.532
+      ],
+      "loot_anchor": [
+        0.65,
+        0.608
+      ]
+    },
+    "z1_event_e21": {
+      "id": "e21",
+      "floor_path": "res://assets/z1/event_rooms/e21/floor.png",
+      "floor_rect": [
+        0.20426934097421207,
+        0.275,
+        0.5114613180515759,
+        0.51
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e21/wall.png",
+      "wall_rect": [
+        0.1490702479338843,
+        0.11499999999999999,
+        0.2218595041322314,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e21/station.png",
+      "station_anchor": [
+        0.31,
+        0.43
+      ],
+      "station_size": [
+        0.26412903225806456,
+        0.23
+      ],
+      "station_pivot": [
+        0.5,
+        0.9935483870967742
+      ],
+      "body_rect": [
+        0.2003864516129032,
+        0.374,
+        0.21922709677419358,
+        0.056
+      ],
+      "interaction_pos": [
+        0.31,
+        0.502
+      ],
+      "loot_anchor": [
+        0.31,
+        0.578
+      ]
+    },
+    "z1_event_e22": {
+      "id": "e22",
+      "floor_path": "res://assets/z1/event_rooms/e22/floor.png",
+      "floor_rect": [
+        0.22000000000000003,
+        0.4233536585365854,
+        0.62,
+        0.25329268292682927
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e22/wall.png",
+      "wall_rect": [
+        0.6133744855967078,
+        0.11499999999999999,
+        0.23325102880658435,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e22/station.png",
+      "station_anchor": [
+        0.69,
+        0.43
+      ],
+      "station_size": [
+        0.25,
+        0.23756906077348067
+      ],
+      "station_pivot": [
+        0.5,
+        0.9941860465116279
+      ],
+      "body_rect": [
+        0.5862499999999999,
+        0.374,
+        0.2075,
+        0.056
+      ],
+      "interaction_pos": [
+        0.69,
+        0.502
+      ],
+      "loot_anchor": [
+        0.69,
+        0.578
+      ]
+    },
+    "z1_event_e23": {
+      "id": "e23",
+      "floor_path": "res://assets/z1/event_rooms/e23/floor.png",
+      "floor_rect": [
+        0.13,
+        0.43524312896405914,
+        0.6,
+        0.3095137420718816
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e23/wall.png",
+      "wall_rect": [
+        0.13598425196850394,
+        0.12,
+        0.24803149606299213,
+        0.14
+      ],
+      "station_path": "res://assets/z1/event_rooms/e23/station.png",
+      "station_anchor": [
+        0.4,
+        0.53
+      ],
+      "station_size": [
+        0.30434343434343436,
+        0.23
+      ],
+      "station_pivot": [
+        0.5,
+        0.9932659932659933
+      ],
+      "body_rect": [
+        0.27369747474747474,
+        0.47400000000000003,
+        0.2526050505050505,
+        0.056
+      ],
+      "interaction_pos": [
+        0.4,
+        0.602
+      ],
+      "loot_anchor": [
+        0.4,
+        0.678
+      ]
+    },
+    "z1_event_e24": {
+      "id": "e24",
+      "floor_path": "res://assets/z1/event_rooms/e24/floor.png",
+      "floor_rect": [
+        0.24000000000000005,
+        0.32209476309226936,
+        0.6,
+        0.4758104738154613
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e24/wall.png",
+      "wall_rect": [
+        0.629936974789916,
+        0.11499999999999999,
+        0.22012605042016806,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/e24/station.png",
+      "station_anchor": [
+        0.29,
+        0.39
+      ],
+      "station_size": [
+        0.25,
+        0.20194647201946472
+      ],
+      "station_pivot": [
+        0.5,
+        0.9939759036144579
+      ],
+      "body_rect": [
+        0.18624999999999997,
+        0.334,
+        0.2075,
+        0.056
+      ],
+      "interaction_pos": [
+        0.29,
+        0.462
+      ],
+      "loot_anchor": [
+        0.29,
+        0.538
+      ],
+      "station_open_path": "res://assets/z1/event_rooms/e24/station_open.png",
+      "station_open_size": [
+        0.25,
+        0.20194647201946472
+      ],
+      "station_open_pivot": [
+        0.5,
+        0.9939759036144579
+      ]
+    },
+    "z1_event_e25": {
+      "id": "e25",
+      "floor_path": "res://assets/z1/event_rooms/e25/floor.png",
+      "floor_rect": [
+        0.26499999999999996,
+        0.3567611336032389,
+        0.63,
+        0.32647773279352227
+      ],
+      "wall_path": "res://assets/z1/event_rooms/e25/wall.png",
+      "wall_rect": [
+        0.605,
+        0.12970264317180616,
+        0.25,
+        0.12059471365638767
+      ],
+      "station_path": "res://assets/z1/event_rooms/e25/station.png",
+      "station_anchor": [
+        0.67,
+        0.4
+      ],
+      "station_size": [
+        0.32,
+        0.1706666666666667
+      ],
+      "station_pivot": [
+        0.5,
+        0.9907407407407407
+      ],
+      "body_rect": [
+        0.5372,
+        0.3453866666666667,
+        0.2656,
+        0.05461333333333334
+      ],
+      "interaction_pos": [
+        0.67,
+        0.47200000000000003
+      ],
+      "loot_anchor": [
+        0.67,
+        0.548
+      ]
+    },
+    "trader": {
+      "id": "trader",
+      "floor_path": "res://assets/z1/event_rooms/trader/floor.png",
+      "floor_rect": [
+        0.19,
+        0.3667755102040816,
+        0.62,
+        0.3264489795918368
+      ],
+      "wall_path": "res://assets/z1/event_rooms/trader/wall.png",
+      "wall_rect": [
+        0.13828125,
+        0.125,
+        0.2234375,
+        0.13
+      ],
+      "station_path": "res://assets/z1/event_rooms/trader/station.png",
+      "station_anchor": [
+        0.5,
+        0.49
+      ],
+      "station_size": [
+        0.2945664739884393,
+        0.26
+      ],
+      "station_pivot": [
+        0.5,
+        0.9942196531791907
+      ],
+      "body_rect": [
+        0.3777549132947977,
+        0.434,
+        0.24449017341040463,
+        0.056
+      ],
+      "interaction_pos": [
+        0.5,
+        0.5619999999999999
+      ],
+      "loot_anchor": [
+        0.5,
+        0.638
+      ]
+    },
+    "dice": {
+      "id": "dice",
+      "floor_path": "res://assets/z1/event_rooms/dice/floor.png",
+      "floor_rect": [
+        0.20072755417956656,
+        0.28500000000000003,
+        0.5385448916408668,
+        0.49
+      ],
+      "wall_path": "res://assets/z1/event_rooms/dice/wall.png",
+      "wall_rect": [
+        0.61,
+        0.144218009478673,
+        0.23999999999999996,
+        0.09156398104265402
+      ],
+      "station_path": "res://assets/z1/event_rooms/dice/station.png",
+      "station_anchor": [
+        0.46,
+        0.5
+      ],
+      "station_size": [
+        0.25,
+        0.21696696696696696
+      ],
+      "station_pivot": [
+        0.5,
+        0.9930795847750865
+      ],
+      "body_rect": [
+        0.35625,
+        0.444,
+        0.2075,
+        0.056
+      ],
+      "interaction_pos": [
+        0.46,
+        0.572
+      ],
+      "loot_anchor": [
+        0.46,
+        0.648
+      ]
+    },
+    "altar": {
+      "id": "altar",
+      "floor_path": "res://assets/z1/event_rooms/altar/floor.png",
+      "floor_rect": [
+        0.26118155619596545,
+        0.275,
+        0.5376368876080692,
+        0.53
+      ],
+      "wall_path": "res://assets/z1/event_rooms/altar/wall.png",
+      "wall_rect": [
+        0.628,
+        0.12,
+        0.224,
+        0.14
+      ],
+      "station_path": "res://assets/z1/event_rooms/altar/station.png",
+      "station_anchor": [
+        0.56,
+        0.48
+      ],
+      "station_size": [
+        0.28,
+        0.22067183462532303
+      ],
+      "station_pivot": [
+        0.5,
+        0.9934426229508196
+      ],
+      "body_rect": [
+        0.44380000000000003,
+        0.424,
+        0.23240000000000002,
+        0.056
+      ],
+      "interaction_pos": [
+        0.56,
+        0.5519999999999999
+      ],
+      "loot_anchor": [
+        0.56,
+        0.628
+      ]
+    },
+    "trap": {
+      "id": "trap",
+      "floor_path": "res://assets/z1/event_rooms/trap/floor.png",
+      "floor_rect": [
+        0.195,
+        0.42678853754940715,
+        0.57,
+        0.22642292490118573
+      ],
+      "wall_path": "res://assets/z1/event_rooms/trap/wall.png",
+      "wall_rect": [
+        0.14,
+        0.11816593886462881,
+        0.24,
+        0.12366812227074235
+      ],
+      "station_path": "res://assets/z1/event_rooms/trap/station.png",
+      "station_anchor": [
+        0.45,
+        0.44
+      ],
+      "station_size": [
+        0.29,
+        0.2307142857142857
+      ],
+      "station_pivot": [
+        0.5,
+        0.9938080495356038
+      ],
+      "body_rect": [
+        0.32965,
+        0.384,
+        0.24069999999999997,
+        0.056
+      ],
+      "interaction_pos": [
+        0.45,
+        0.512
+      ],
+      "loot_anchor": [
+        0.45,
+        0.588
+      ]
+    }
+  },
+  "assets": [
+    {
+      "design_id": "shell",
+      "asset_id": "z1.room.shell",
+      "visual_key": "z1.room.shell",
+      "kind": "event_room",
+      "state": "shell",
+      "path": "res://assets/z1/event_rooms/shell.png",
+      "source": "Godot/GraytailGodot/assets/z1/event_rooms/shell.png",
+      "width": 1254,
+      "height": 1254,
+      "sha256": "d7901b07ed0729dc1f835b23084f41ad5e0fafce1e850953a4745ee49cec6e86"
+    },
+    {
+      "design_id": "e01",
+      "asset_id": "z1.room.e01.floor",
+      "visual_key": "z1.room.e01.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e01/floor.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_floor_source.png",
+      "width": 284,
+      "height": 236,
+      "sha256": "8d7da885d2057083335f5f9c1f9165a8f985d6347a71675f39749547f1c90fde"
+    },
+    {
+      "design_id": "e01",
+      "asset_id": "z1.room.e01.wall",
+      "visual_key": "z1.room.e01.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e01/wall.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_wall_source.png",
+      "width": 196,
+      "height": 108,
+      "sha256": "cb301e3e4ac8bd520ba950d54d561bd23ad11269fb12b62e82db1311a8bb2a79"
+    },
+    {
+      "design_id": "e01",
+      "asset_id": "z1.room.e01.station",
+      "visual_key": "z1.room.e01.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e01/station.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_station_source.png",
+      "width": 198,
+      "height": 244,
+      "sha256": "10d2859b13e021dbdc42c2d42383112dde11954e14630916a9c224a0db0b2c58"
+    },
+    {
+      "design_id": "e02",
+      "asset_id": "z1.room.e02.floor",
+      "visual_key": "z1.room.e02.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e02/floor.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_floor_source.png",
+      "width": 255,
+      "height": 244,
+      "sha256": "e78fe6ecb0a6aba97a69a4ddbfd0f92cbc549c9acec6f3c546c656a82cb37adc"
+    },
+    {
+      "design_id": "e02",
+      "asset_id": "z1.room.e02.wall",
+      "visual_key": "z1.room.e02.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e02/wall.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_wall_source.png",
+      "width": 196,
+      "height": 121,
+      "sha256": "c1a2361bf2f757839da8aa6aad11842874da0c3f751392e6baf9a3760393b840"
+    },
+    {
+      "design_id": "e02",
+      "asset_id": "z1.room.e02.station",
+      "visual_key": "z1.room.e02.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e02/station.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_station_source.png",
+      "width": 244,
+      "height": 194,
+      "sha256": "cb1f5a4a8478dda2a717f95bc711599a0d0cd2446fecd5a3eb7ba2ad9ee39c2c"
+    },
+    {
+      "design_id": "e03",
+      "asset_id": "z1.room.e03.floor",
+      "visual_key": "z1.room.e03.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e03/floor.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_floor_source.png",
+      "width": 284,
+      "height": 214,
+      "sha256": "0bff0a074fdb16d881e849b42ab20baa4c1b4f9432680671841fa8b9e987899c"
+    },
+    {
+      "design_id": "e03",
+      "asset_id": "z1.room.e03.wall",
+      "visual_key": "z1.room.e03.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e03/wall.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_wall_source.png",
+      "width": 196,
+      "height": 94,
+      "sha256": "7f2fa6186b119b9c88d5b92f3515fd8d0500d302ff61d49986ce7642cbf5eeca"
+    },
+    {
+      "design_id": "e03",
+      "asset_id": "z1.room.e03.station",
+      "visual_key": "z1.room.e03.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e03/station.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_station_source.png",
+      "width": 244,
+      "height": 241,
+      "sha256": "5f490acf956b369e49440315bfb61b2faa811a73664f5af9990307dc30479f1e"
+    },
+    {
+      "design_id": "e04",
+      "asset_id": "z1.room.e04.floor",
+      "visual_key": "z1.room.e04.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e04/floor.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_floor_source.png",
+      "width": 284,
+      "height": 227,
+      "sha256": "d440b8d8e9c0af9c7b164b4561b5f09f3dca5df9fbd123af0795cb2c04794dea"
+    },
+    {
+      "design_id": "e04",
+      "asset_id": "z1.room.e04.wall",
+      "visual_key": "z1.room.e04.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e04/wall.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_wall_source.png",
+      "width": 196,
+      "height": 123,
+      "sha256": "2de8991f0be5f7b9a03c0686481e51a026dd3fc83981f2f24292dda1a9a314d4"
+    },
+    {
+      "design_id": "e04",
+      "asset_id": "z1.room.e04.station",
+      "visual_key": "z1.room.e04.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e04/station.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_station_source.png",
+      "width": 244,
+      "height": 228,
+      "sha256": "0fe3d99b2f5b4a97f1182e0a4f22b10793b7ccd1b331c8fbe6ac1a376afa7269"
+    },
+    {
+      "design_id": "e05",
+      "asset_id": "z1.room.e05.floor",
+      "visual_key": "z1.room.e05.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e05/floor.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_floor_source.png",
+      "width": 284,
+      "height": 198,
+      "sha256": "0691d216f0032d0e49d720e1ac8be92def2087fc9972faa7a443da8048a6f334"
+    },
+    {
+      "design_id": "e05",
+      "asset_id": "z1.room.e05.wall",
+      "visual_key": "z1.room.e05.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e05/wall.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_wall_source.png",
+      "width": 196,
+      "height": 106,
+      "sha256": "22165c73b078f0d0d121155dba648cbaf9cd0eb11bee0fc78b15423a0daa1894"
+    },
+    {
+      "design_id": "e05",
+      "asset_id": "z1.room.e05.station",
+      "visual_key": "z1.room.e05.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e05/station.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e01-e05_station_source.png",
+      "width": 181,
+      "height": 244,
+      "sha256": "29bf7d568be8fd27acf5df9a69ca3f237c1e10b50a304f24c6edee12a3e04069"
+    },
+    {
+      "design_id": "e06",
+      "asset_id": "z1.room.e06.floor",
+      "visual_key": "z1.room.e06.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e06/floor.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_floor_source.png",
+      "width": 258,
+      "height": 244,
+      "sha256": "8ec20a7e6544bd9b8641738a479f2503b16f3568353bb0565816e7ed6939aed7"
+    },
+    {
+      "design_id": "e06",
+      "asset_id": "z1.room.e06.wall",
+      "visual_key": "z1.room.e06.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e06/wall.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_wall_source.png",
+      "width": 196,
+      "height": 132,
+      "sha256": "c891167c31d39d00bc99938c13c8e0fa04432f57c0226ac144e905996d2e597f"
+    },
+    {
+      "design_id": "e06",
+      "asset_id": "z1.room.e06.station",
+      "visual_key": "z1.room.e06.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e06/station.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06_breaker_states_source.png",
+      "width": 157,
+      "height": 244,
+      "sha256": "48d4bd0f320d4d1d3e021eb1b06bd0a4dcc2dd7160267cfeb25c85885096c23e"
+    },
+    {
+      "design_id": "e06",
+      "asset_id": "z1.room.e06.station_open",
+      "visual_key": "z1.room.e06.station_open",
+      "kind": "event_room",
+      "state": "station_open",
+      "path": "res://assets/z1/event_rooms/e06/station_open.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06_breaker_states_source.png",
+      "width": 214,
+      "height": 244,
+      "sha256": "9d5c0c6e237dbc56e943414fc424650dac360c93b497a3c6ee74577042111230"
+    },
+    {
+      "design_id": "e07",
+      "asset_id": "z1.room.e07.floor",
+      "visual_key": "z1.room.e07.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e07/floor.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_floor_source.png",
+      "width": 243,
+      "height": 244,
+      "sha256": "9dddf0bc5eef58083c4dc4fefbbdbf15680119b51ab28269f36f07977ea39b04"
+    },
+    {
+      "design_id": "e07",
+      "asset_id": "z1.room.e07.wall",
+      "visual_key": "z1.room.e07.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e07/wall.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_wall_source.png",
+      "width": 196,
+      "height": 120,
+      "sha256": "8c9dcfd96c071dd88effccd72382abd5a78a1a815fc6a6aff1285487a0ab15ff"
+    },
+    {
+      "design_id": "e07",
+      "asset_id": "z1.room.e07.station",
+      "visual_key": "z1.room.e07.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e07/station.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_station_source.png",
+      "width": 218,
+      "height": 244,
+      "sha256": "0f8e3366ba7134362447fdc0b8ad0fc2ee077019792ba8cb24abb6fb96233d5f"
+    },
+    {
+      "design_id": "e08",
+      "asset_id": "z1.room.e08.floor",
+      "visual_key": "z1.room.e08.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e08/floor.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_floor_source.png",
+      "width": 284,
+      "height": 222,
+      "sha256": "75c3bc41f649a3e5fedcae897e4ca9d0f76ae6c3ed152b05c3d890f4481bdc90"
+    },
+    {
+      "design_id": "e08",
+      "asset_id": "z1.room.e08.wall",
+      "visual_key": "z1.room.e08.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e08/wall.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_wall_source.png",
+      "width": 196,
+      "height": 130,
+      "sha256": "d8a30fc9d085b75a2c370b0ed3570d37f82ca85aaa59793dc541d93d26c66659"
+    },
+    {
+      "design_id": "e08",
+      "asset_id": "z1.room.e08.station",
+      "visual_key": "z1.room.e08.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e08/station.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_station_source.png",
+      "width": 244,
+      "height": 196,
+      "sha256": "e61cfc08f5601b2ee529e4b9803ae55fca89a8f2ad4a1fe64f2bfb48bfba3e29"
+    },
+    {
+      "design_id": "e09",
+      "asset_id": "z1.room.e09.floor",
+      "visual_key": "z1.room.e09.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e09/floor.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_floor_source.png",
+      "width": 284,
+      "height": 165,
+      "sha256": "bd2033c94f5269c79aefb651133b4c111aa988d63cc6aa3d880ab7e7c0c9c082"
+    },
+    {
+      "design_id": "e09",
+      "asset_id": "z1.room.e09.wall",
+      "visual_key": "z1.room.e09.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e09/wall.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_wall_source.png",
+      "width": 167,
+      "height": 148,
+      "sha256": "92212a47080d135350cf930a7c7928b3c43e888334d986ab273a4d2d7c58e0bf"
+    },
+    {
+      "design_id": "e09",
+      "asset_id": "z1.room.e09.station",
+      "visual_key": "z1.room.e09.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e09/station.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_station_source.png",
+      "width": 244,
+      "height": 199,
+      "sha256": "ed19cf479216fa8046a435945e90b462267ba33b53200ea65bb3ba35beaaeda8"
+    },
+    {
+      "design_id": "e10",
+      "asset_id": "z1.room.e10.floor",
+      "visual_key": "z1.room.e10.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e10/floor.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_floor_source.png",
+      "width": 284,
+      "height": 227,
+      "sha256": "161c289c5a284df4ec58ca3a731057ea831acca7135aba7c5f35b727ee0238f6"
+    },
+    {
+      "design_id": "e10",
+      "asset_id": "z1.room.e10.wall",
+      "visual_key": "z1.room.e10.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e10/wall.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_wall_source.png",
+      "width": 196,
+      "height": 127,
+      "sha256": "6d92c3a97097143c79f1a60a73d9006323df9c537fc736a880e4d9ef19020ee9"
+    },
+    {
+      "design_id": "e10",
+      "asset_id": "z1.room.e10.station",
+      "visual_key": "z1.room.e10.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e10/station.png",
+      "source": "sources/art/Z1/rooms/e01-e10/e06-e10_station_source.png",
+      "width": 236,
+      "height": 244,
+      "sha256": "3fa7e8f652e5e3a22d87a573093b9ef2522783d33983cb1e752bc465316b35ef"
+    },
+    {
+      "design_id": "e11",
+      "asset_id": "z1.room.e11.floor",
+      "visual_key": "z1.room.e11.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e11/floor.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 316,
+      "height": 223,
+      "sha256": "4f7556d723c09f25b19a7722e604e19dfd5c44c2bc2b5f2baf73b916f5638d36"
+    },
+    {
+      "design_id": "e11",
+      "asset_id": "z1.room.e11.wall",
+      "visual_key": "z1.room.e11.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e11/wall.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 234,
+      "height": 214,
+      "sha256": "85e82b3db312420f0ef55755f62839f2737db2b13618218e160e74163e8f16d2"
+    },
+    {
+      "design_id": "e11",
+      "asset_id": "z1.room.e11.station",
+      "visual_key": "z1.room.e11.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e11/station.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 353,
+      "height": 227,
+      "sha256": "54678c250da1bcf2622b70d200ae4be207c8cf2da692a3e3cce22b4856eaf7cf"
+    },
+    {
+      "design_id": "e12",
+      "asset_id": "z1.room.e12.floor",
+      "visual_key": "z1.room.e12.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e12/floor.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 326,
+      "height": 221,
+      "sha256": "e6935fe6a7f746cba548ebbe89f11a66ac07a27ab8385946e65f2673026bd35f"
+    },
+    {
+      "design_id": "e12",
+      "asset_id": "z1.room.e12.wall",
+      "visual_key": "z1.room.e12.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e12/wall.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 226,
+      "height": 207,
+      "sha256": "8828f47e21df9bfce714b9ca7cf2f9a6a1eed7badc903e29583b5ed73e340e09"
+    },
+    {
+      "design_id": "e12",
+      "asset_id": "z1.room.e12.station",
+      "visual_key": "z1.room.e12.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e12/station.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 355,
+      "height": 207,
+      "sha256": "d260bddd0c2e5c897e7dda6180e0d3edf503e058ec22a7ac1dd46bdb73931423"
+    },
+    {
+      "design_id": "e13",
+      "asset_id": "z1.room.e13.floor",
+      "visual_key": "z1.room.e13.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e13/floor.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 323,
+      "height": 233,
+      "sha256": "713a7033021ad1a73c3cf55e360ab94095edfb896363aafbb4b33d6ff04292c2"
+    },
+    {
+      "design_id": "e13",
+      "asset_id": "z1.room.e13.wall",
+      "visual_key": "z1.room.e13.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e13/wall.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 227,
+      "height": 196,
+      "sha256": "daec7276b2fd8a5323afb01c5920d414f24df7c59abbb1ed4fb29f7c55efda10"
+    },
+    {
+      "design_id": "e13",
+      "asset_id": "z1.room.e13.station",
+      "visual_key": "z1.room.e13.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e13/station.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 335,
+      "height": 273,
+      "sha256": "3164310b15025e21518b23bd1fa4f22503696b507ec74d8048d4395780b2e1ca"
+    },
+    {
+      "design_id": "e14",
+      "asset_id": "z1.room.e14.floor",
+      "visual_key": "z1.room.e14.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e14/floor.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 327,
+      "height": 215,
+      "sha256": "a73339d49148fb636fc99873831614b0ef830dc9520b0693cab24daaa53b2843"
+    },
+    {
+      "design_id": "e14",
+      "asset_id": "z1.room.e14.wall",
+      "visual_key": "z1.room.e14.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e14/wall.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 254,
+      "height": 145,
+      "sha256": "f3504c2ff0c560f7d600c084fe89ee83c89f69ca59eaf8b36099a078dedc005f"
+    },
+    {
+      "design_id": "e14",
+      "asset_id": "z1.room.e14.station",
+      "visual_key": "z1.room.e14.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e14/station.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 244,
+      "height": 250,
+      "sha256": "50fb580295238fbd48385d710e3671afa17fe4b36367ffa12494ab2112e941a4"
+    },
+    {
+      "design_id": "e15",
+      "asset_id": "z1.room.e15.floor",
+      "visual_key": "z1.room.e15.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e15/floor.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 329,
+      "height": 224,
+      "sha256": "5ed4874b9c87d7affde3c7e71cc733d4ec6058c2708c34121432b329bf1a20f5"
+    },
+    {
+      "design_id": "e15",
+      "asset_id": "z1.room.e15.wall",
+      "visual_key": "z1.room.e15.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e15/wall.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 246,
+      "height": 164,
+      "sha256": "ab1d061601947842aa6695865e8036397e0c0f3b59b32ddefeb881fe0eb030c5"
+    },
+    {
+      "design_id": "e15",
+      "asset_id": "z1.room.e15.station",
+      "visual_key": "z1.room.e15.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e15/station.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e11-e15-atlas.png",
+      "width": 342,
+      "height": 260,
+      "sha256": "e4f8b24a20ee7b63fc21c4560c38fe7e81e9b55c1f004445e799157131013dd9"
+    },
+    {
+      "design_id": "e16",
+      "asset_id": "z1.room.e16.floor",
+      "visual_key": "z1.room.e16.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e16/floor.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 344,
+      "height": 249,
+      "sha256": "9725c843c05f02151c5a7e8ef18de89ecf505ecc8b17f609421d7b392645c32d"
+    },
+    {
+      "design_id": "e16",
+      "asset_id": "z1.room.e16.wall",
+      "visual_key": "z1.room.e16.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e16/wall.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 220,
+      "height": 196,
+      "sha256": "2c7f44982e39dac7a4f81c1bc745d80feadb551878056343ad3209cc24480820"
+    },
+    {
+      "design_id": "e16",
+      "asset_id": "z1.room.e16.station",
+      "visual_key": "z1.room.e16.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e16/station.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 319,
+      "height": 215,
+      "sha256": "f1066bef96ae8b076138c2b824de30e05bf95079979c3dcccddea01e3ea25a5a"
+    },
+    {
+      "design_id": "e17",
+      "asset_id": "z1.room.e17.floor",
+      "visual_key": "z1.room.e17.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e17/floor.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 346,
+      "height": 268,
+      "sha256": "5aeb77d5d2598b4273436b97983dd1d0d662f29fe24ec67a704619dddc6f8fc5"
+    },
+    {
+      "design_id": "e17",
+      "asset_id": "z1.room.e17.wall",
+      "visual_key": "z1.room.e17.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e17/wall.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 247,
+      "height": 145,
+      "sha256": "efed7fa4c9bb901deeff9c5f5374df6df48373d552c8354ea7812e9fccae1c68"
+    },
+    {
+      "design_id": "e17",
+      "asset_id": "z1.room.e17.station",
+      "visual_key": "z1.room.e17.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e17/station.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 180,
+      "height": 289,
+      "sha256": "429b8738697c6dfa5d6e2503989e5aba0fcc5091a95d633bd20e90dabd4ef401"
+    },
+    {
+      "design_id": "e18",
+      "asset_id": "z1.room.e18.floor",
+      "visual_key": "z1.room.e18.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e18/floor.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 356,
+      "height": 245,
+      "sha256": "99fabdc377d21ea8045b6742f5391b5d73dac747e867c23b79de9c11a40fede1"
+    },
+    {
+      "design_id": "e18",
+      "asset_id": "z1.room.e18.wall",
+      "visual_key": "z1.room.e18.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e18/wall.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 207,
+      "height": 184,
+      "sha256": "17425971473ec09c66eb598a9b515a266f36a46b6289cbb1177a51d715f761a1"
+    },
+    {
+      "design_id": "e18",
+      "asset_id": "z1.room.e18.station",
+      "visual_key": "z1.room.e18.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e18/station.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 304,
+      "height": 275,
+      "sha256": "ac42d6529a65516e49f30a3df146c790d6608dffe9043708ae5e49d998ca4762"
+    },
+    {
+      "design_id": "e19",
+      "asset_id": "z1.room.e19.floor",
+      "visual_key": "z1.room.e19.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e19/floor.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 350,
+      "height": 232,
+      "sha256": "a4b19a6973ea7ab3ad9ee5c5597adb99838fd9c3d18fec6d3e774630a46898e6"
+    },
+    {
+      "design_id": "e19",
+      "asset_id": "z1.room.e19.wall",
+      "visual_key": "z1.room.e19.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e19/wall.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 209,
+      "height": 185,
+      "sha256": "dd4e419efa36ae03ac63e8f49a45730190a8becc61065868eafaa911cc7f49d3"
+    },
+    {
+      "design_id": "e19",
+      "asset_id": "z1.room.e19.station",
+      "visual_key": "z1.room.e19.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e19/station.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 358,
+      "height": 217,
+      "sha256": "6e43ec969dd755482bf19fa8a8c7d9f802b4d7ef204b3b637be6c51e3718fb03"
+    },
+    {
+      "design_id": "e20",
+      "asset_id": "z1.room.e20.floor",
+      "visual_key": "z1.room.e20.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e20/floor.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 348,
+      "height": 239,
+      "sha256": "6f24f1349a2957aeebc4cbdd01ec82b6171a60af20d51312417f653d2f6f05e8"
+    },
+    {
+      "design_id": "e20",
+      "asset_id": "z1.room.e20.wall",
+      "visual_key": "z1.room.e20.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e20/wall.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 204,
+      "height": 218,
+      "sha256": "54508ada3c1d3cfca7dec57c787ce8c2e58204ad5fef4c9a573e33ac60f729a4"
+    },
+    {
+      "design_id": "e20",
+      "asset_id": "z1.room.e20.station",
+      "visual_key": "z1.room.e20.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e20/station.png",
+      "source": "sources/art/Z1/rooms/e11-e20/e16-e20-atlas.png",
+      "width": 312,
+      "height": 283,
+      "sha256": "25321c1e22e96da4602a9341f6f7bc896f10d622c4deb5734d8f724debaf3227"
+    },
+    {
+      "design_id": "e21",
+      "asset_id": "z1.room.e21.floor",
+      "visual_key": "z1.room.e21.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e21/floor.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/floors-source.png",
+      "width": 350,
+      "height": 349,
+      "sha256": "68a3ad97a8f4be48564b70a987291d2f19a1fff28b75db6bfaa305b6dc3fdd8c"
+    },
+    {
+      "design_id": "e21",
+      "asset_id": "z1.room.e21.wall",
+      "visual_key": "z1.room.e21.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e21/wall.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/walls-source.png",
+      "width": 413,
+      "height": 242,
+      "sha256": "6f3eb4c4618b3519534752c2bf458ce5d49e15da3112d41d9dc7244e48d9e5c3"
+    },
+    {
+      "design_id": "e21",
+      "asset_id": "z1.room.e21.station",
+      "visual_key": "z1.room.e21.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e21/station.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/stations-source.png",
+      "width": 356,
+      "height": 310,
+      "sha256": "28f8bde61cd644f91da9526b5bd86f5459da2d7dc5bffe490b0e8dbec98f949d"
+    },
+    {
+      "design_id": "e22",
+      "asset_id": "z1.room.e22.floor",
+      "visual_key": "z1.room.e22.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e22/floor.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/floors-source.png",
+      "width": 492,
+      "height": 201,
+      "sha256": "e2439f93aa63c3181862db6c6f77c3dc64575ac48c3020e3ddd257f397dbfd8b"
+    },
+    {
+      "design_id": "e22",
+      "asset_id": "z1.room.e22.wall",
+      "visual_key": "z1.room.e22.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e22/wall.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/walls-source.png",
+      "width": 436,
+      "height": 243,
+      "sha256": "b4c678b7c0c30113186fa0920e84c073eae83d3dcf57b0ebda0c7579f178990d"
+    },
+    {
+      "design_id": "e22",
+      "asset_id": "z1.room.e22.station",
+      "visual_key": "z1.room.e22.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e22/station.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/stations-source.png",
+      "width": 362,
+      "height": 344,
+      "sha256": "57f1e3b37cbd4207971c09322c1fa4047622950c219c15d6e8b2f48518dc1b71"
+    },
+    {
+      "design_id": "e23",
+      "asset_id": "z1.room.e23.floor",
+      "visual_key": "z1.room.e23.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e23/floor.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/floors-source.png",
+      "width": 473,
+      "height": 244,
+      "sha256": "03297e39d44453caacc050ff090c98cdd37741d8567c6a9bfab2d1316e834b6d"
+    },
+    {
+      "design_id": "e23",
+      "asset_id": "z1.room.e23.wall",
+      "visual_key": "z1.room.e23.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e23/wall.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/walls-source.png",
+      "width": 450,
+      "height": 254,
+      "sha256": "de4546ddf2737634f81b7d00c4bd976b187619e4639da7a2503f9f3bbeb0a7e1"
+    },
+    {
+      "design_id": "e23",
+      "asset_id": "z1.room.e23.station",
+      "visual_key": "z1.room.e23.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e23/station.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/stations-source.png",
+      "width": 393,
+      "height": 297,
+      "sha256": "6e685b2a06d75929c1144f8a8f42b0ec21ef0496f4c6858e770ac894a3c7c53b"
+    },
+    {
+      "design_id": "e24",
+      "asset_id": "z1.room.e24.floor",
+      "visual_key": "z1.room.e24.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e24/floor.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/floors-source.png",
+      "width": 401,
+      "height": 318,
+      "sha256": "62ec97391aebdb3ddcd71f44cd065866c7faaa754b629209b98a7794e2038d23"
+    },
+    {
+      "design_id": "e24",
+      "asset_id": "z1.room.e24.wall",
+      "visual_key": "z1.room.e24.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e24/wall.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/walls-source.png",
+      "width": 403,
+      "height": 238,
+      "sha256": "339e19b27a33027e4f36a87388bb30c2a86a64a687923d77520c3a6bc7ce158b"
+    },
+    {
+      "design_id": "e24",
+      "asset_id": "z1.room.e24.station",
+      "visual_key": "z1.room.e24.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e24/station.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/stations-source.png",
+      "width": 411,
+      "height": 332,
+      "sha256": "3e769ed05a8c473070941093be95ee4b296b678d6194f4463a4c537ef13715a0"
+    },
+    {
+      "design_id": "e24",
+      "asset_id": "z1.room.e24.station_open",
+      "visual_key": "z1.room.e24.station_open",
+      "kind": "event_room",
+      "state": "station_open",
+      "path": "res://assets/z1/event_rooms/e24/station_open.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/cage-open-source.png",
+      "width": 411,
+      "height": 332,
+      "sha256": "8935ec62df1541f9fa5e627bb530bde69fc13b08000e5799044f4376c830f6c2"
+    },
+    {
+      "design_id": "e25",
+      "asset_id": "z1.room.e25.floor",
+      "visual_key": "z1.room.e25.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/e25/floor.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/floors-source.png",
+      "width": 494,
+      "height": 256,
+      "sha256": "cd8c35f992e692928e8f7bb283981f6a71e0fd26ab52229c1c1af30a18710958"
+    },
+    {
+      "design_id": "e25",
+      "asset_id": "z1.room.e25.wall",
+      "visual_key": "z1.room.e25.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/e25/wall.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/walls-source.png",
+      "width": 454,
+      "height": 219,
+      "sha256": "3b219091ae7f8ab5b33d6625d91a115574f37f0403c5af17ed130cfbea7ae743"
+    },
+    {
+      "design_id": "e25",
+      "asset_id": "z1.room.e25.station",
+      "visual_key": "z1.room.e25.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/e25/station.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/stations-source.png",
+      "width": 405,
+      "height": 216,
+      "sha256": "d79dd6f2ef803402bf698ee92dc15845b03d21a51e599010109fb2452bbcb393"
+    },
+    {
+      "design_id": "trader",
+      "asset_id": "z1.room.trader.floor",
+      "visual_key": "z1.room.trader.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/trader/floor.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/floors-source.png",
+      "width": 490,
+      "height": 258,
+      "sha256": "a10cbc42fec0137e222d55397db27d75f97f13a8798b7f2a446cf050f5ba74fd"
+    },
+    {
+      "design_id": "trader",
+      "asset_id": "z1.room.trader.wall",
+      "visual_key": "z1.room.trader.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/trader/wall.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/walls-source.png",
+      "width": 440,
+      "height": 256,
+      "sha256": "c0cff0ac9ae940f025b1fc752e33388bc43d854d7019fad2df955c290d197ea9"
+    },
+    {
+      "design_id": "trader",
+      "asset_id": "z1.room.trader.station",
+      "visual_key": "z1.room.trader.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/trader/station.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/stations-source.png",
+      "width": 392,
+      "height": 346,
+      "sha256": "df14dcf4ed0e2812e44465c0688111adb0cb0bb3178c62157fd2444461c4867d"
+    },
+    {
+      "design_id": "dice",
+      "asset_id": "z1.room.dice.floor",
+      "visual_key": "z1.room.dice.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/dice/floor.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/floors-source.png",
+      "width": 355,
+      "height": 323,
+      "sha256": "d05e038c0a16be06e1a561226a9be4d65905f7eb7c20af765a73a7f2131b88f2"
+    },
+    {
+      "design_id": "dice",
+      "asset_id": "z1.room.dice.wall",
+      "visual_key": "z1.room.dice.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/dice/wall.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/walls-source.png",
+      "width": 422,
+      "height": 161,
+      "sha256": "270ee291d1f99b94bcb7f234bbac8028afddeb3e297a001d45311176f34aa6ba"
+    },
+    {
+      "design_id": "dice",
+      "asset_id": "z1.room.dice.station",
+      "visual_key": "z1.room.dice.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/dice/station.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/stations-source.png",
+      "width": 333,
+      "height": 289,
+      "sha256": "94156b2545115142a682f47c74a3400c9ddde516f1376cc6bce78892a55626be"
+    },
+    {
+      "design_id": "altar",
+      "asset_id": "z1.room.altar.floor",
+      "visual_key": "z1.room.altar.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/altar/floor.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/floors-source.png",
+      "width": 352,
+      "height": 347,
+      "sha256": "45e87b133e7bddd6015cab17ba1e24f24ff05e53840f1108e10d57b09889d02a"
+    },
+    {
+      "design_id": "altar",
+      "asset_id": "z1.room.altar.wall",
+      "visual_key": "z1.room.altar.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/altar/wall.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/walls-source.png",
+      "width": 440,
+      "height": 275,
+      "sha256": "f2c5e0a68da0bdeeb38fcec722113855ddf9ecdbad7ac2513248dc2fcc190c2f"
+    },
+    {
+      "design_id": "altar",
+      "asset_id": "z1.room.altar.station",
+      "visual_key": "z1.room.altar.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/altar/station.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/stations-source.png",
+      "width": 387,
+      "height": 305,
+      "sha256": "914c4d7bb5186272061688f3c179c6932c47f8c9ad707a1782411b197c1d6de2"
+    },
+    {
+      "design_id": "trap",
+      "asset_id": "z1.room.trap.floor",
+      "visual_key": "z1.room.trap.floor",
+      "kind": "event_room",
+      "state": "floor",
+      "path": "res://assets/z1/event_rooms/trap/floor.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/floors-source.png",
+      "width": 506,
+      "height": 201,
+      "sha256": "9adbae31e2f73e20a1f1db81608f9859a3e777ad3ffd77f56e3495a2ed6dc645"
+    },
+    {
+      "design_id": "trap",
+      "asset_id": "z1.room.trap.wall",
+      "visual_key": "z1.room.trap.wall",
+      "kind": "event_room",
+      "state": "wall",
+      "path": "res://assets/z1/event_rooms/trap/wall.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/walls-source.png",
+      "width": 458,
+      "height": 236,
+      "sha256": "818316d92e51ed6d4708c7455649e5bf0ba10aa61fa661e86e03b6917898b110"
+    },
+    {
+      "design_id": "trap",
+      "asset_id": "z1.room.trap.station",
+      "visual_key": "z1.room.trap.station",
+      "kind": "event_room",
+      "state": "station",
+      "path": "res://assets/z1/event_rooms/trap/station.png",
+      "source": "sources/art/Z1/rooms/e21-e25-legacy/stations-source.png",
+      "width": 406,
+      "height": 323,
+      "sha256": "eda0afa48794fdf40781a1a3a379f171709fb2a93e6dc09a6e65c92ce4050655"
+    }
+  ]
+}

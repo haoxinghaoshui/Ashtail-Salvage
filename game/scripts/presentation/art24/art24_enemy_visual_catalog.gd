@@ -4,13 +4,16 @@ class_name Art24EnemyVisualCatalog
 const ACTOR_ROOT := "res://assets/art24/actors/"
 const ENEMY_SUBJECTS := [&"slime", &"slimeling", &"bat", &"drone"]
 const TextureCache := preload("res://scripts/presentation/runtime_texture_cache.gd")
+const Z1Visuals := preload("res://scripts/presentation/z1/z1_monster_visual_catalog.gd")
 
 
 static func supports(subject: StringName) -> bool:
-	return subject in ENEMY_SUBJECTS
+	return subject in ENEMY_SUBJECTS or Z1Visuals.supports(subject)
 
 
 static func texture_path(subject: StringName, runtime_state: StringName, frame_index: int = 0, visual_variant: StringName = &"base") -> String:
+	if Z1Visuals.supports(subject):
+		return Z1Visuals.texture_path(subject, runtime_state, frame_index, visual_variant)
 	var asset_subject := &"slime" if subject == &"slimeling" else subject
 	var directory := "%s%s/" % [ACTOR_ROOT, String(asset_subject)]
 	if visual_variant != &"base":
@@ -37,6 +40,8 @@ static func texture_for(subject: StringName, runtime_state: StringName, frame_in
 
 
 static func frame_count(subject: StringName, runtime_state: StringName, visual_variant: StringName = &"base") -> int:
+	if Z1Visuals.supports(subject):
+		return Z1Visuals.frame_count(subject, runtime_state, visual_variant)
 	if visual_variant != &"base":
 		return 2 if runtime_state not in [&"warning", &"aim", &"active", &"fire", &"hurt", &"dead", &"defeated"] else 1
 	if runtime_state in [&"dead", &"defeated"]:
@@ -99,6 +104,8 @@ static func presentation_phase(runtime_state: StringName) -> StringName:
 
 static func production_texture_paths() -> Array[String]:
 	var unique_paths: Dictionary = {}
+	for path in Z1Visuals.production_texture_paths():
+		unique_paths[path] = true
 	for subject in ENEMY_SUBJECTS:
 		for runtime_state: StringName in [&"idle", &"hurt", &"active", &"warning", &"defeated"]:
 			for frame_index in range(frame_count(subject, runtime_state, &"base")):
@@ -111,6 +118,8 @@ static func production_texture_paths() -> Array[String]:
 
 
 static func visual_scale(subject: StringName, visual_variant: StringName = &"base") -> float:
+	if Z1Visuals.supports(subject):
+		return Z1Visuals.visual_scale(subject, visual_variant)
 	if visual_variant != &"base":
 		match subject:
 			&"slimeling": return 0.12
@@ -125,6 +134,8 @@ static func visual_scale(subject: StringName, visual_variant: StringName = &"bas
 
 
 static func visual_offset(subject: StringName) -> Vector2:
+	if Z1Visuals.supports(subject):
+		return Z1Visuals.visual_offset(subject)
 	match subject:
 		&"bat": return Vector2(0, -14)
 		&"drone": return Vector2(0, -12)
@@ -133,6 +144,8 @@ static func visual_offset(subject: StringName) -> Vector2:
 
 
 static func health_bar_y(subject: StringName) -> float:
+	if Z1Visuals.supports(subject):
+		return Z1Visuals.health_bar_y(subject)
 	return -20.0 if subject == &"slimeling" else -30.0
 
 

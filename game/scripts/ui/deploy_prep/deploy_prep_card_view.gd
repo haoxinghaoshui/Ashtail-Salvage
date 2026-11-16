@@ -2,6 +2,7 @@ extends Control
 class_name DeployPrepCardView
 
 const Art09ManifestAssetMappingScript := preload("res://scripts/presentation/art09_manifest_asset_mapping.gd")
+const Art24ItemVisualCatalogScript := preload("res://scripts/presentation/art24/art24_item_visual_catalog.gd")
 const Art10UISkinKitScript := preload("res://scripts/presentation/art10_ui_skin_kit.gd")
 const Art22DeployPrepAssetContractScript := preload("res://scripts/presentation/art22_deploy_prep_asset_contract.gd")
 const Art25ContentAssetContractScript := preload("res://scripts/presentation/art25_content_asset_contract.gd")
@@ -131,6 +132,14 @@ func _apply_batch_selection_visual() -> void:
 		state_label.text = "✓ 已勾选" if batch_checked else ("□ 可售" if batch_eligible else "不可售")
 
 
+static func item_artwork(item: Dictionary) -> Texture2D:
+	if Art24ItemVisualCatalogScript.has_explicit_mapping(String(item.get("item_id", ""))):
+		var appearance := Art24ItemVisualCatalogScript.resolve(item, &"deploy_warehouse")
+		if not bool(appearance.get("fallback_used", true)):
+			return appearance.get("texture") as Texture2D
+	return Art09ManifestAssetMappingScript.resolve_texture(Art09ManifestAssetMappingScript.inventory_item_icon_ref(item))
+
+
 func _build_nodes(tab_id: StringName) -> void:
 	button = Button.new()
 	button.name = "CardHitTarget"
@@ -147,10 +156,13 @@ func _build_nodes(tab_id: StringName) -> void:
 	_add_color_rect("CardContentMatte", Rect2(68, 7, 218, 62), Color(0.015, 0.055, 0.060, 0.38))
 	_add_asset_panel("CardArtworkFrame", Rect2(7, 8, 56, 60), &"slot", &"normal")
 	var art_filter_id := StringName(card_data.get("art_filter_id", card_data.get("filter_id", &"")))
-	var art_ref := Art09ManifestAssetMappingScript.inventory_item_icon_ref(card_data) if card_data.has("item_id") else (Art25ContentAssetContractScript.deploy_card_ref(card_id) if Art25ContentAssetContractScript.handles_deploy_card(card_id) else Art22DeployPrepAssetContractScript.card_art_ref(tab_id, card_id, art_filter_id))
 	artwork = TextureRect.new()
 	artwork.name = "CardArtwork"
-	artwork.texture = Art09ManifestAssetMappingScript.resolve_texture(art_ref)
+	if card_data.has("item_id"):
+		artwork.texture = item_artwork(card_data)
+	else:
+		var art_ref := Art25ContentAssetContractScript.deploy_card_ref(card_id) if Art25ContentAssetContractScript.handles_deploy_card(card_id) else Art22DeployPrepAssetContractScript.card_art_ref(tab_id, card_id, art_filter_id)
+		artwork.texture = Art09ManifestAssetMappingScript.resolve_texture(art_ref)
 	artwork.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	artwork.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	artwork.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -223,7 +235,7 @@ func _display_title() -> String:
 	match card_id:
 		&"m3r_loadout_equipment": return "已选装备"
 		&"m3r_loadout_consumables": return "携带消耗品"
-		&"m3r_loadout_capacity": return "背包容量"
+		&"m3r_loadout_capacity": return "共享负重与战利品容量"
 		&"m3r_profile_permission_protocol": return "档案 / 许可 / 协议"
 		&"m3r_start_intent": return "开始常规探索"
 		&"m3r_warehouse_status": return "仓库状态"
@@ -233,8 +245,8 @@ func _display_title() -> String:
 func _summary_text() -> String:
 	match card_id:
 		&"m3r_loadout_equipment": return "已从真实仓库配置本次探索装备。"
-		&"m3r_loadout_consumables": return "携带补给进入背包，未使用物按结果结算。"
-		&"m3r_loadout_capacity": return "显示携带重量、背包上限与失败回收容量。"
+		&"m3r_loadout_consumables": return "携带补给与穿戴装备共用负重，未使用物按结果结算。"
+		&"m3r_loadout_capacity": return "显示共享负重、独立战利品背包与失败回收容量。"
 		&"m3r_profile_permission_protocol": return "展示当前档案、许可等级与协议难度接口。"
 		&"m3r_start_intent": return "使用当前地图、目标与携带配置进入现有路线。"
 		&"m3r_warehouse_status": return "汇总真实仓库的装备、消耗品、藏品与特殊物。"

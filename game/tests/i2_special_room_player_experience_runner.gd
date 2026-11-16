@@ -245,7 +245,7 @@ func _check_special_room_projections() -> void:
 		snapshot["event_state"] = {"event_type": event_type, "completed": false}
 		var event := _projection_of_kind(ProjectionScript.build(snapshot), &"event")
 		_check(not event.is_empty(), "Event %s lacks a world projection" % event_type)
-		_check(String(event.get("visual_key", "")) == "ui.art25.long_term.event.%s" % event_type, "Event %s does not use its ART25 badge" % event_type)
+		_check(String(event.get("visual_key", "")) == "z1.room.%s.station" % event_type, "Event %s does not use its station art" % event_type)
 		_check(not bool((event.get("payload", {}) as Dictionary).get("display_only", true)), "Open Event %s became read-only" % event_type)
 	var completed_snapshot := _snapshot(&"Event", Vector2i(1, 1))
 	completed_snapshot["event_state"] = {"event_type": &"altar", "completed": true}
@@ -255,7 +255,8 @@ func _check_special_room_projections() -> void:
 	var revisited_event := _projection_of_kind(ProjectionScript.build(revisit_snapshot), &"event")
 	var revisited_payload: Dictionary = revisited_event.get("payload", {})
 	_check(bool(revisited_payload.get("completed", false)) and bool(revisited_payload.get("display_only", false)), "Completed Event became actionable after leaving and revisiting with an empty transient event_state")
-	_check(StringName(revisited_payload.get("event_type", &"")) in [&"trader", &"dice", &"altar", &"trap"], "Completed Event lost its type after revisit")
+	var revisited_type := StringName(revisited_payload.get("event_type", &""))
+	_check(revisited_type in [&"trader", &"dice", &"altar", &"trap"] or Z1EventCatalog.number(revisited_type) > 0, "Completed Event lost its type after revisit")
 
 	var mine_snapshot := _snapshot(&"Mine", Vector2i(2, 1))
 	mine_snapshot["current_room_detail"] = {"triggered": true}
@@ -288,12 +289,13 @@ func _check_special_world_interactions() -> void:
 	var event_snapshot := _snapshot(&"Event", Vector2i(1, 1))
 	event_snapshot["event_state"] = {"event_type": &"dice", "completed": false}
 	var event_before := event_snapshot.duplicate(true)
+	var event_approach := _event_approach(event_snapshot)
 	view.configure_room(event_snapshot)
-	view.advance(0.0, ProjectionScript.EVENT_LOCAL_POS)
+	view.advance(0.0, event_approach)
 	await _frames(2)
 	_check(event_snapshot == event_before, "Event proximity mutated its public snapshot")
 	_check(view.context_popup.visible and view.context_popup.context_kind == &"event", "Event proximity did not show its context card")
-	var event_request: Dictionary = view.request_nearest_interaction(ProjectionScript.EVENT_LOCAL_POS)
+	var event_request: Dictionary = view.request_nearest_interaction(event_approach)
 	_check(bool(event_request.get("accepted", false)) and StringName(event_request.get("interaction_kind", &"")) == &"event", "Event E request does not use interaction_kind=event")
 	_check(context_actions.is_empty(), "Event proximity emitted a command without explicit input")
 	_check(view.activate_context_primary(), "Event context primary did not accept explicit input")
@@ -303,9 +305,9 @@ func _check_special_world_interactions() -> void:
 	var completed_snapshot := event_snapshot.duplicate(true)
 	completed_snapshot["event_state"] = {"event_type": &"dice", "completed": true}
 	view.configure_room(completed_snapshot)
-	view.advance(0.0, ProjectionScript.EVENT_LOCAL_POS)
+	view.advance(0.0, event_approach)
 	_check(view.context_popup.visible, "Completed Event cannot be inspected")
-	var completed_request: Dictionary = view.request_nearest_interaction(ProjectionScript.EVENT_LOCAL_POS)
+	var completed_request: Dictionary = view.request_nearest_interaction(event_approach)
 	_check(not bool(completed_request.get("accepted", false)), "Completed Event accepted another action")
 	_check(not view.activate_context_primary() and context_actions.is_empty(), "Completed Event context emitted another action")
 
@@ -412,7 +414,7 @@ func _check_production_proximity_authority() -> void:
 	_check(not bool(run_scene.call("_runtime_modal_is_top", &"event")), "Far stale Event world action opened the option modal")
 	_check(_production_count(&"select_encounter_option") == 0 and _production_count(&"select_event_option") == 0, "Far Event action submitted a domain command")
 
-	player.set_local_position(ProjectionScript.EVENT_LOCAL_POS)
+	player.set_local_position(_event_approach(context.get_status_snapshot()))
 	room_view.advance(0.0, player.get_local_position(), {})
 	await process_frame
 	var event_popup = room_view.get("context_popup")
@@ -427,7 +429,7 @@ func _check_production_proximity_authority() -> void:
 	var event_options_box = run_scene.get("event_options_box") as Control
 	var event_modal_buttons: Array[Button] = []
 	if event_options_box != null:
-		for child in event_options_box.get_children():
+		for child in event_options_box.find_children("*", "Button", true, false):
 			if child is Button:
 				event_modal_buttons.append(child as Button)
 	var expected_event_options: Array = (context.event_state as Dictionary).get("options", [])
@@ -714,6 +716,7 @@ func _completed_event_revisit_snapshot() -> Dictionary:
 		return _snapshot(&"Event", Vector2i.ZERO)
 	context.player_pos = target
 	context.current_pos = target
+	context.z1_event_rooms[context.cell_key(target)] = {"event_type": &"trap"}
 	context.interacted_cells[context.cell_key(target)] = true
 	controller.command_bus.room_resolver.enter_room(context)
 	controller.command_bus.room_resolver.enter_room(context)
@@ -759,6 +762,11 @@ func _check_no_presentation_authority() -> void:
 	_check(not projection_source.contains("dispatch(") and not room_view_source.contains("CommandBus") and not room_view_source.contains("dispatch("), "Special-room presentation owns command authority")
 	_check(not actor_source.contains("physics_process") and not actor_source.contains("Engine.time_scale"), "Monster appearance changes simulation timing")
 	_check(not projection_source.contains("assets/props/art07") and not room_view_source.contains("assets/props/art07"), "Special-room presentation reintroduced forbidden ART07 props")
+
+
+func _event_approach(snapshot: Dictionary) -> Vector2:
+	var room: Dictionary = ProjectionScript.build(snapshot).get("event_room", {})
+	return Vector2(room.get("interaction_pos", ProjectionScript.EVENT_LOCAL_POS))
 
 
 func _snapshot(room_type: StringName, position: Vector2i) -> Dictionary:

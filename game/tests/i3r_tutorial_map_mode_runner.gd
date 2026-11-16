@@ -250,9 +250,9 @@ func _test_run_start_meta_authority() -> void:
 		{"instance_id": "authority:eq", "item_id": "eq_recovery_bag"},
 		{"instance_id": "authority:eq_same_slot", "item_id": "eq_recovery_bag"},
 		{"instance_id": "authority:con", "item_id": "con_ration"},
-		{"instance_id": "authority:heavy_1", "item_id": "con_ration", "weight": 4},
-		{"instance_id": "authority:heavy_2", "item_id": "con_med_patch", "weight": 4},
-		{"instance_id": "authority:heavy_3", "item_id": "con_tape_roll", "weight": 4},
+		{"instance_id": "authority:heavy_1", "item_id": "legacy_heavy_supply", "item_type": "consumable", "weight": 40},
+		{"instance_id": "authority:heavy_2", "item_id": "legacy_heavy_supply", "item_type": "consumable", "weight": 40},
+		{"instance_id": "authority:heavy_3", "item_id": "legacy_heavy_supply", "item_type": "consumable", "weight": 40},
 	]
 	var authority_meta := adapter.get_summary()
 
@@ -419,7 +419,7 @@ func _test_run_start_meta_authority() -> void:
 	_check_authority_issue(
 		capacity_config,
 		authority_meta,
-		"carry_weight_exceeds_authoritative_capacity",
+		"shared_weight_exceeds_authoritative_capacity",
 		"authoritative_capacity_overflow_was_accepted"
 	)
 
@@ -577,11 +577,11 @@ func _test_run_start_meta_authority() -> void:
 	if bool(trusted_start.get("ok", false)):
 		var authoritative := controller.context.run_start_config as Dictionary
 		_check(
-			int(authoritative.get("backpack_capacity", -1)) == 12,
+			int(authoritative.get("backpack_capacity", -1)) == 120,
 			"forged_backpack_capacity_was_not_recomputed"
 		)
 		_check(
-			int(authoritative.get("failure_salvage_capacity", -1)) == 4,
+			int(authoritative.get("failure_salvage_capacity", -1)) == 40,
 			"forged_salvage_capacity_was_not_recomputed"
 		)
 		_check(
@@ -822,9 +822,15 @@ func _test_persistence_isolation_and_replay() -> void:
 	)
 	var after := adapter.data.duplicate(true)
 	_check(bool(after.get("tutorial_completed", false)), "tutorial_completion_marker_missing")
+	var expected_unlocks := (before.get("unlocked_map_ids", []) as Array).duplicate()
+	expected_unlocks.append("classic_7x7_simple")
+	_check(after.get("unlocked_map_ids", []) == expected_unlocks, "tutorial_completion_unlocks_first_map_only")
 	var normalized_after := after.duplicate(true)
+	_check((normalized_after.get("unlocked_map_ids", []) as Array).has("classic_7x7_simple"), "tutorial_completion_first_map_missing")
+	normalized_after["unlocked_map_ids"] = before["unlocked_map_ids"]
 	normalized_after["tutorial_completed"] = false
-	_check(normalized_after == before, "tutorial_completion_changed_non_marker_state")
+	normalized_after["unlocked_map_ids"] = before.get("unlocked_map_ids", [])
+	_check(normalized_after == before, "tutorial_completion_changed_unrelated_state")
 
 	var replay_before := adapter.data.duplicate(true)
 	var replay_snapshot := _tutorial_terminal_result(&"success", "tutorial_replay")

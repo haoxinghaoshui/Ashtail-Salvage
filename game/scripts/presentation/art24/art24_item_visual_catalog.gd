@@ -86,6 +86,9 @@ static func texture_path(item: Dictionary) -> String:
 
 static func visual_key(item: Dictionary) -> StringName:
 	var item_id := String(item.get("item_id", "")).to_lower()
+	var z1_record := Z1ItemVisualCatalog.entry(item_id)
+	if not z1_record.is_empty():
+		return StringName(z1_record.get("visual_key", ""))
 	if ITEM_TEXTURES.has(item_id):
 		var mapped_name := String(ITEM_TEXTURES[item_id]).get_file().get_basename()
 		return StringName("visual.art24.item.world_loot.%s" % mapped_name)
@@ -104,6 +107,9 @@ static func texture_path_for_visual_key(key: StringName) -> String:
 
 
 static func _exact_texture_path_for_visual_key(key: StringName) -> String:
+	var z1_path := Z1ItemVisualCatalog.path_for_key(key)
+	if not z1_path.is_empty():
+		return z1_path
 	var token := String(key)
 	var art24_prefix := "visual.art24.item.world_loot."
 	if token.begins_with(art24_prefix):
@@ -175,13 +181,17 @@ static func texture_for_visual_key(key: StringName) -> Texture2D:
 static func has_explicit_mapping(item_id: String) -> bool:
 	var normalized_id := item_id.to_lower()
 	return (
-		ITEM_TEXTURES.has(normalized_id)
+		not Z1ItemVisualCatalog.entry(normalized_id).is_empty()
+		or ITEM_TEXTURES.has(normalized_id)
 		or ART24_WORLD_IDS.has(normalized_id)
 		or ART25_ITEM_IDS.has(normalized_id)
 	)
 
 
 static func _requested_visual_key(item_id: String) -> StringName:
+	var z1_record := Z1ItemVisualCatalog.entry(item_id)
+	if not z1_record.is_empty():
+		return StringName(z1_record.get("visual_key", ""))
 	if ITEM_TEXTURES.has(item_id):
 		var mapped_name := String(ITEM_TEXTURES[item_id]).get_file().get_basename()
 		return StringName("visual.art24.item.world_loot.%s" % mapped_name)

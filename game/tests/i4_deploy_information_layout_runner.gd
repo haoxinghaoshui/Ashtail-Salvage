@@ -67,7 +67,7 @@ func _check_case(resolution: Dictionary, ui_scale: float) -> void:
 	var shell := DeployPrepShellScript.new() as Control
 	shell.name = "DeployPrepShell"
 	canvas.add_child(shell)
-	shell.build()
+	shell.build({}, _snapshot())
 	shell.set_ui_scale_factor(ui_scale)
 	shell.apply_snapshot(_snapshot())
 	shell.show_tab(DeployTabModelScript.TAB_WAREHOUSE)

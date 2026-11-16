@@ -60,8 +60,10 @@ func _test_exact_catalog_and_projection() -> void:
 		page_ids[StringName(projection.get("page_id", &""))] = true
 		_check(StringName(projection.get("tab_id", &"")) == &"map", "projection_left_map_tab")
 		var exact_definition := M7ContentCatalogScript.map_definition_exact(projected_map_id)
-		for field in ["visible_exit_count", "hidden_exit_count", "visible_exit_position_known", "success_exp"]:
+		for field in ["visible_exit_count", "hidden_exit_count", "visible_exit_position_known"]:
 			_check(projection.get(field) == exact_definition.get(field), "projection_field:%s:%s" % [projected_map_id, field])
+		for field in ["experience_percent", "experience_cap", "min_profile_level"]:
+			_check(projection.get(field) == int(exact_definition.get(field, 0)), "projection_field:%s:%s" % [projected_map_id, field])
 	_check(projected_ids == MAP_IDS, "projection_id_order_or_content")
 	_check(page_ids.keys() == [&"deploy_prep"], "projection_added_route_page")
 	var groups := DeployMapProjectionScript.scale_groups(MAP_IDS)

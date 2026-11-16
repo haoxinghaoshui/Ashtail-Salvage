@@ -18,7 +18,7 @@ const VISIBLE_MIN_SECONDS := 60.0
 const PROJECTILE_PEAK_COUNT := 15
 const PLAYER_DURABLE_HP := 1000000
 const MEMORY_SAMPLE_INTERVAL := 60
-const PRODUCTION_COMBAT_TEXTURE_COUNT := 71
+const PRODUCTION_COMBAT_TEXTURE_COUNT := 211
 const MIN_TEARDOWN_RESOURCE_RELEASE := 64
 
 var failures: Array[String] = []
@@ -115,6 +115,18 @@ func _restore_engine_schedule() -> void:
 
 
 func _build_production_runtime() -> bool:
+	# Each main scene restores the selected durable profile. Give both lifecycle
+	# builds a fresh Z2 profile before loading main so neither resumes the other.
+	var profile_manager := SaveManager.new()
+	profile_manager.load_manifest()
+	var profile_id := "i2_combat_frame_%s" % Crypto.new().generate_random_bytes(16).hex_encode()
+	_require(bool(profile_manager.switch_profile(profile_id).get("ok", false)), "fresh combat test profile could not be selected")
+	var profile_meta := MetaProgressAdapter.new()
+	_require(bool(profile_manager.configure_meta_adapter(profile_meta).get("ok", false)), "fresh combat test profile adapter could not be configured")
+	_require(bool(profile_meta.initialize_z2_profile(RunRuntimeController.Z2_CONTENT_VERSION).get("ok", false)), "fresh Z2 combat test profile could not be initialized")
+	_require(bool(profile_manager.save_manifest().get("ok", false)), "fresh combat test profile selection could not be persisted")
+	if not failures.is_empty():
+		return false
 	var packed := load("res://scenes/main/main.tscn") as PackedScene
 	_require(packed != null, "production main scene could not be loaded")
 	if packed == null:

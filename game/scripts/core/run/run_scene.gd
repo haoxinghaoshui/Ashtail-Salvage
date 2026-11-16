@@ -40,11 +40,13 @@ const RunSceneRefreshControllerScript := preload("res://scripts/core/run/run_sce
 const RunRuntimeControllerScript := preload("res://scripts/core/run/run_runtime_controller.gd")
 const PlayerAppearanceConfigScript := preload("res://scripts/core/content/player_appearance_config.gd")
 const RunSceneModalControllerScript := preload("res://scripts/core/run/run_scene_modal_controller.gd")
+const RunScenePersistenceControllerScript := preload("res://scripts/core/run/run_scene_persistence_controller.gd")
 const SettingsPanelScript := preload("res://scripts/ui/settings/settings_panel.gd")
 const G41RoomRuntimeViewScript := preload("res://scripts/gameplay/runtime/g41_room_runtime_view.gd")
 const G41RuntimeLayoutScript := preload("res://scripts/gameplay/runtime/g41_runtime_layout.gd")
 const Art25GameplayBackdropScript := preload("res://scripts/presentation/art25_gameplay_backdrop.gd")
 const RuntimeTextureCacheScript := preload("res://scripts/presentation/runtime_texture_cache.gd")
+const EventChoicePanelScript := preload("res://scripts/ui/run_surface/z1_event_choice_panel.gd")
 const Art24RuntimeAnimationCatalogScript := preload("res://scripts/presentation/art24/art24_runtime_animation_catalog.gd")
 const Art24EnemyVisualCatalogScript := preload("res://scripts/presentation/art24/art24_enemy_visual_catalog.gd")
 const SemanticActionHintScript := preload("res://scripts/core/input/semantic_action_hint.gd")
@@ -117,6 +119,7 @@ var abandon_confirm_cancel_button: Button
 var abandon_confirm_button: Button
 var dev_diagnostics_panel: Control
 var event_panel: PanelContainer
+var event_choice_panel
 var event_title_label: Label
 var event_body_label: Label
 var event_options_box: VBoxContainer
@@ -162,9 +165,11 @@ var _ui_scale_factor := 1.0
 var _transition_rejection_direction := Vector2i.ZERO
 var _transition_rejection_cooldown_remaining := 0.0
 var _transition_rejection_awaiting_release := false
+var persistence_controller
 
 
 func _ready() -> void:
+	get_tree().auto_accept_quit = false
 	_ui_scale_factor = Art10UISkinKitScript.runtime_ui_scale_factor()
 	m1_debug_panel_enabled = DebugGateScript.is_debug_tools_enabled()
 	player_feedback_service = PlayerFeedbackServiceScript.new()
@@ -174,6 +179,7 @@ func _ready() -> void:
 	if feedback_settings_manager != null:
 		player_feedback_service.bind_settings_manager(feedback_settings_manager)
 	modal_controller = RunSceneModalControllerScript.new()
+	persistence_controller = RunScenePersistenceControllerScript.new()
 	debug_panel_controller = RunSceneDebugPanelControllerScript.new()
 	refresh_controller = RunSceneRefreshControllerScript.new()
 	save_manager = SaveManagerScript.new()
@@ -182,6 +188,7 @@ func _ready() -> void:
 	save_manager.configure_meta_adapter(meta_progress_adapter)
 	runtime_controller = RunRuntimeControllerScript.new()
 	runtime_controller.bind_meta_progress_adapter(meta_progress_adapter)
+	runtime_controller.initialize_z2_session(save_manager)
 	run_context = runtime_controller.context
 	command_bus = runtime_controller.command_bus
 	in_run_runtime = runtime_controller.in_run_runtime
@@ -223,7 +230,16 @@ func _ready() -> void:
 		Callable(self, "_shell_snapshot"),
 		Callable(self, "_apply_dev_diagnostics")
 	)
+	player_controller.set_local_position(runtime_controller.get_restored_local_position(player_controller.get_local_position()))
 	_show_main_menu()
+	if not run_context.run_active and not run_context.result_snapshot.is_empty():
+		call_deferred("_on_result_available", run_context.result_snapshot)
+	persistence_controller.present_error()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and persistence_controller != null:
+		persistence_controller.request_quit()
 
 
 func set_ui_scale_factor(value: float) -> bool:
@@ -239,7 +255,7 @@ func get_ui_scale_factor() -> float:
 
 
 func _apply_ui_scale_to_runtime_controls(sync_shell: bool) -> void:
-	var targets: Array[Node] = [run_surface, tutorial_popup_panel, map_overlay_panel, result_panel, inventory_panel, ground_loot_panel, loot_panel, runtime_settings_panel]
+	var targets: Array[Node] = [run_surface, tutorial_popup_panel, map_overlay_panel, result_panel, inventory_panel, ground_loot_panel, loot_panel, runtime_settings_panel, event_choice_panel]
 	if sync_shell:
 		targets.push_front(ui_shell)
 	for target in targets:
@@ -255,22 +271,18 @@ func _on_app_shell_ui_scale_changed(value: float) -> void:
 
 
 func _process(delta: float) -> void:
-	if screen_state != SCREEN_RUN:
-		return
 	if player_controller == null or command_bus == null or run_context == null:
 		return
-	var runtime_paused := _is_runtime_modal_open() or (map_overlay_panel != null and map_overlay_panel.visible) or run_context.has_blocking_tutorial_popup()
 	_sync_player_input_enabled()
+	if persistence_controller.present_error() or not run_context.run_active:
+		return
+	var input_blocked := _gameplay_input_blocked()
 	if room_runtime_view != null:
-		room_runtime_view.set_context_ui_suppressed(runtime_paused)
+		room_runtime_view.set_context_ui_suppressed(input_blocked)
 	if in_run_runtime != null:
 		in_run_runtime.sync_room(player_controller.get_local_position())
-		in_run_runtime.set_paused(runtime_paused)
-	if runtime_paused:
-		if room_runtime_view != null:
-			room_runtime_view.advance(0.0, player_controller.get_local_position(), in_run_runtime.build_read_only_snapshot() if in_run_runtime != null else {})
-		return
-	var move_vector := player_controller.get_move_vector()
+		in_run_runtime.set_paused(false)
+	var move_vector := Vector2.ZERO if input_blocked else player_controller.get_move_vector()
 	_advance_transition_rejection_debounce(delta, move_vector)
 	if in_run_runtime != null and in_run_runtime.has_active_combat():
 		var combat_aim := move_vector if move_vector.length_squared() > 0.0001 else player_controller.get_facing_vector()
@@ -286,18 +298,26 @@ func _process(delta: float) -> void:
 			combat_player_state in COMBAT_FACING_LOCK_STATES
 		)
 		player_controller.set_runtime_visual_state(combat_player_state)
+		if persistence_controller.present_error():
+			return
 		if room_runtime_view != null:
 			room_runtime_view.advance(delta, player_controller.get_local_position(), combat_snapshot)
-		var combat_transition := player_controller.requested_transition(move_vector)
-		if combat_transition != Vector2i.ZERO:
-			_attempt_room_transition(combat_transition)
+		if not input_blocked and run_context.run_active:
+			var combat_transition := player_controller.requested_transition(move_vector)
+			if combat_transition != Vector2i.ZERO:
+				_attempt_room_transition(combat_transition)
 		return
 	if run_surface != null and run_surface.has_method("apply_combat_attack_state"):
 		run_surface.call("apply_combat_attack_state", {})
 	player_controller.release_authoritative_combat_facing()
 	var local_result := player_controller.move_local(move_vector, delta)
-	if StringName(local_result.get("status", &"")) == &"transition":
+	if not input_blocked and StringName(local_result.get("status", &"")) == &"transition":
 		_attempt_room_transition(local_result.get("direction", Vector2i.ZERO))
+	persistence_controller.capture_player_location()
+	if run_context.run_active and (in_run_runtime == null or not in_run_runtime.has_active_combat()):
+		runtime_controller.advance_idle_frame(delta)
+	if persistence_controller.present_error():
+		return
 	if room_runtime_view != null:
 		room_runtime_view.advance(delta, player_controller.get_local_position(), in_run_runtime.build_read_only_snapshot() if in_run_runtime != null else {})
 
@@ -337,6 +357,8 @@ func _unhandled_input(event: InputEvent) -> void:
 func _handle_cancel_input(event: InputEvent) -> bool:
 	if RunSceneInputRouterScript.cancel_action(event) != RunSceneInputRouterScript.ACTION_CANCEL:
 		return false
+	if persistence_controller.is_blocked():
+		return true
 	# A blocking tutorial prompt owns the current input context. Escape/Back
 	# must not open another modal above the teaching decision.
 	if screen_state == SCREEN_RUN and run_context != null and run_context.has_blocking_tutorial_popup():
@@ -356,7 +378,7 @@ func _handle_cancel_input(event: InputEvent) -> bool:
 
 
 func _handle_run_action_input(event: InputEvent) -> bool:
-	if screen_state != SCREEN_RUN or run_context == null:
+	if screen_state != SCREEN_RUN or run_context == null or not is_visible_in_tree() or persistence_controller.is_blocked():
 		return false
 	if run_context.has_blocking_tutorial_popup():
 		return false
@@ -497,6 +519,7 @@ func _build_accessible_ui() -> void:
 	_build_shell_pages()
 	_build_run_overlay()
 	_build_runtime_modals()
+	persistence_controller.bind_targets(self)
 	_apply_ui_scale_to_runtime_controls(false)
 
 
@@ -509,6 +532,7 @@ func _build_shell_pages() -> void:
 	ui_shell.connect("page_changed", _on_app_shell_page_changed)
 	ui_shell.connect("meta_action_requested", _on_m7_meta_action_requested)
 	ui_shell.connect("ui_scale_changed", _on_app_shell_ui_scale_changed)
+	ui_shell.connect("exit_requested", persistence_controller.request_quit)
 
 
 func _build_run_overlay() -> void:
@@ -603,6 +627,7 @@ func _build_run_overlay() -> void:
 	result_panel.name = "ResultPanel"
 	result_panel.return_main_requested.connect(_return_from_result_to_main)
 	result_panel.return_deploy_requested.connect(_return_from_result_to_deploy)
+	result_panel.career_follow_up_requested.connect(_open_career_follow_up_from_result)
 	result_panel.failure_salvage_confirmed.connect(_confirm_failure_salvage_from_result)
 	result_panel.retry_save_requested.connect(_retry_terminal_commit_from_result)
 	result_panel.discard_unsaved_result_requested.connect(_discard_unsaved_result_from_result)
@@ -639,25 +664,17 @@ func _build_runtime_modals() -> void:
 	runtime_modal_parent.add_child(runtime_modal_input_shield)
 
 	event_panel = _new_modal_panel("EventOptionPanel", Rect2(420, 140, 450, 360))
-	var event_content := VBoxContainer.new()
-	event_content.name = "EventOptionContent"
-	event_content.add_theme_constant_override("separation", 8)
-	event_panel.add_child(event_content)
-	event_title_label = Label.new()
-	event_title_label.text = "事件"
-	event_title_label.add_theme_font_size_override("font_size", 20)
-	event_content.add_child(event_title_label)
-	event_body_label = Label.new()
-	event_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	event_body_label.custom_minimum_size = Vector2(250, 78)
-	event_content.add_child(event_body_label)
-	event_options_box = VBoxContainer.new()
-	event_options_box.name = "EventOptionButtons"
-	event_content.add_child(event_options_box)
-	_add_menu_button(event_content, "关闭", func() -> void: _cancel_event_modal(&"button_cancel"))
-
 	if run_surface != null:
 		run_surface.apply_legacy_modal_style(event_panel, &"mini.event")
+	event_choice_panel = EventChoicePanelScript.new()
+	event_choice_panel.option_selected.connect(func(option: Dictionary) -> void:
+		_select_event_option(StringName(option.get("id", &"")), option.get("payload", {}) as Dictionary)
+	)
+	event_choice_panel.close_requested.connect(func() -> void: _cancel_event_modal(&"button_cancel"))
+	event_panel.add_child(event_choice_panel)
+	event_title_label = event_choice_panel.get("_title")
+	event_body_label = event_choice_panel.get("_body")
+	event_options_box = event_choice_panel.get("_options")
 
 	loot_panel = LootResultPanelScript.new() as Control
 	loot_panel.name = "LootResultPanel"
@@ -708,13 +725,13 @@ func _build_runtime_modals() -> void:
 	pause_content.add_theme_constant_override("separation", 8)
 	pause_panel.add_child(pause_content)
 	var pause_title := Label.new()
-	pause_title.text = "探索已暂停"
+	pause_title.text = "探索菜单"
 	pause_title.add_theme_font_size_override("font_size", 20)
 	pause_content.add_child(pause_title)
 	pause_status_label = Label.new()
 	pause_status_label.name = "PauseSettingsOverlayStatus"
 	pause_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	pause_status_label.text = "当前探索会停留在此处。"
+	pause_status_label.text = "菜单开启期间，战斗与状态计时仍会继续。"
 	pause_content.add_child(pause_status_label)
 	var diagnostics_button: Button
 	if m1_debug_panel_enabled:
@@ -865,11 +882,11 @@ func _show_deploy_shell(selected_tab: StringName = &"config") -> void:
 	_hide_runtime_popups()
 
 
-func _show_long_term_shell(entry_id: StringName = &"tasks") -> void:
+func _show_long_term_shell(entry_id: StringName = &"tasks", notification: Dictionary = {}) -> void:
 	screen_state = SCREEN_LONG_TERM
 	_set_gameplay_visible(false)
 	ui_shell.call("apply_snapshot", _shell_snapshot())
-	ui_shell.call("show_long_term", entry_id)
+	ui_shell.call("show_long_term", entry_id, notification)
 	run_overlay_root.visible = false
 	_hide_runtime_popups()
 
@@ -896,6 +913,7 @@ func _show_run_screen() -> bool:
 	get_viewport().gui_release_focus()
 	_hide_runtime_popups()
 	_refresh_view_models()
+	persistence_controller.restore_pending_phase()
 	return true
 
 
@@ -965,7 +983,7 @@ func _show_pause_panel() -> void:
 	pause_exit_confirm_pending = false
 	if pause_status_label != null and run_context != null:
 		var snapshot: Dictionary = run_context.get_status_snapshot()
-		pause_status_label.text = "探索已暂停\n当前位置：%s" % [
+		pause_status_label.text = "战斗与状态计时仍在继续\n当前位置：%s" % [
 			_run_room_label(StringName(snapshot.get("current_room", &"Unknown"))),
 		]
 	_apply_runtime_modal_layout(_current_layout_profile())
@@ -980,7 +998,7 @@ func _open_settings_from_pause() -> void:
 	runtime_settings_panel.call("bind_settings_manager", ui_shell.call("get_bound_settings_manager"))
 	if not bool(runtime_settings_panel.call("open_panel")):
 		if pause_status_label != null:
-			pause_status_label.text = "设置暂时无法打开，当前探索仍保持暂停。"
+			pause_status_label.text = "设置暂时无法打开，当前探索仍在继续。"
 		return
 	var pushed := _push_runtime_modal(
 		&"settings",
@@ -1181,6 +1199,16 @@ func _return_from_result_to_deploy() -> void:
 	_show_deploy_shell(&"config")
 
 
+func _open_career_follow_up_from_result(notification: Dictionary) -> void:
+	if not _runtime_modal_is_top(&"result") or result_panel == null or not result_panel.normal_exit_allowed():
+		return
+	if debug_panel_controller.is_test_room_active():
+		return
+	_pop_runtime_modal(&"result", false)
+	get_viewport().gui_release_focus()
+	_show_long_term_shell(StringName(notification.get("module_id", &"task_archive")), notification)
+
+
 func _normalize_deploy_tab(tab_id: StringName) -> StringName:
 	match tab_id:
 		&"loadout":
@@ -1192,6 +1220,8 @@ func _normalize_deploy_tab(tab_id: StringName) -> StringName:
 
 
 func _on_app_shell_host_route_requested(intent: Dictionary) -> void:
+	if persistence_controller.present_error():
+		return
 	if debug_panel_controller.start_test_room_if_requested(intent, Callable(self, "_run_start_asset_admission"), Callable(self, "_show_run_screen"), Callable(self, "_show_main_menu")):
 		return
 	var target := NavigationIntentScript.target(intent)
@@ -1215,6 +1245,8 @@ func _on_app_shell_page_changed(page_id: StringName, _payload: Dictionary) -> vo
 
 func _on_m7_meta_action_requested(action: Dictionary) -> void:
 	if runtime_controller == null:
+		return
+	if persistence_controller.present_error():
 		return
 	var envelope: Dictionary = runtime_controller.execute_meta_action(action)
 	var result := (envelope.get("result", {}) as Dictionary).duplicate(true)
@@ -1557,25 +1589,19 @@ func _on_ground_loot_replace_requested(instance_id: String) -> void:
 	_replace_floor_from_ui(instance_id)
 
 
-func _show_event_panel(event_state: Dictionary) -> void:
+func _show_event_panel(event_state: Dictionary, presentation: Dictionary = {}) -> void:
 	if event_panel == null or _is_runtime_modal_open():
 		return
 	if not _require_world_interaction(&"event"):
 		return
-	event_title_label.text = "事件：%s" % _event_type_label(StringName(event_state.get("event_type", &"event")))
-	event_body_label.text = "选择处理方式。事件完成后不会重复结算奖励。"
-	event_body_label.text = RunSurfaceModel.event_modal_text(event_state)
-	for child in event_options_box.get_children():
-		child.queue_free()
-	var options: Array = event_state.get("options", [])
-	for option: Dictionary in options:
-		var option_id: StringName = StringName(option.get("id", &"leave"))
-		var option_label := RunSurfaceModel.event_option_label(StringName(event_state.get("event_type", &"event")), option)
-		var button := _add_menu_button(event_options_box, option_label, func() -> void: _select_event_option(option_id))
-		button.disabled = not bool(option.get("enabled", true))
-		button.tooltip_text = RunSurfaceModel.event_option_detail(option)
-		if run_surface != null:
-			run_surface.apply_legacy_button_style(button, &"primary" if not button.disabled else &"secondary")
+	var display: Dictionary = runtime_controller.guarded_event_display(event_state)
+	var event_presentation := presentation.duplicate(true)
+	event_presentation["room_pos"] = run_context.get_current_pos()
+	event_presentation["inventory_items"] = run_context.asset_ledger.get_items_by_location(&"inventory")
+	var event_type := String(display.get("event_type", ""))
+	if event_type.begins_with("z1_event_"):
+		event_presentation["event_icon_asset_id"] = StringName("z1.event." + event_type.trim_prefix("z1_event_"))
+	event_choice_panel.call("apply_event", display, event_presentation)
 	_apply_runtime_modal_layout(_current_layout_profile())
 	var pushed := _push_runtime_modal(
 		&"event",
@@ -1592,20 +1618,35 @@ func _cancel_event_modal(_reason: StringName = &"cancel") -> void:
 		_pop_runtime_modal(&"event")
 
 
-func _select_event_option(option_id: StringName) -> void:
+func _select_event_option(option_id: StringName, option_payload: Dictionary = {}) -> void:
 	if not _runtime_modal_is_top(&"event"):
 		return
 	if not _require_world_interaction(&"event"):
 		return
+	var submitted_room_key := run_context.cell_key(run_context.get_current_pos())
 	_pop_runtime_modal(&"event")
+	var command_payload := option_payload.duplicate(true)
+	command_payload["option_id"] = option_id
+	command_payload["source"] = "ui"
 	var result := _dispatch_command(
 		&"select_event_option",
-		{"option_id": option_id, "source": "ui"},
+		command_payload,
 		true,
 		false
 	)
 	var action_result: Dictionary = result.get("action_result", {})
 	_show_world_reward_feedback(result, action_result, &"event")
+	if run_context.cell_key(run_context.get_current_pos()) != submitted_room_key:
+		return
+	var next_event: Dictionary = run_context.get_status_snapshot().get("event_state", {})
+	if option_id != &"leave" and run_context.run_active and not bool(next_event.get("completed", true)) and (in_run_runtime == null or not in_run_runtime.has_active_combat()):
+		var last_attempt := action_result if not bool(action_result.get("ok", true)) else {}
+		_show_event_panel(next_event, {"attempt_result": last_attempt})
+		return
+	if bool(result.get("accepted", result.get("ok", false))) and room_runtime_view != null:
+		var popup = room_runtime_view.get("context_popup")
+		if is_instance_valid(popup):
+			popup.show_event_result(submitted_room_key, action_result)
 
 
 func _on_encounter_option_selected(_option_id: StringName, command_payload: Dictionary) -> void:
@@ -1994,7 +2035,9 @@ func _show_world_reward_feedback(result: Dictionary, reward: Dictionary, source:
 	var backpack_count := _reward_array_size(reward, "inventory_items") + _reward_array_size(reward, "equipped_items")
 	var feedback := result.duplicate(true)
 	if source == &"event" or source == &"encounter":
-		feedback["message"] = RunSurfaceModel.event_result_feedback_text(reward)
+		var event_type := StringName(reward.get("event_type", &""))
+		var message := EventChoicePanelScript.public_result_text(event_type, reward)
+		feedback["message"] = RunSurfaceModel.event_result_feedback_text(reward) if message.is_empty() else message
 	elif ground_count > 0:
 		feedback["message"] = "发现 %d 件物资，已落在附近地面。靠近后可查看并拾取。" % ground_count
 	elif backpack_count > 0:
@@ -2030,20 +2073,6 @@ func _debug_restart_run_from_ui() -> void:
 		player_controller.reset_local_position()
 
 
-func _event_type_label(event_type: StringName) -> String:
-	match event_type:
-		&"trader":
-			return "旅商"
-		&"dice":
-			return "骰局"
-		&"altar":
-			return "祭坛"
-		&"trap":
-			return "机关"
-		_:
-			return "异常事件"
-
-
 func _run_room_label(room_type: StringName) -> String:
 	match room_type:
 		&"Normal":
@@ -2075,17 +2104,22 @@ func _is_runtime_modal_open() -> bool:
 	)
 
 
-func _sync_player_input_enabled() -> void:
-	if player_controller == null:
-		return
-	var gameplay_input_enabled := (
-		screen_state == SCREEN_RUN
-		and run_context != null
-		and not _is_runtime_modal_open()
-		and (map_overlay_panel == null or not map_overlay_panel.visible)
-		and not run_context.has_blocking_tutorial_popup()
+func _gameplay_input_blocked() -> bool:
+	return (
+		screen_state != SCREEN_RUN
+		or not is_visible_in_tree()
+		or run_context == null
+		or not run_context.run_active
+		or persistence_controller.is_blocked()
+		or _is_runtime_modal_open()
+		or (map_overlay_panel != null and map_overlay_panel.visible)
+		or run_context.has_blocking_tutorial_popup()
 	)
-	player_controller.set_input_enabled(gameplay_input_enabled)
+
+
+func _sync_player_input_enabled() -> void:
+	if player_controller != null:
+		player_controller.set_input_enabled(not _gameplay_input_blocked())
 
 
 func _close_top_runtime_modal() -> bool:
@@ -2500,13 +2534,20 @@ func _dispatch_command(
 ) -> Dictionary:
 	if command_bus == null:
 		return {}
+	var previous_room := run_context.get_current_pos() if run_context != null else Vector2i(-1, -1)
 	var result: Dictionary = command_bus.dispatch(command_name, payload)
 	last_command_result = result.duplicate(true)
+	if bool(result.get("ok", false)) and run_context != null and run_context.get_current_pos() != previous_room and player_controller != null:
+		player_controller.local_velocity = Vector2.ZERO
+		player_controller.step_preview_remaining = 0.0
+		player_controller.set_local_position(runtime_controller.get_restored_local_position(player_controller.get_local_position()))
 	_apply_room_entry_result(result)
 	if show_feedback:
 		_show_command_feedback(result)
 	if release_focus:
 		get_viewport().gui_release_focus()
+	if persistence_controller != null:
+		persistence_controller.present_error()
 	return result
 
 
@@ -2714,7 +2755,8 @@ func _attempt_room_transition(direction: Vector2i) -> void:
 		player_controller.block_transition(direction)
 		return
 	var before := run_context.get_current_pos()
-	var result: Dictionary = command_bus.dispatch(&"attempt_room_transition", {"direction": direction})
+	var entry_position := player_controller.entry_local_position(direction)
+	var result: Dictionary = command_bus.dispatch(&"attempt_room_transition", {"direction": direction, "entry_position": entry_position})
 	last_command_result = result.duplicate(true)
 	_apply_room_entry_result(result)
 	var moved: bool = bool(result.get("ok", false)) and run_context.get_current_pos() != before
@@ -2722,16 +2764,11 @@ func _attempt_room_transition(direction: Vector2i) -> void:
 		_show_command_feedback(result)
 		pending_combat_flee_direction = Vector2i.ZERO
 		_reset_transition_rejection_debounce()
-		var entry_position := player_controller.place_from_entry(direction)
-		if in_run_runtime != null and in_run_runtime.has_active_combat():
-			var combat_entry_result: Dictionary = in_run_runtime.place_player_from_room_entry(
-				entry_position,
-				direction
-			)
-			if bool(combat_entry_result.get("applied", false)):
-				player_controller.set_local_position(Vector2(
-					combat_entry_result.get("position", entry_position)
-				))
+		player_controller.local_velocity = Vector2.ZERO
+		player_controller.step_preview_remaining = 0.0
+		player_controller.set_facing_vector(Vector2(direction))
+		player_controller.set_runtime_visual_state(&"idle")
+		player_controller.set_local_position(runtime_controller.get_restored_local_position(entry_position))
 	else:
 		_present_transition_rejection(direction, result)
 		player_controller.block_transition(direction)

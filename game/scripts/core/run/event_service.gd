@@ -7,15 +7,26 @@ const EVENT_WEIGHT_TOTAL := 100
 const RunBalanceCatalogScript := preload("res://scripts/core/run/run_balance_catalog.gd")
 const RunContentCatalogScript := preload("res://scripts/core/run/run_content_catalog.gd")
 const RunTextCatalogScript := preload("res://scripts/core/run/run_text_catalog.gd")
+const Z1EventCatalogScript := preload("res://scripts/core/content/z1_event_catalog.gd")
+const Z1EventRuntimeScript := preload("res://scripts/core/run/z1_event_runtime.gd")
 
 const DICE_BET := RunBalanceCatalogScript.DICE_BET
-const TRAP_POWER_REQ := RunBalanceCatalogScript.TRAP_POWER_REQUIREMENT
+const RESET_SPRING_ID := "sp_reset_spring"
+const VALVE_CORE_ID := "sp_depressurized_valve_core"
 
 
 static func get_event_type(context: RunContext, pos: Vector2i) -> StringName:
 	if context == null:
 		return &"trader"
 	var event_hash := pos.x * 73 + pos.y * 137 + context.seed_value * 31
+	var stored: Dictionary = context.z1_event_rooms.get(context.cell_key(pos), {})
+	if stored.has("event_type"):
+		return StringName(stored["event_type"])
+	if bool(context.z1_event_flags.get("enabled", true)):
+		var content_roll := posmod(event_hash, 29)
+		if content_roll < 25:
+			return StringName("z1_event_e%02d" % (content_roll + 1))
+		return EVENT_TYPES[content_roll - 25]
 	var roll := ((event_hash % EVENT_WEIGHT_TOTAL) + EVENT_WEIGHT_TOTAL) % EVENT_WEIGHT_TOTAL
 	var threshold := 0
 	for index in range(EVENT_TYPES.size()):
@@ -27,15 +38,54 @@ static func get_event_type(context: RunContext, pos: Vector2i) -> StringName:
 
 static func get_event_state(context: RunContext, pos: Vector2i) -> Dictionary:
 	var event_type := get_event_type(context, pos)
+	if context != null and Z1EventCatalogScript.number(event_type) > 0:
+		return Z1EventRuntimeScript.public_state(context, pos, event_type)
 	var completed := context != null and context.interacted_cells.has(context.cell_key(pos))
-	return {
+	var state := {
 		"event_type": event_type,
 		"completed": completed,
 		"options": get_event_options(context, pos, event_type, completed),
 	}
+	var stored: Dictionary = {} if context == null else context.z1_event_rooms.get(context.cell_key(pos), {})
+	var receipt: Dictionary = stored.get("last_result", {})
+	if not receipt.is_empty():
+		state["last_result"] = receipt.duplicate()
+	match event_type:
+		&"altar":
+			var total := RunBalanceCatalogScript.ALTAR_HP_COSTS.size()
+			state["altar_stage"] = total if completed else _altar_stage_index(context) + 1
+			state["altar_stage_total"] = total
+		&"dice":
+			if receipt.has("roll"):
+				state["dice_roll"] = receipt["roll"]
+		&"trap":
+			state["trap_threshold"] = trap_threshold(context, pos)
+			if receipt.has("trap_triggered"):
+				state["trap_triggered"] = receipt["trap_triggered"]
+	return state
+
+
+static func trap_threshold(context: RunContext, pos: Vector2i) -> int:
+	if context == null:
+		return RunBalanceCatalogScript.TRAP_BASE_POWER
+	var key := context.cell_key(pos)
+	var state: Dictionary = context.z1_event_rooms.get(key, {})
+	if state.has("trap_threshold"):
+		return int(state["trap_threshold"])
+	var adjacent_mines := 0 if context.truth_map == null else context.truth_map.get_adjacent_mine_count(pos)
+	var difficulty := StringName(context.run_start_config.get("difficulty", context.run_start_config.get("selected_difficulty", &"standard")))
+	var bounds := RunBalanceCatalogScript.trap_power_range(adjacent_mines, difficulty)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = ("trap:%d:%d:%d" % [context.seed_value, pos.x, pos.y]).hash()
+	var threshold := rng.randi_range(bounds.x, bounds.y)
+	state["trap_threshold"] = threshold
+	context.z1_event_rooms[key] = state
+	return threshold
 
 
 static func get_event_options(context: RunContext, pos: Vector2i, event_type: StringName, completed: bool) -> Array[Dictionary]:
+	if context != null and Z1EventCatalogScript.number(event_type) > 0:
+		return Z1EventRuntimeScript.options(context, pos, event_type)
 	if completed:
 		return [_public_option(
 			{"id": &"leave", "label": "Close", "enabled": true},
@@ -116,7 +166,7 @@ static func get_event_options(context: RunContext, pos: Vector2i, event_type: St
 			var hp_cost := RunBalanceCatalogScript.altar_hp_cost_for_stage(stage_index)
 			var black_coin_reward := RunBalanceCatalogScript.altar_black_coin_reward_for_stage(stage_index)
 			var stage_label := "Offer %d HP (stage %d/5)" % [hp_cost, stage_index + 1]
-			return [
+			var altar_options: Array[Dictionary] = [
 				_public_option(
 					{"id": &"offer_hp", "label": stage_label, "enabled": context != null and context.hp - hp_cost >= 1, "disabled_reason": "hp_must_remain_at_least_1"},
 					"献祭 %d 点生命" % hp_cost,
@@ -124,30 +174,29 @@ static func get_event_options(context: RunContext, pos: Vector2i, event_type: St
 					"本阶段获得 %d 黑币与祭坛遗物。" % black_coin_reward,
 					"献祭后生命必须至少保留 1 点。"
 				),
-				_public_option(
-					{"id": &"leave", "label": "Leave altar", "enabled": true},
-					"离开祭坛",
-					_cost(&"none", 0, "无需花费"),
-					"保留当前生命并继续探索。"
-				),
 			]
+			var discounted_hp := maxi(0, hp_cost - 5)
+			altar_options.append_array(_material_options(context, VALVE_CORE_ID, &"offer_with_valve", "用失压阀心献祭", _cost(&"hp", discounted_hp, "1 枚失压阀心和 %d 点生命" % discounted_hp), "本阶段获得 %d 黑币与祭坛遗物。" % black_coin_reward, context != null and context.hp > discounted_hp, "献祭后生命必须至少保留 1 点。"))
+			altar_options.append(_public_option({"id": &"leave", "label": "Leave altar", "enabled": true}, "离开祭坛", _cost(&"none", 0, "无需花费"), "保留当前生命并继续探索。"))
+			return altar_options
 		&"trap":
-			var can_disarm_safely := context != null and context.power >= TRAP_POWER_REQ
-			var trap_effect := "当前力量达到 %d，可安全解除并获得物资。" % TRAP_POWER_REQ if can_disarm_safely else "当前力量不足 %d，处理会承受 %d 点伤害、压力 +%d。" % [TRAP_POWER_REQ, RunBalanceCatalogScript.TRAP_FAILURE_DAMAGE, RunBalanceCatalogScript.TRAP_PRESSURE_DELTA]
-			return [
+			var threshold := trap_threshold(context, pos)
+			var can_disarm_safely := context != null and context.power >= threshold
+			var trap_effect := "当前战力达到 %d，可安全解除并获得物资。" % threshold if can_disarm_safely else "当前战力不足 %d，处理会承受 %d 点伤害、压力 +%d。" % [threshold, RunBalanceCatalogScript.TRAP_FAILURE_DAMAGE, RunBalanceCatalogScript.TRAP_PRESSURE_DELTA]
+			var trap_options: Array[Dictionary] = [
 				_public_option(
 					{"id": &"disarm", "label": "Try mechanism", "enabled": true},
-					"尝试解除机关",
+					"尝试解除机关（门槛 %d）" % threshold,
 					_cost(&"none", 0, "无需花费"),
 					trap_effect
 				),
-				_public_option(
-					{"id": &"leave", "label": "Leave mechanism", "enabled": true},
-					"离开机关",
-					_cost(&"none", 0, "无需花费"),
-					"保持机关现状并继续探索。"
-				),
 			]
+			var reduced_threshold := maxi(0, threshold - 3)
+			var can_use_spring := context != null and not can_disarm_safely and context.power >= reduced_threshold
+			var spring_disabled := "当前战力已达解除门槛。" if can_disarm_safely else "至少需要 %d 战力。" % reduced_threshold
+			trap_options.append_array(_material_options(context, RESET_SPRING_ID, &"disarm_with_spring", "用返校弹簧解除机关", _cost(&"item", 1, "1 枚返校弹簧"), "将战力门槛降至 %d，解除后获得物资。" % reduced_threshold, can_use_spring, spring_disabled))
+			trap_options.append(_public_option({"id": &"leave", "label": "Leave mechanism", "enabled": true}, "离开机关", _cost(&"none", 0, "无需花费"), "保持机关现状并继续探索。"))
+			return trap_options
 	return [_public_option(
 		{"id": &"leave", "label": "Leave event", "enabled": true},
 		"离开事件",
@@ -174,8 +223,27 @@ static func _public_option(base: Dictionary, player_title: String, player_cost: 
 	return option
 
 
+static func _material_options(context: RunContext, item_id: String, option_id: StringName, title: String, cost: Dictionary, effect: String, enabled: bool, disabled_reason: String) -> Array[Dictionary]:
+	var options: Array[Dictionary] = []
+	if context == null or context.asset_ledger == null:
+		return options
+	for item in context.asset_ledger.get_items_by_location(RunAssetLedger.LOCATION_INVENTORY):
+		if String(item.get("item_id", "")) == item_id:
+			options.append(_public_option({
+				"id": option_id, "label": title, "enabled": enabled,
+				"disabled_reason": "material_requirement_not_met",
+				"payload": {"instance_id": String(item.get("instance_id", ""))},
+			}, title, cost, effect, disabled_reason))
+	return options
+
+
 static func execute_default(context: RunContext, pos: Vector2i, fail_authority = null) -> Dictionary:
 	var event_type := get_event_type(context, pos)
+	if context != null and Z1EventCatalogScript.number(event_type) > 0:
+		for option in Z1EventRuntimeScript.options(context, pos, event_type):
+			if bool(option.get("enabled", false)) and StringName(option.get("id", &"leave")) != &"leave":
+				return execute_option(context, pos, StringName(option["id"]), fail_authority, option.get("payload", {}))
+		return execute_option(context, pos, &"leave", fail_authority)
 	match event_type:
 		&"trader":
 			return execute_option(context, pos, &"sell_best_item", fail_authority)
@@ -188,11 +256,13 @@ static func execute_default(context: RunContext, pos: Vector2i, fail_authority =
 	return execute_option(context, pos, &"leave", fail_authority)
 
 
-static func execute_option(context: RunContext, pos: Vector2i, option_id: StringName, fail_authority = null) -> Dictionary:
+static func execute_option(context: RunContext, pos: Vector2i, option_id: StringName, fail_authority = null, payload: Dictionary = {}) -> Dictionary:
 	if context == null:
 		return {"ok": false, "message": "No active run."}
 	var key := context.cell_key(pos)
 	var event_type := get_event_type(context, pos)
+	if Z1EventCatalogScript.number(event_type) > 0:
+		return Z1EventRuntimeScript.execute(context, pos, event_type, option_id, payload, fail_authority)
 	if context.interacted_cells.has(key):
 		context.event_state = get_event_state(context, pos)
 		context.last_message = RunTextCatalogScript.event_already_resolved()
@@ -221,8 +291,12 @@ static func execute_option(context: RunContext, pos: Vector2i, option_id: String
 		return leave_result
 	var option_available := false
 	var option_enabled := false
+	var instance_id := String(payload.get("instance_id", ""))
 	for option in get_event_options(context, pos, event_type, false):
 		if StringName(option.get("id", &"")) == option_id:
+			var required_id := String(option.get("payload", {}).get("instance_id", ""))
+			if not required_id.is_empty() and required_id != instance_id:
+				continue
 			option_available = true
 			option_enabled = bool(option.get("enabled", true))
 			break
@@ -242,6 +316,8 @@ static func execute_option(context: RunContext, pos: Vector2i, option_id: String
 		context.last_reward = blocked_result.duplicate(true)
 		return blocked_result
 
+	var hp_before := context.hp
+	var pressure_before := context.pressure
 	var result := {}
 	match event_type:
 		&"trader":
@@ -249,14 +325,16 @@ static func execute_option(context: RunContext, pos: Vector2i, option_id: String
 		&"dice":
 			result = _execute_dice(context, pos, option_id)
 		&"altar":
-			result = _execute_altar(context, option_id, fail_authority)
+			result = _execute_altar(context, option_id, fail_authority, instance_id)
 		&"trap":
-			result = _execute_trap(context, option_id, fail_authority)
+			result = _execute_trap(context, pos, option_id, fail_authority, instance_id)
 		_:
 			result = {"ok": false, "message": "Unknown event type."}
 
 	result["event_type"] = event_type
 	result["option_id"] = option_id
+	if bool(result.get("ok", false)):
+		context.z1_event_rooms.get_or_add(key, {})["last_result"] = _legacy_action_receipt(result, context.hp - hp_before, context.pressure - pressure_before)
 	if bool(result.get("completed", false)):
 		context.interacted_cells[key] = true
 		context.run_stats["events_completed"] = int(context.run_stats.get("events_completed", 0)) + 1
@@ -266,6 +344,33 @@ static func execute_option(context: RunContext, pos: Vector2i, option_id: String
 	context.last_reward = result.duplicate(true)
 	context.last_message = String(result.get("message", "Event resolved."))
 	return result
+
+
+static func _legacy_action_receipt(result: Dictionary, hp_delta: int, pressure_delta: int) -> Dictionary:
+	var receipt := {
+		"ok": true,
+		"completed": bool(result.get("completed", false)),
+		"event_type": result["event_type"],
+		"option_id": result["option_id"],
+	}
+	for field in ["roll", "altar_stage", "altar_stage_total", "black_coin_delta", "gold_coin_delta", "spend_black_coin", "trap_threshold"]:
+		if result.has(field):
+			receipt[field] = int(result[field])
+	if result.has("trap_triggered"):
+		receipt["trap_triggered"] = bool(result["trap_triggered"])
+	if result.has("hp_delta") or hp_delta != 0:
+		receipt["hp_delta"] = hp_delta
+	if result.has("pressure_delta") or pressure_delta != 0:
+		receipt["pressure_delta"] = pressure_delta
+	return receipt
+
+
+static func cage_state(context: RunContext, pos: Vector2i) -> Dictionary:
+	return Z1EventRuntimeScript.cage_state(context, pos)
+
+
+static func resolve_cage(context: RunContext, pos: Vector2i, won: bool) -> Dictionary:
+	return Z1EventRuntimeScript.resolve_cage(context, pos, won)
 
 
 static func _execute_trader(context: RunContext, option_id: StringName) -> Dictionary:
@@ -287,17 +392,16 @@ static func _execute_dice(context: RunContext, pos: Vector2i, option_id: StringN
 	return RunRuleService.execute_dice_bet(context, pos, DICE_BET)
 
 
-static func _execute_altar(context: RunContext, option_id: StringName, fail_authority = null) -> Dictionary:
-	if option_id != &"offer_hp":
+static func _execute_altar(context: RunContext, option_id: StringName, fail_authority = null, instance_id: String = "") -> Dictionary:
+	if option_id not in [&"offer_hp", &"offer_with_valve"]:
 		return {"ok": false, "message": "Unknown altar option."}
 	var stage_index := _altar_stage_index(context)
 	var hp_cost := RunBalanceCatalogScript.altar_hp_cost_for_stage(stage_index)
 	var black_coin_reward := RunBalanceCatalogScript.altar_black_coin_reward_for_stage(stage_index)
-	if context.hp - hp_cost < 1:
+	if option_id == &"offer_hp" and context.hp - hp_cost < 1:
 		return {"ok": false, "message": "Not enough HP.", "blocked_reason": "blocked_hp"}
-	context.run_stats["altar_stage"] = stage_index + 1
 	var completed := stage_index + 1 >= RunBalanceCatalogScript.ALTAR_HP_COSTS.size()
-	return RunRuleService.apply_event_rule_result(context, &"altar", {
+	var rule := {
 		"ok": true,
 		"completed": completed,
 		"event_type": &"altar",
@@ -314,18 +418,32 @@ static func _execute_altar(context: RunContext, option_id: StringName, fail_auth
 			"tags": ["buff", "event"],
 		}],
 		"message": RunTextCatalogScript.altar_stage_result(stage_index + 1, hp_cost, black_coin_reward, completed),
-	}, fail_authority)
+	}
+	var result: Dictionary
+	if option_id == &"offer_with_valve":
+		result = RunRuleService.apply_material_event_rule_result(context, &"altar", rule, instance_id, hp_cost, fail_authority)
+	else:
+		result = RunRuleService.apply_event_rule_result(context, &"altar", rule, fail_authority)
+	if bool(result.get("ok", false)):
+		context.run_stats["altar_stage"] = stage_index + 1
+	return result
 
 
-static func _execute_trap(context: RunContext, option_id: StringName, fail_authority = null) -> Dictionary:
-	if option_id != &"disarm":
+static func _execute_trap(context: RunContext, pos: Vector2i, option_id: StringName, fail_authority = null, instance_id: String = "") -> Dictionary:
+	if option_id not in [&"disarm", &"disarm_with_spring"]:
 		return {"ok": false, "message": "Unknown mechanism option."}
-	if context.power >= TRAP_POWER_REQ:
-		return RunRuleService.apply_event_rule_result(context, &"trap", {"ok": true, "completed": true, "event_type": &"trap", "black_coin_delta": 25, "pending_gold_delta": 25, "item_defs": RunContentCatalogScript.trap_cache(context), "message": RunTextCatalogScript.trap_success()}, fail_authority)
+	var threshold := trap_threshold(context, pos)
+	if option_id == &"disarm_with_spring" or context.power >= threshold:
+		var rule := {"ok": true, "completed": true, "event_type": &"trap", "trap_threshold": threshold, "trap_triggered": false, "black_coin_delta": 25, "pending_gold_delta": 25, "item_defs": RunContentCatalogScript.trap_cache(context), "message": RunTextCatalogScript.trap_success()}
+		if option_id == &"disarm_with_spring":
+			return RunRuleService.apply_material_event_rule_result(context, &"trap", rule, instance_id, threshold, fail_authority)
+		return RunRuleService.apply_event_rule_result(context, &"trap", rule, fail_authority)
 	return RunRuleService.apply_event_rule_result(context, &"trap", {
 		"ok": true,
 		"completed": true,
 		"event_type": &"trap",
+		"trap_threshold": threshold,
+		"trap_triggered": true,
 		"hp_delta": -RunBalanceCatalogScript.TRAP_FAILURE_DAMAGE,
 		"pressure_delta": RunBalanceCatalogScript.TRAP_PRESSURE_DELTA,
 		"message": RunTextCatalogScript.trap_failure(),

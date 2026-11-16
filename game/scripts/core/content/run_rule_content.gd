@@ -12,12 +12,12 @@ static func default_search_black_coin(context: RunContext, pos: Vector2i, adjace
 	return RunBalanceCatalogScript.search_black_coin(context, pos, adjacent_mines, is_chest)
 
 
-static func default_search_items(pos: Vector2i, adjacent_mines: int, is_chest: bool, black_coin: int) -> Array[Dictionary]:
-	return RunContentCatalogScript.search_items(pos, adjacent_mines, is_chest, black_coin)
+static func default_search_items(pos: Vector2i, adjacent_mines: int, is_chest: bool, black_coin: int, context: RunContext = null) -> Array[Dictionary]:
+	return RunContentCatalogScript.search_items(pos, adjacent_mines, is_chest, black_coin, context)
 
 
-static func monster_trophy(pos: Vector2i, reward_gold: int) -> Dictionary:
-	return RunContentCatalogScript.monster_trophy(pos, reward_gold)
+static func monster_trophy(pos: Vector2i, reward_gold: int, context: RunContext = null) -> Dictionary:
+	return RunContentCatalogScript.monster_trophy(pos, reward_gold, context)
 
 
 static func item_def(item_id: String, display_name: String, item_type: StringName, value: int, rarity: StringName, tags: Array) -> Dictionary:

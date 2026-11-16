@@ -24,7 +24,7 @@ const FALLBACK_LABELS := {
 	&"ui_accept": "确认",
 	&"ui_cancel": "返回",
 	&"cancel": "返回",
-	&"pause": "暂停",
+	&"pause": "菜单",
 	&"menu_shortcut_primary": "主入口快捷键",
 	&"menu_shortcut_secondary": "次入口快捷键",
 }

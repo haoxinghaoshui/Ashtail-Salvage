@@ -93,15 +93,22 @@ func load_json_result(path: String = M1_META_PROGRESS_PATH, default_data: Dictio
 		var missing_backup := _read_json_file(path + LAST_VALID_BACKUP_SUFFIX)
 		if bool(missing_backup.get("ok", false)):
 			var missing_backup_dict := _dictionary_from(missing_backup.get("data", {}))
+			if normalize_meta_progress and not z2_meta_error(missing_backup_dict).is_empty():
+				return _load_result(false, "unknown_meta_format", fallback, z2_meta_error(missing_backup_dict))
 			var missing_backup_schema := int(missing_backup_dict.get("schema_version", fallback.get("schema_version", 1)))
 			if missing_backup_schema <= int(fallback.get("schema_version", 1)):
 				var missing_recovered_data := _normalize_meta_progress(missing_backup_dict, fallback) if normalize_meta_progress else missing_backup_dict.duplicate(true)
 				return _recovered_load_result(missing_recovered_data, path + LAST_VALID_BACKUP_SUFFIX, "missing")
 			last_error = "future_schema:%d" % missing_backup_schema
 			return _load_result(false, "future_schema", fallback, last_error)
+		if bool(missing_backup.get("exists", false)):
+			last_error = str(missing_backup.get("error", "backup_invalid"))
+			return _load_result(false, "backup_invalid", fallback, last_error)
 		return _load_result(true, "missing", fallback, "")
 	if bool(primary.get("ok", false)):
 		var parsed_dict := _dictionary_from(primary.get("data", {}))
+		if normalize_meta_progress and not z2_meta_error(parsed_dict).is_empty():
+			return _load_result(false, "unknown_meta_format", fallback, z2_meta_error(parsed_dict))
 		var schema_version := int(parsed_dict.get("schema_version", fallback.get("schema_version", 1)))
 		if schema_version > int(fallback.get("schema_version", 1)):
 			last_error = "future_schema:%d" % schema_version
@@ -112,6 +119,8 @@ func load_json_result(path: String = M1_META_PROGRESS_PATH, default_data: Dictio
 	var backup := _read_json_file(backup_path)
 	if bool(backup.get("ok", false)):
 		var backup_dict := _dictionary_from(backup.get("data", {}))
+		if normalize_meta_progress and not z2_meta_error(backup_dict).is_empty():
+			return _load_result(false, "unknown_meta_format", fallback, z2_meta_error(backup_dict))
 		var backup_schema := int(backup_dict.get("schema_version", fallback.get("schema_version", 1)))
 		if backup_schema <= int(fallback.get("schema_version", 1)):
 			var recovered_data := _normalize_meta_progress(backup_dict, fallback) if normalize_meta_progress else backup_dict.duplicate(true)
@@ -134,7 +143,12 @@ func save_json(data: Dictionary, path: String = M1_META_PROGRESS_PATH, normalize
 		last_error = "open_failed:%s" % FileAccess.get_open_error()
 		return false
 	var output := _normalize_meta_progress(data, default_meta_progress()) if normalize_meta_progress else data.duplicate(true)
-	file.store_string(JSON.stringify(output, "\t"))
+	if output.has("warehouse_items") and not z2_meta_error(output).is_empty():
+		last_error = z2_meta_error(output)
+		file.close()
+		_remove_file_if_exists(temp_path)
+		return false
+	file.store_string(JSON.stringify(output, "\t", true, true))
 	file.flush()
 	var write_error := file.get_error()
 	file.close()
@@ -159,6 +173,11 @@ func save_json(data: Dictionary, path: String = M1_META_PROGRESS_PATH, normalize
 			last_error = "future_schema_write_blocked:%d" % protected_schema
 			_remove_file_if_exists(temp_path)
 			return false
+		if protected_data.has("warehouse_items") and protected_data.has("ruleset_id"):
+			if not z2_meta_error(protected_data).is_empty() or output.get("ruleset_id", "") != protected_data.get("ruleset_id", ""):
+				last_error = "ruleset_write_blocked"
+				_remove_file_if_exists(temp_path)
+				return false
 
 	var previous_location := ""
 	if FileAccess.file_exists(path):
@@ -194,6 +213,101 @@ func save_json(data: Dictionary, path: String = M1_META_PROGRESS_PATH, normalize
 
 func clear(path: String = M1_META_PROGRESS_PATH) -> bool:
 	return save_json(default_meta_progress(), path)
+
+
+func remove_json(path: String) -> bool:
+	last_error = ""
+	for suffix in ["", ATOMIC_TEMP_SUFFIX, LAST_VALID_BACKUP_SUFFIX, CORRUPT_RECOVERY_SUFFIX]:
+		var target := path + str(suffix)
+		if FileAccess.file_exists(target):
+			var error := DirAccess.remove_absolute(ProjectSettings.globalize_path(target))
+			if error != OK:
+				last_error = "cleanup_failed:%s" % error
+				return false
+	return true
+
+
+static func is_json_safe(value: Variant, depth: int = 0) -> bool:
+	if depth > 128:
+		return false
+	match typeof(value):
+		TYPE_NIL, TYPE_BOOL, TYPE_STRING:
+			return true
+		TYPE_INT:
+			return value >= -9007199254740991 and value <= 9007199254740991
+		TYPE_FLOAT:
+			return is_finite(value)
+		TYPE_ARRAY:
+			for item in value:
+				if not is_json_safe(item, depth + 1):
+					return false
+			return true
+		TYPE_DICTIONARY:
+			for key in value:
+				if not key is String or not is_json_safe(value[key], depth + 1):
+					return false
+			return true
+	return false
+
+
+static func is_nonnegative_integer(value: Variant) -> bool:
+	return (value is int or value is float) and is_finite(float(value)) and float(value) >= 0 and float(value) <= 9007199254740991 and float(value) == floor(float(value))
+
+
+static func json_fingerprint(value: Variant) -> String:
+	if not is_json_safe(value):
+		return ""
+	# JSON parses all numbers as floats. Canonicalize that representation before
+	# hashing so integer inputs and their disk-loaded equivalents bind identically.
+	var decoded: Variant = JSON.parse_string(JSON.stringify(value, "", true, true))
+	return JSON.stringify(decoded, "", true, true).sha256_text()
+
+
+static func z2_meta_error(meta: Dictionary) -> String:
+	if not meta.has("ruleset_id"):
+		return "missing_ruleset" if meta.has("admission") or meta.has("run_receipts") else ""
+	if meta.get("ruleset_id") != "z2":
+		return "unknown_ruleset"
+	if meta.get("schema_version") != 5:
+		return "unknown_meta_schema"
+	if meta.has("terminal_storage_version") and meta.terminal_storage_version != 1:
+		return "unknown_terminal_storage_version"
+	for key in ["profile_id", "content_version"]:
+		if not meta.get(key) is String or str(meta[key]).is_empty():
+			return "invalid_meta_" + key
+	if not meta.get("admission") is Dictionary or not meta.get("run_receipts") is Dictionary:
+		return "invalid_run_persistence"
+	var admission: Dictionary = meta.admission
+	if not admission.is_empty():
+		if admission.get("schema_version") != 1 or admission.get("phase", "") not in ["prepared", "active"]:
+			return "unknown_admission_format"
+		for key in ["profile_id", "ruleset_id", "content_version"]:
+			if admission.get(key) != meta.get(key):
+				return "admission_reference_mismatch"
+		if not admission.get("run_id") is String or str(admission.run_id).is_empty():
+			return "invalid_admission_run"
+		if not admission.get("reserved_instance_ids") is Array or not admission.get("initial_snapshot") is Dictionary:
+			return "invalid_admission_payload"
+		if admission.get("snapshot_schema_version") != 1 or not admission.get("initial_snapshot_hash") is String:
+			return "invalid_admission_binding"
+		if not admission.get("admission_hash") is String or str(admission.admission_hash).length() != 64:
+			return "invalid_admission_hash"
+		if admission.phase == "active" and admission.get("initial_checkpoint_hash") != admission.get("initial_snapshot_hash"):
+			return "invalid_active_binding"
+	for run_id in meta.run_receipts:
+		var receipt: Variant = meta.run_receipts[run_id]
+		if not receipt is Dictionary or receipt.get("schema_version") != 1:
+			return "unknown_run_receipt_format"
+		if receipt.get("profile_id") != meta.profile_id or receipt.get("run_id") != run_id:
+			return "invalid_run_receipt_reference"
+		if not receipt.get("fingerprint") is String or str(receipt.fingerprint).length() != 64 or not receipt.get("result") is Dictionary:
+			return "invalid_run_receipt_payload"
+		if receipt.get("fingerprint_encoding", "json") not in ["json", "run_state_snapshot_v1"]:
+			return "unknown_run_receipt_fingerprint"
+	var cleanup_id: Variant = meta.get("checkpoint_cleanup_run_id", "")
+	if not cleanup_id is String or (cleanup_id != "" and not meta.run_receipts.has(cleanup_id)):
+		return "invalid_checkpoint_cleanup_reference"
+	return ""
 
 
 func _ensure_parent_dir(path: String) -> void:
@@ -259,6 +373,9 @@ func _normalize_meta_progress(data: Dictionary, fallback: Dictionary) -> Diction
 	result["schema_version"] = maxi(int(data.get("schema_version", 1)), int(result.get("schema_version", 5)))
 	result["gold"] = maxi(0, int(data.get("gold", result.get("gold", 0))))
 	result["warehouse_items"] = _array_from(data.get("warehouse_items", result.get("warehouse_items", [])))
+	for index in range(result["warehouse_items"].size()):
+		if result["warehouse_items"][index] is Dictionary:
+			result["warehouse_items"][index] = M3ItemCatalogScript.normalize_instance_units(result["warehouse_items"][index])
 	var starter_version := maxi(0, int(data.get("starter_grant_version", 0)))
 	if starter_version < 1:
 		var warehouse_items: Array = result.get("warehouse_items", [])
@@ -278,7 +395,6 @@ func _normalize_meta_progress(data: Dictionary, fallback: Dictionary) -> Diction
 	result["talent_flags"] = _array_from(data.get("talent_flags", result.get("talent_flags", [])))
 	result["talent_budget_granted"] = maxi(0, int(data.get("talent_budget_granted", result.get("talent_budget_granted", 0))))
 	result["talent_catalog_version"] = maxi(0, int(data.get("talent_catalog_version", result.get("talent_catalog_version", 0))))
-	M7TalentCatalogScript.sync_progress(result, not data.has("talent_budget_granted"))
 	result["run_count"] = maxi(0, int(data.get("run_count", result.get("run_count", 0))))
 	result["extract_count"] = maxi(0, int(data.get("extract_count", result.get("extract_count", 0))))
 	result["fail_count"] = maxi(0, int(data.get("fail_count", result.get("fail_count", 0))))
@@ -287,9 +403,15 @@ func _normalize_meta_progress(data: Dictionary, fallback: Dictionary) -> Diction
 	result["debug_commands"] = _array_from(data.get("debug_commands", result.get("debug_commands", [])))
 	result["committed_result_ids"] = _array_from(data.get("committed_result_ids", result.get("committed_result_ids", [])))
 	result["meta_action_receipts"] = _dictionary_from(data.get("meta_action_receipts", result.get("meta_action_receipts", {})))
+	# Z2 is explicit opt-in; do not grant a ruleset or migrate legacy profiles.
+	for key in ["ruleset_id", "profile_id", "content_version", "admission", "run_receipts", "checkpoint_cleanup_run_id", "terminal_storage_version"]:
+		if data.has(key):
+			var value: Variant = data[key]
+			result[key] = value.duplicate(true) if value is Array or value is Dictionary else value
 	for key in M7ProgressionServiceScript.default_meta_fields().keys():
 		if data.has(key):
 			result[key] = data[key]
+	result["career_progression_version"] = int(data.get("career_progression_version", 0))
 	return M7ProgressionServiceScript.normalize_meta(result)
 
 

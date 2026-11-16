@@ -1,0 +1,123 @@
+{
+  "status": "PASS",
+  "project": "Ashtail Salvage",
+  "engine": "Godot 4.6.3",
+  "scope": "A1 identity-only import; original T00-T04 new-runner set",
+  "checks": [
+    {
+      "runner": "import",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 20374,
+      "markers": []
+    },
+    {
+      "runner": "z2_action_transaction_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 12476,
+      "markers": [
+        "Z2_ACTION_TRANSACTION=PASS checks=164\r"
+      ]
+    },
+    {
+      "runner": "z2_capacity_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 1130,
+      "markers": [
+        "Z2_CAPACITY=PASS checks=106 failures=0\r"
+      ]
+    },
+    {
+      "runner": "z2_capacity_ui_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 4001,
+      "markers": [
+        "Z2_CAPACITY_UI=PASS checks=65 failures=0\r"
+      ]
+    },
+    {
+      "runner": "z2_combat_transaction_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 31610,
+      "markers": [
+        "Z2_COMBAT_TRANSACTION=PASS\r"
+      ]
+    },
+    {
+      "runner": "z2_resume_scene_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 42026,
+      "markers": [
+        "Z2_RESUME_SCENE_CLOSE=PASS:os\r",
+        "Z2_RESUME_SCENE_CLOSE=PASS:shell\r",
+        "Z2_RESUME_SCENE_CLOSE=PASS:normal\r",
+        "Z2_RESUME_SCENE_CLOSE=PASS:terminal\r",
+        "Z2_RESUME_SCENE=PASS\r"
+      ]
+    },
+    {
+      "runner": "z2_run_checkpoint_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 2598,
+      "markers": [
+        "Z2_RUN_CHECKPOINT=PASS\r"
+      ]
+    },
+    {
+      "runner": "z2_runtime_persistence_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 7595,
+      "markers": [
+        "Z2_RUNTIME_PERSISTENCE=PASS checks=229\r"
+      ]
+    },
+    {
+      "runner": "z2_status_lifecycle_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 1764,
+      "markers": [
+        "Z2_STATUS_LIFECYCLE=PASS checks=31 failures=0\r"
+      ]
+    },
+    {
+      "runner": "z2_terminal_int64_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 3248,
+      "markers": [
+        "Z2_TERMINAL_INT64=PASS\r"
+      ]
+    },
+    {
+      "runner": "z2_vitals_integration_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 1300,
+      "markers": [
+        "Z2_VITALS_INTEGRATION=PASS checks=64 failures=0\r"
+      ]
+    },
+    {
+      "runner": "z2_vitals_status_runner",
+      "status": "PASS",
+      "exit_code": 0,
+      "duration_ms": 655,
+      "markers": [
+        "Z2_VITALS_STATUS=PASS checks=170 failures=0\r"
+      ]
+    }
+  ],
+  "validator_note": "Original marker matcher omitted digits and falsely rejected INT64; original process exit0, 46 checks and diagnostics revalidated without changing runtime.",
+  "game_tree": "1518638aef645c771345681204e8fd0308432462",
+  "source_full_runner_count": 126,
+  "current_import_runner_count": 11,
+  "identity_changes_only": true
+}

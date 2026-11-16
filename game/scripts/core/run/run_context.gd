@@ -27,7 +27,12 @@ var move_requires_revealed: bool = false
 var reveal_on_move: bool = true
 var hp: int = 100
 var max_hp: int = 100
-var power: int = 5
+var max_hp_equipment_floor_debt: int = 0
+var shield: int = 0
+var vitals_counters: Dictionary = {}
+var vitals_modifiers: Dictionary = {}
+var temporary_statuses: Array = []
+var power: int = RunBalanceCatalog.DEFAULT_POWER
 var mine_immunity: int = 0
 var mine_dmg_reduce: int = 0
 var protocol_pressure_reduce: int = 0
@@ -54,6 +59,9 @@ var current_adjacent_mines: int = 0
 var last_message: String = ""
 var last_reward: Dictionary = {}
 var event_state: Dictionary = {}
+var z1_event_rooms: Dictionary = {}
+var z1_event_flags: Dictionary = {}
+var z1_event_intel: Dictionary = {}
 var enemy_state: Dictionary = {}
 var outcome: String = "Idle"
 var run_active: bool = false
@@ -108,7 +116,12 @@ func _reset_data() -> void:
 	reveal_on_move = true
 	hp = 100
 	max_hp = 100
-	power = 5
+	max_hp_equipment_floor_debt = 0
+	shield = 0
+	vitals_counters = {}
+	vitals_modifiers = {}
+	temporary_statuses = []
+	power = RunBalanceCatalog.DEFAULT_POWER
 	mine_immunity = 0
 	mine_dmg_reduce = 0
 	protocol_pressure_reduce = 0
@@ -135,6 +148,9 @@ func _reset_data() -> void:
 	last_message = ""
 	last_reward = {}
 	event_state.clear()
+	z1_event_rooms.clear()
+	z1_event_flags.clear()
+	z1_event_intel.clear()
 	enemy_state.clear()
 	outcome = "Idle"
 	run_active = false
@@ -178,6 +194,9 @@ func _initialize_run(config: Dictionary) -> void:
 	var run_nonce := Crypto.new().generate_random_bytes(16).hex_encode()
 	run_id = StringName("%s_%d_%d_%s" % [run_template_id, Time.get_ticks_msec(), run_instance_sequence, run_nonce])
 	mode = StringName(config.get("mode", &"standard"))
+	var start_config: Dictionary = config.get("run_start_config", {})
+	var tutorial := mode == &"tutorial" or bool(config.get("tutorial_map", false)) or bool(start_config.get("tutorial_map", false))
+	z1_event_flags["enabled"] = not tutorial and bool(config.get("z1_events_enabled", true))
 	seed_value = int(config.get("seed", 1001))
 	run_event_log = RunEventLog.new()
 	transaction_log = RunTransactionLog.new()
@@ -209,7 +228,7 @@ func _initialize_run(config: Dictionary) -> void:
 	current_pos = player_pos
 	max_hp = int(config.get("max_hp", 100))
 	hp = max_hp
-	power = int(config.get("power", 5))
+	power = int(config.get("power", RunBalanceCatalog.DEFAULT_POWER))
 	mine_immunity = int(config.get("mine_immunity", 0))
 	mine_dmg_reduce = int(config.get("mine_dmg_reduce", 0))
 	protocol_pressure_reduce = int(config.get("protocol_pressure_reduce", 0))

@@ -5,6 +5,7 @@ const ResultPresentationModelScript := preload("res://scripts/ui/result/result_p
 const Art09ManifestAssetMappingScript := preload("res://scripts/presentation/art09_manifest_asset_mapping.gd")
 const Art10UISkinKitScript := preload("res://scripts/presentation/art10_ui_skin_kit.gd")
 const Art21UIPlacementContractScript := preload("res://scripts/presentation/art21_ui_placement_contract.gd")
+const Art24ItemVisualCatalogScript := preload("res://scripts/presentation/art24/art24_item_visual_catalog.gd")
 const UILayerContractScript := preload("res://scripts/ui/shell/ui_layer_contract.gd")
 const LEGACY_RESULT_VALIDATION_MARKERS := ["Outcome:", "Mode:", "Moves:", "Mine Hits:", "Monsters Defeated:", "Failure Pending Lost:", "Failure Salvaged Items:", "Carried Items:", "Carried Value:", "Safe Gold:", "Final HP:", "Final Pressure:", "Black Coin:", "Gold Coin:", "Warehouse Lite Items:", "Room Floor Lost:", "Settlement Log Entries:"]
 const RESULT_BANNER_ASSET_BY_STATE := {
@@ -24,6 +25,7 @@ const RESULT_TITLE_COLOR_BY_STATE := {
 
 signal return_main_requested
 signal return_deploy_requested
+signal career_follow_up_requested(notification: Dictionary)
 signal failure_salvage_confirmed(selected_instance_ids: Array)
 signal retry_save_requested
 signal discard_unsaved_result_requested
@@ -39,7 +41,9 @@ var result_metric_value_labels: Array[Label] = []
 var result_items_scroll: ScrollContainer
 var result_item_sections_box: VBoxContainer
 var persistence_label: Label
+var career_map_label: Label
 var return_deploy_button: Button
+var career_follow_up_button: Button
 var return_main_button: Button
 var retry_save_button: Button
 var discard_unsaved_button: Button
@@ -126,6 +130,10 @@ func update_persistence_state(snapshot: Dictionary) -> void:
 	for key in [
 		"persistence_state",
 		"persistence_text",
+		"career_xp_text",
+		"career_map_text",
+		"progression_tooltip",
+		"career_follow_up",
 		"normal_exit_allowed",
 		"retry_save_allowed",
 		"discard_unsaved_allowed",
@@ -133,6 +141,8 @@ func update_persistence_state(snapshot: Dictionary) -> void:
 	]:
 		current_result_model[key] = refreshed_model.get(key)
 	_configure_persistence_actions(current_result_model)
+	if not current_layout_profile.is_empty():
+		apply_layout_profile(current_layout_profile)
 
 
 func hide_result() -> void:
@@ -289,8 +299,19 @@ func _ensure_result_items() -> void:
 	persistence_label.add_theme_color_override("font_color", PresentationTheme.text_color())
 	persistence_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	persistence_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	persistence_label.mouse_filter = Control.MOUSE_FILTER_PASS
 	persistence_label.z_index = 4
 	add_child(persistence_label)
+	career_map_label = Label.new()
+	career_map_label.name = "ResultCareerMapStatus"
+	_set_scaled_font_size(career_map_label, 13)
+	career_map_label.add_theme_color_override("font_color", Color(0.96, 0.78, 0.45))
+	career_map_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	career_map_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	career_map_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	career_map_label.z_index = 4
+	career_map_label.hide()
+	add_child(career_map_label)
 
 
 func _configure_result_item_sections(model: Dictionary) -> void:
@@ -369,6 +390,15 @@ func _build_result_item_row(item_model: Dictionary) -> Control:
 	rarity_marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rarity_marker.set_meta("rarity_border_token", rarity.get("border_token", &"rarity.border.unknown"))
 	line.add_child(rarity_marker)
+	var item_icon := TextureRect.new()
+	item_icon.name = "ResultItemIcon"
+	item_icon.texture = Art24ItemVisualCatalogScript.texture_for(item_model)
+	item_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	item_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	item_icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	item_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_set_scaled_minimum_size(item_icon, Vector2(24, 24))
+	line.add_child(item_icon)
 	var name_label := Label.new()
 	name_label.text = String(item_model.get("display_name", "未命名物资"))
 	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -425,6 +455,19 @@ func _ensure_actions() -> void:
 	)
 	actions.add_child(return_deploy_button)
 
+	career_follow_up_button = Button.new()
+	career_follow_up_button.name = "ResultCareerFollowUpButton"
+	career_follow_up_button.hide()
+	_set_scaled_minimum_size(career_follow_up_button, Vector2(140, 40))
+	career_follow_up_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_apply_art21r2_modal_button(career_follow_up_button, &"art21r2.modal.button.secondary", &"secondary", 13)
+	career_follow_up_button.pressed.connect(func() -> void:
+		var notification: Dictionary = current_result_model.get("career_follow_up", {})
+		if normal_exit_allowed() and not notification.is_empty() and career_follow_up_button.is_visible_in_tree():
+			career_follow_up_requested.emit(notification.duplicate(true))
+	)
+	actions.add_child(career_follow_up_button)
+
 	return_main_button = Button.new()
 	return_main_button.name = "ResultReturnMainButton"
 	return_main_button.text = "返回菜单"
@@ -473,14 +516,27 @@ func _configure_persistence_actions(model: Dictionary) -> void:
 	var can_retry := bool(model.get("retry_save_allowed", false))
 	var can_discard := bool(model.get("discard_unsaved_allowed", false))
 	if persistence_label != null:
-		persistence_label.text = String(model.get("persistence_text", "本次结果尚未保存。"))
+		var xp_text := String(model.get("career_xp_text", ""))
+		persistence_label.text = String(model.get("persistence_text", "本次结果尚未保存。")) if xp_text.is_empty() else xp_text
+		persistence_label.tooltip_text = String(model.get("progression_tooltip", ""))
+		persistence_label.add_theme_color_override(
+			"font_color",
+			PresentationTheme.text_color() if xp_text.is_empty() else PresentationTheme.color_for_key(&"ui.accent")
+		)
 		persistence_label.visible = not awaiting
+		career_map_label.text = String(model.get("career_map_text", ""))
+		career_map_label.tooltip_text = persistence_label.tooltip_text
+		career_map_label.visible = not awaiting and not career_map_label.text.is_empty()
 	if return_deploy_button != null:
 		return_deploy_button.visible = can_exit and not awaiting
 		return_deploy_button.disabled = not can_exit
 	if return_main_button != null:
 		return_main_button.visible = can_exit and not awaiting
 		return_main_button.disabled = not can_exit
+	var notification: Dictionary = model.get("career_follow_up", {})
+	career_follow_up_button.visible = can_exit and not awaiting and not notification.is_empty()
+	career_follow_up_button.disabled = not career_follow_up_button.visible
+	career_follow_up_button.text = String(notification.get("label", ""))
 	if retry_save_button != null:
 		retry_save_button.visible = can_retry and not awaiting
 		retry_save_button.disabled = not can_retry
@@ -823,6 +879,13 @@ func apply_layout_profile(profile: Dictionary) -> void:
 	var metrics_height := _scaled_metric(64.0)
 	var items_top := metrics_top + metrics_height + section_gap
 	var persistence_height := _scaled_metric(32.0)
+	var map_height := 0.0
+	if persistence_label != null:
+		persistence_label.size.x = rect.size.x - horizontal_inset * 2.0
+		if career_map_label.visible:
+			career_map_label.size.x = persistence_label.size.x
+			map_height = career_map_label.get_minimum_size().y
+		persistence_height = maxf(persistence_height, persistence_label.get_minimum_size().y + map_height)
 	var action_height := _scaled_metric(48.0)
 	var persistence_top := 0.0
 	var action_strip_top := 0.0
@@ -847,7 +910,11 @@ func apply_layout_profile(profile: Dictionary) -> void:
 		))
 	if persistence_label != null:
 		persistence_label.visible = not awaiting_salvage
-		_set_absolute_rect(persistence_label, Rect2(Vector2(rect.position.x + horizontal_inset, persistence_top), Vector2(rect.size.x - horizontal_inset * 2.0, persistence_height)))
+		var persistence_width := rect.size.x - horizontal_inset * 2.0
+		var status_height := persistence_height - map_height
+		_set_absolute_rect(persistence_label, Rect2(Vector2(rect.position.x + horizontal_inset, persistence_top), Vector2(persistence_width, status_height)))
+		if map_height > 0.0:
+			_set_absolute_rect(career_map_label, Rect2(Vector2(rect.position.x + horizontal_inset, persistence_top + status_height), Vector2(persistence_width, map_height)))
 	if result_actions_art != null:
 		result_actions_art.visible = false
 	var actions := get_node_or_null("ResultActions") as HBoxContainer

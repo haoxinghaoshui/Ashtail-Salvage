@@ -123,6 +123,14 @@ func _run() -> void:
 		"Back restored controller focus"
 	)
 
+	var first_history_card := str((shell.get("current_content_cards") as Array)[0].get("id", ""))
+	_expect(bool(shell.open_notification({"module_id": &"profile", "secondary_id": &"history", "card_id": first_history_card}).get("ok", false)), "could not route to a card above the retained scroll")
+	for _index in range(4):
+		await process_frame
+	var first_history_button: Control = (shell.get("long_term_card_buttons") as Array)[0]
+	var list_view := shell.get("content_list_scroll") as ScrollContainer
+	_expect(_rect_encloses(list_view.get_global_rect(), first_history_button.get_global_rect()), "retained scroll hid the exact notification card")
+
 	var actions_before_missing := meta_actions.size()
 	var missing_result := shell.open_notification({
 		"module_id": &"codex",
@@ -133,6 +141,17 @@ func _run() -> void:
 	_expect(StringName(missing_result.get("status", &"")) == &"notification_target_unavailable", "missing notification target did not fail closed")
 	_expect(meta_actions.size() == actions_before_missing, "missing notification target was acknowledged as read")
 	_expect((shell.get("content_record_state_label") as Label).text.contains("目标条目当前不可用"), "missing target did not explain the navigation blocker")
+
+	shell.set_page_active(true)
+	shell.set_reduced_motion_enabled(false)
+	await process_frame
+	shell.show_module(&"profile")
+	_expect(bool(shell.get("switch_running")), "animated module switch did not start")
+	_expect(bool(shell.open_notification(codex_route).get("ok", false)), "notification could not interrupt the module switch")
+	var notification_focus := root.gui_get_focus_owner()
+	_expect(is_instance_valid(notification_focus), "notification did not focus its card")
+	await create_timer(0.75).timeout
+	_expect(is_instance_valid(notification_focus) and root.gui_get_focus_owner() == notification_focus, "interrupted module switch rebuilt the notification card and lost focus")
 
 	host.queue_free()
 	await host.tree_exited

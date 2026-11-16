@@ -68,12 +68,7 @@ func _boot_main_scene(prefix: String) -> bool:
 	_require(run_scene != null, "%s branch is missing production RunScene" % prefix)
 	if run_scene == null:
 		return false
-	var adapter = MetaProgressAdapterScript.new()
-	var save_path := "%s/%s_meta_%d.json" % [evidence_dir, prefix, Time.get_ticks_usec()]
-	adapter.set_active_profile_path(save_path, "i3_production_%s" % prefix)
-	run_scene.get("runtime_controller").bind_meta_progress_adapter(adapter)
-	run_scene.set("meta_progress_adapter", adapter)
-	return true
+	return _configure_isolated_z2_profile(prefix)
 
 
 func _exercise_descend_transition() -> void:

@@ -345,7 +345,7 @@ func build() -> void:
 	_add_action_button(&"map", "地图", func() -> void: map_requested.emit(&"surface_button"))
 	_add_action_button(&"combat", "攻击", func() -> void: combat_requested.emit())
 	_add_action_button(&"extract", "撤离", func() -> void: extract_requested.emit())
-	_add_action_button(&"pause", "暂停", func() -> void: pause_requested.emit())
+	_add_action_button(&"pause", "菜单", func() -> void: pause_requested.emit())
 
 	hud = HUDScene.instantiate() as Hud
 	hud.name = "RunSurfaceHUD"
@@ -374,7 +374,7 @@ func apply_surface_model(model: Dictionary) -> void:
 	scanner_legend_label.text = _resource_lines(String(model.get("resource_summary", "")))
 	scanner_detail_label.text = "作业包  %s 展开" % SemanticActionHintScript.current_binding_label(&"open_inventory")
 	_refresh_backpack_strip(model.get("backpack_items", []))
-	backpack_capacity_label.text = "负重 %s / %s" % [model.get("backpack_used", 0), model.get("backpack_capacity", 0)]
+	backpack_capacity_label.text = "共享 %s/%s · 战利品 %s/%s" % [model.get("equipment_used", 0), model.get("equipment_capacity", 100), model.get("backpack_used", 0), model.get("backpack_capacity", 0)]
 	scanner_summary_label.text = "%d × %d · 展开详情" % [current_map_dimensions.x, current_map_dimensions.y] if current_map_dimensions.x > 0 and current_map_dimensions.y > 0 else "地图尚未公开"
 	room_title_label.text = ""
 	room_body_label.text = ""
@@ -1545,7 +1545,7 @@ func _default_action_hint_text() -> String:
 		{"action_id": &"open_ground_loot", "label": "拾取"},
 		{"action_id": &"open_map", "label": "地图"},
 		{"action_id": &"attack", "label": "攻击"},
-		{"action_id": &"pause", "label": "暂停"},
+		{"action_id": &"pause", "label": "菜单"},
 	]:
 		var key_label := SemanticActionHintScript.current_binding_label(StringName(fixture["action_id"]))
 		parts.append(
@@ -1571,7 +1571,7 @@ func _short_action_label(action_id: StringName, fallback: String) -> String:
 		&"extract":
 			return "撤离"
 		&"pause":
-			return "暂停"
+			return "菜单"
 		_:
 			return fallback
 

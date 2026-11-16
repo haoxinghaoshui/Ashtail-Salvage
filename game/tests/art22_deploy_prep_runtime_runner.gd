@@ -45,6 +45,8 @@ func _run() -> void:
 	await _check_ui_scale_contract(shell)
 	_check_player_tabs(shell)
 	_check_map_same_page_contract(shell)
+	shell.call("apply_snapshot", _representative_snapshot(false))
+	await _frames(5)
 	await _check_map_selection_contract(shell)
 	_check_motion_contract(shell)
 	_check_collapse_contract(shell)
@@ -232,7 +234,7 @@ func _check_map_same_page_contract(shell: Control) -> void:
 	_check(tutorial_ids == ["tutorial_5x5"], "Tutorial map must be an additional exact tutorial_5x5 entry")
 	var snapshot := map_view.call("projection_snapshot") as Dictionary
 	_check(int(snapshot.get("scale_count", 0)) == 4, "Map view did not build three standard scale controls plus tutorial 5x5")
-	_check(int(snapshot.get("difficulty_count", 0)) == 2, "Default 7x7 scale must expose two difficulties")
+	_check(int(snapshot.get("difficulty_count", 0)) == 1, "Default tutorial scale must expose one difficulty")
 	var scale_buttons := map_view.get("scale_buttons") as Dictionary
 	var standard_scale_buttons := scale_buttons.duplicate()
 	standard_scale_buttons.erase(&"5x5")

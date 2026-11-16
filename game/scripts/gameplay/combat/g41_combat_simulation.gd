@@ -29,6 +29,7 @@ const PLAYER_ATTACK_BUFFER_SECONDS := 0.16
 const PLAYER_HURT_SECONDS := 0.12
 const ENEMY_HURT_SECONDS := 0.12
 const PROJECTILE_SPEED := 0.80
+const RETURN_PROJECTILE_MAX_DISTANCE := 0.42
 # Presentation previously rendered projectiles at roughly a five-pixel radius
 # and lasers at roughly a four-pixel half-width on the 560 px room plate while
 # retaining the much larger UE prototype collision values. Keep the normalized
@@ -41,6 +42,16 @@ const MELEE_NAVIGATION_MARGIN := 0.012
 const MELEE_WAYPOINT_REACHED_DISTANCE := 0.010
 const ATTACK_VISIBILITY_SEGMENTS := 32
 const ARENA_CONTRACT_ID := &"g41.combat_arena.monster_room.v1"
+const TRANSACTION_FIELDS := [
+	"active", "paused", "cleared", "defeated", "reward_emitted", "tick_index", "event_index",
+	"accumulator", "encounter_seed", "player", "enemies", "projectiles", "lasers", "hazards",
+	"player_position_history", "pending_events", "move_input", "aim_input", "attack_queued",
+	"attack_buffer_remaining", "attack_buffer_facing", "active_player_attack",
+	"next_player_attack_index", "next_projectile_index", "next_hazard_index",
+	"previous_player_pos", "previous_enemy_positions", "previous_projectile_positions",
+	"previous_laser_origins", "arena_obstacles", "encounter_profile",
+	"encounter_id", "next_hit_index", "step_error",
+]
 
 var active: bool = false
 var paused: bool = false
@@ -56,6 +67,8 @@ var player: Dictionary = {}
 var enemies: Array[Dictionary] = []
 var projectiles: Array[Dictionary] = []
 var lasers: Array[Dictionary] = []
+var hazards: Array[Dictionary] = []
+var player_position_history: Array[Vector2] = []
 var pending_events: Array[Dictionary] = []
 var move_input := Vector2.ZERO
 var aim_input := Vector2.RIGHT
@@ -65,12 +78,227 @@ var attack_buffer_facing := Vector2.ZERO
 var active_player_attack: Dictionary = {}
 var next_player_attack_index: int = 1
 var next_projectile_index: int = 1
+var next_hazard_index: int = 1
 var previous_player_pos := Vector2.ZERO
 var previous_enemy_positions: Dictionary = {}
 var previous_projectile_positions: Dictionary = {}
 var previous_laser_origins: Dictionary = {}
 var arena_obstacles: Array[Rect2] = []
 var encounter_profile: Dictionary = {}
+var encounter_id: String = ""
+var next_hit_index: int = 1
+var step_error: Dictionary = {}
+# Authority binding, deliberately excluded from transaction/checkpoint data.
+var hit_resolver: Callable = Callable()
+
+
+func export_transaction_state() -> Dictionary:
+	var state := {}
+	for field in TRANSACTION_FIELDS:
+		var value: Variant = get(field)
+		state[field] = value.duplicate(true) if value is Array or value is Dictionary else value
+	state["rng_state"] = null if rng == null else str(rng.state)
+	return state
+
+
+func import_transaction_state(state: Dictionary) -> void:
+	for field in TRANSACTION_FIELDS:
+		var value: Variant = state[field]
+		if value is Array:
+			# assign retains the declared Array element type after checkpoint decoding.
+			var target: Array = get(field)
+			target.assign(value.duplicate(true))
+		else:
+			set(field, value.duplicate(true) if value is Dictionary else value)
+	if state["rng_state"] == null:
+		rng = null
+	else:
+		if rng == null:
+			rng = RngScript.new()
+		# Seed normalization changes an existing state; restoring must be exact.
+		rng.state = int(state["rng_state"])
+
+
+func validate_transaction_state(state: Dictionary) -> bool:
+	if state.size() != TRANSACTION_FIELDS.size() + 1 or not valid_transaction_value(state):
+		return false
+	for field in TRANSACTION_FIELDS:
+		if not state.has(field) or typeof(state[field]) != typeof(get(field)):
+			return false
+	if not state.has("rng_state"):
+		return false
+	for field in ["tick_index", "event_index", "accumulator", "attack_buffer_remaining"]:
+		if state[field] < 0:
+			return false
+	for field in ["next_player_attack_index", "next_projectile_index", "next_hazard_index", "next_hit_index"]:
+		if state[field] < 1:
+			return false
+	if state.encounter_seed < 1 or state.encounter_seed >= RngScript.MODULUS:
+		return false
+	if (state.active and (state.cleared or state.defeated)) or (state.cleared and state.defeated):
+		return false
+	if state.rng_state == null:
+		# An unstarted simulation cannot carry actor/history data. In particular,
+		# do not let this branch bypass typed-array validation before installation.
+		for field in ["player", "enemies", "projectiles", "lasers", "hazards", "pending_events", "player_position_history", "active_player_attack", "previous_enemy_positions", "previous_projectile_positions", "previous_laser_origins", "arena_obstacles", "encounter_profile"]:
+			if not state[field].is_empty():
+				return false
+		return not state.active and not state.cleared and not state.defeated
+	if not state.rng_state is String or not state.rng_state.is_valid_int():
+		return false
+	var restored_rng := int(state.rng_state)
+	if restored_rng <= 0 or restored_rng >= RngScript.MODULUS or str(restored_rng) != state.rng_state or state.encounter_id.is_empty():
+		return false
+	if not _valid_record(state.player, {"pos": TYPE_VECTOR2, "velocity": TYPE_VECTOR2, "facing": TYPE_VECTOR2, "hp": TYPE_INT, "max_hp": TYPE_INT, "power": TYPE_INT, "shield": TYPE_INT, "state": TYPE_STRING_NAME, "state_timer": TYPE_FLOAT, "attack_cooldown": TYPE_FLOAT, "invulnerability": TYPE_FLOAT}):
+		return false
+	if state.player.max_hp < 1 or state.player.hp < 0 or state.player.hp > state.player.max_hp or state.player.power < 1 or state.player.shield < 0:
+		return false
+	if state.defeated != (state.player.hp == 0):
+		return false
+	if state.player_position_history.is_empty() or state.player_position_history.size() > 31:
+		return false
+	for position in state.player_position_history:
+		if not position is Vector2:
+			return false
+	for rect in state.arena_obstacles:
+		if not rect is Rect2 or rect.size.x <= 0.0 or rect.size.y <= 0.0:
+			return false
+	var enemy_ids := {}
+	for enemy in state.enemies:
+		if not _valid_record(enemy, {"enemy_id": TYPE_STRING, "monster_type": TYPE_STRING_NAME, "pos": TYPE_VECTOR2, "hp": TYPE_INT, "max_hp": TYPE_INT, "damage": TYPE_INT, "body_radius": TYPE_FLOAT, "state": TYPE_STRING_NAME, "state_timer": TYPE_FLOAT, "entry_grace_remaining": TYPE_FLOAT, "attack_done": TYPE_BOOL, "wander_timer": TYPE_FLOAT, "wander_direction": TYPE_VECTOR2, "strafe_sign": TYPE_INT}):
+			return false
+		if enemy.enemy_id.is_empty() or enemy_ids.has(enemy.enemy_id) or enemy.max_hp < 1 or enemy.hp < 0 or enemy.hp > enemy.max_hp:
+			return false
+		enemy_ids[enemy.enemy_id] = true
+		if str(enemy.get("behavior_id", "")) == "marked_jump" and str(enemy.state) in ["warning", "active"] and not _valid_record(enemy, {"jump_origin": TYPE_VECTOR2, "jump_target": TYPE_VECTOR2}):
+			return false
+		if str(enemy.get("repair_mode", "")) != "" and not _valid_record(enemy, {"repair_target": TYPE_VECTOR2, "repair_remaining": TYPE_FLOAT}):
+			return false
+	var projectile_ids := {}
+	for projectile in state.projectiles:
+		if not _valid_record(projectile, {"projectile_id": TYPE_STRING, "owner_id": TYPE_STRING, "pos": TYPE_VECTOR2, "velocity": TYPE_VECTOR2, "radius": TYPE_FLOAT, "damage": TYPE_INT, "state": TYPE_STRING_NAME}):
+			return false
+		if not enemy_ids.has(projectile.owner_id) or projectile_ids.has(projectile.projectile_id) or not _valid_sequence_id(projectile.projectile_id, "projectile_", state.next_projectile_index):
+			return false
+		projectile_ids[projectile.projectile_id] = true
+		if projectile.has("return_distance") and not _valid_record(projectile, {"return_distance": TYPE_FLOAT, "distance_remaining": TYPE_FLOAT, "return_origin": TYPE_VECTOR2, "return_point": TYPE_VECTOR2, "inbound": TYPE_BOOL}):
+			return false
+	for laser in state.lasers:
+		if not _valid_record(laser, {"owner_id": TYPE_STRING, "origin": TYPE_VECTOR2, "direction": TYPE_VECTOR2, "endpoint": TYPE_VECTOR2, "remaining": TYPE_FLOAT, "tick_timer": TYPE_FLOAT, "tick_seconds": TYPE_FLOAT, "damage": TYPE_INT, "radius": TYPE_FLOAT, "occluded": TYPE_BOOL}) or not enemy_ids.has(laser.owner_id):
+			return false
+	var hazard_ids := {}
+	for hazard in state.hazards:
+		if not _valid_record(hazard, {"hazard_id": TYPE_STRING, "owner_id": TYPE_STRING, "behavior_id": TYPE_STRING_NAME, "direction": TYPE_VECTOR2, "phase": TYPE_STRING_NAME, "warning_remaining": TYPE_FLOAT, "remaining": TYPE_FLOAT, "damage": TYPE_INT, "pressure_delta": TYPE_INT, "tick_seconds": TYPE_FLOAT, "tick_timer": TYPE_FLOAT, "hit": TYPE_BOOL, "created_tick": TYPE_INT}):
+			return false
+		if not enemy_ids.has(hazard.owner_id) or hazard_ids.has(hazard.hazard_id) or not _valid_sequence_id(hazard.hazard_id, "hazard_", state.next_hazard_index):
+			return false
+		hazard_ids[hazard.hazard_id] = true
+		if str(hazard.get("shape", "circle")) == "line" and not _valid_record(hazard, {"endpoint": TYPE_VECTOR2}):
+			return false
+		if str(hazard.get("control", "")) == "pull" and not _valid_record(hazard, {"origin": TYPE_VECTOR2}):
+			return false
+	if not state.active_player_attack.is_empty():
+		if not _valid_record(state.active_player_attack, {"attack_id": TYPE_STRING, "origin": TYPE_VECTOR2, "facing": TYPE_VECTOR2, "range": TYPE_FLOAT, "cone_dot": TYPE_FLOAT, "started_tick": TYPE_INT, "resolved": TYPE_BOOL}) or not _valid_sequence_id(state.active_player_attack.attack_id, "player_attack_", state.next_player_attack_index):
+			return false
+	for field in ["previous_enemy_positions", "previous_projectile_positions", "previous_laser_origins"]:
+		for entity_id in state[field]:
+			if not entity_id is String or not state[field][entity_id] is Vector2:
+				return false
+			if field == "previous_projectile_positions":
+				if not _valid_sequence_id(entity_id, "projectile_", state.next_projectile_index):
+					return false
+			elif not enemy_ids.has(entity_id):
+				return false
+	return valid_event_records(state.pending_events, state, enemy_ids)
+
+
+static func valid_transaction_value(value: Variant, depth: int = 0) -> bool:
+	if depth > 64:
+		return false
+	match typeof(value):
+		TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_STRING, TYPE_STRING_NAME, TYPE_VECTOR2I:
+			return true
+		TYPE_FLOAT:
+			return is_finite(value)
+		TYPE_VECTOR2:
+			return value.is_finite()
+		TYPE_RECT2:
+			return value.position.is_finite() and value.size.is_finite()
+		TYPE_ARRAY:
+			for entry in value:
+				if not valid_transaction_value(entry, depth + 1):
+					return false
+			return true
+		TYPE_DICTIONARY:
+			for key in value:
+				if typeof(key) not in [TYPE_STRING, TYPE_STRING_NAME, TYPE_INT] or not valid_transaction_value(value[key], depth + 1):
+					return false
+			return true
+	return false
+
+
+static func _valid_record(value: Variant, required: Dictionary) -> bool:
+	if not value is Dictionary:
+		return false
+	for field in required:
+		if not value.has(field):
+			return false
+		var kind: int = required[field]
+		if kind in [TYPE_STRING, TYPE_STRING_NAME]:
+			if typeof(value[field]) not in [TYPE_STRING, TYPE_STRING_NAME]:
+				return false
+		elif typeof(value[field]) != kind:
+			return false
+	# These optional vectors are consumed by special behaviors and geometry.
+	for field in ["pos", "velocity", "facing", "origin", "endpoint", "direction", "size", "jump_origin", "jump_target", "repair_target", "projectile_return_point", "return_origin", "return_point", "wander_direction"]:
+		if value.has(field) and not value[field] is Vector2:
+			return false
+	for field in ["radius", "inner_radius", "half_width", "half_angle", "range", "cone_dot", "half_angle_radians", "impact_seconds", "remaining", "warning_remaining", "tick_timer", "tick_seconds", "return_distance", "distance_remaining", "control_speed", "dash_timer", "wander_timer", "entry_grace_remaining", "state_timer", "attack_cooldown", "invulnerability", "visual_lift", "repair_remaining", "visual_radius", "turn_speed_degrees", "turn_speed", "body_radius", "attack_radius", "warning_radius"]:
+		if value.has(field) and typeof(value[field]) not in [TYPE_INT, TYPE_FLOAT]:
+			return false
+	for field in ["hp", "max_hp", "power", "shield", "damage", "pressure_delta", "created_tick", "started_tick", "resolved_tick", "active_started_tick", "action_started_tick", "counter_window_until"]:
+		if value.has(field) and not value[field] is int:
+			return false
+	for field in ["hit", "inbound", "resolved", "attack_done", "repair_attempted", "occluded"]:
+		if value.has(field) and not value[field] is bool:
+			return false
+	return true
+
+
+static func _valid_sequence_id(value: Variant, prefix: String, next_index: int) -> bool:
+	if not value is String or not value.begins_with(prefix):
+		return false
+	var suffix: String = value.substr(prefix.length())
+	if not suffix.is_valid_int():
+		return false
+	var index := int(suffix)
+	return index > 0 and index < next_index and value == prefix + "%04d" % index
+
+
+static func valid_event_records(events: Array, state: Dictionary = {}, enemy_ids: Dictionary = {}) -> bool:
+	var previous_index := 0
+	for event in events:
+		if not _valid_record(event, {"event_type": TYPE_STRING_NAME, "event_index": TYPE_INT, "tick": TYPE_INT}) or str(event.event_type).is_empty() or event.event_index < 1 or event.tick < 0:
+			return false
+		if state.is_empty():
+			continue # Bridge history may span earlier encounters.
+		if event.event_index <= previous_index or event.event_index > state.event_index or event.tick > state.tick_index:
+			return false
+		previous_index = event.event_index
+		for field in ["enemy_id", "owner_id"]:
+			if event.has(field) and not enemy_ids.has(event[field]):
+				return false
+		for field in ["hit_enemy_ids", "blocked_enemy_ids"]:
+			if event.has(field):
+				if not event[field] is Array:
+					return false
+				for enemy_id in event[field]:
+					if not enemy_ids.has(enemy_id):
+						return false
+		for item in [["projectile_id", "projectile_", "next_projectile_index"], ["hazard_id", "hazard_", "next_hazard_index"], ["attack_id", "player_attack_", "next_player_attack_index"]]:
+			if event.has(item[0]) and not _valid_sequence_id(event[item[0]], item[1], state[item[2]]):
+				return false
+	return true
 
 
 static func production_arena_obstacles() -> Array[Rect2]:
@@ -79,6 +307,9 @@ static func production_arena_obstacles() -> Array[Rect2]:
 
 func start(config: Dictionary = {}) -> void:
 	encounter_seed = RngScript.normalize_seed(int(config.get("seed", 1)))
+	encounter_id = String(config.get("encounter_id", "seed:%d" % encounter_seed))
+	next_hit_index = 1
+	step_error.clear()
 	rng = RngScript.new(encounter_seed)
 	active = true
 	paused = false
@@ -92,9 +323,12 @@ func start(config: Dictionary = {}) -> void:
 	enemies.clear()
 	projectiles.clear()
 	lasers.clear()
+	hazards.clear()
+	player_position_history.clear()
 	encounter_profile.clear()
 	set_arena_obstacles(config.get("arena_obstacles", []))
 	next_projectile_index = 1
+	next_hazard_index = 1
 	move_input = Vector2.ZERO
 	aim_input = _normalized_or(Vector2(config.get("player_facing", Vector2.RIGHT)), Vector2.RIGHT)
 	_clear_attack_buffer()
@@ -111,12 +345,14 @@ func start(config: Dictionary = {}) -> void:
 		"hp": maxi(1, int(config.get("player_hp", 100))),
 		"max_hp": maxi(1, int(config.get("player_max_hp", 100))),
 		"power": maxi(1, int(config.get("player_power", 10))),
+		"shield": maxi(0, int(config.get("player_shield", 0))),
 		"state": &"idle",
 		"state_timer": 0.0,
 		"attack_cooldown": 0.0,
 		"invulnerability": 0.0,
 	}
 	player["hp"] = mini(int(player["hp"]), int(player["max_hp"]))
+	player_position_history.append(player_spawn)
 	var monster_types: Array = config.get("monster_types", MonsterCatalogScript.default_encounter())
 	var enemy_profiles: Array = config.get("enemy_profiles", [])
 	for monster_index in range(monster_types.size()):
@@ -174,16 +410,28 @@ func queue_player_attack(requested_facing: Vector2 = Vector2.ZERO) -> bool:
 	return true
 
 
-func advance_frame(delta: float) -> int:
-	if not active or paused or delta <= 0.0:
+func advance_frame(delta: float, fixed_step_executor: Callable = Callable()) -> int:
+	if not active or paused or delta < 0.0:
 		return 0
 	accumulator += minf(delta, MAX_FRAME_DELTA)
 	var advanced := 0
-	while accumulator + EPSILON >= FIXED_STEP and advanced < MAX_CATCH_UP_STEPS:
-		accumulator -= FIXED_STEP
-		_step()
+	while active and not paused and accumulator + EPSILON >= FIXED_STEP and advanced < MAX_CATCH_UP_STEPS:
+		var before_tick := tick_index
+		var result: Dictionary = fixed_step_executor.call() if fixed_step_executor.is_valid() else advance_pending_step()
+		# A failed transaction restores this very simulation, including its debt.
+		# A duplicate receipt must not spin through catch-up without advancing.
+		if not bool(result.get("ok", false)) or tick_index == before_tick:
+			break
 		advanced += 1
 	return advanced
+
+
+func advance_pending_step(before_physics: Callable = Callable()) -> Dictionary:
+	if not active or paused or accumulator + EPSILON < FIXED_STEP:
+		return {"ok": false, "reason": "fixed_step_unavailable"}
+	accumulator = maxf(0.0, accumulator - FIXED_STEP)
+	_step(before_physics)
+	return {"ok": true} if step_error.is_empty() else step_error.duplicate(true)
 
 
 func advance_ticks(count: int) -> void:
@@ -193,6 +441,8 @@ func advance_ticks(count: int) -> void:
 		if not active:
 			break
 		_step()
+		if not step_error.is_empty():
+			break
 
 
 func drain_events() -> Array[Dictionary]:
@@ -207,12 +457,13 @@ func mark_reward_committed() -> void:
 	reward_emitted = true
 
 
-func sync_player_durable_stats(hp: int, max_hp: int, power: int) -> void:
+func sync_player_durable_stats(hp: int, max_hp: int, power: int, shield: int = 0) -> void:
 	if defeated:
 		return
 	player["max_hp"] = maxi(1, max_hp)
 	player["hp"] = clampi(hp, 0, int(player["max_hp"]))
 	player["power"] = maxi(1, power)
+	player["shield"] = maxi(0, shield)
 	if int(player["hp"]) <= 0:
 		player["state"] = &"dead"
 		defeated = true
@@ -322,6 +573,7 @@ func build_snapshot() -> Dictionary:
 		"enemies": render_enemies,
 		"projectiles": render_projectiles,
 		"lasers": render_lasers,
+		"hazards": hazards.duplicate(true),
 	}
 
 
@@ -359,21 +611,43 @@ func build_canonical_snapshot() -> Dictionary:
 		"enemies": canonical_enemies,
 		"projectiles": canonical_projectiles,
 		"laser_count": lasers.size(),
+		"hazards": hazards.duplicate(true),
 		"rng_state": 0 if rng == null else rng.state,
 	}
 
 
-func _step() -> void:
+func _step(before_physics: Callable = Callable()) -> void:
+	step_error.clear()
 	_capture_previous_transforms()
 	tick_index += 1
+	if before_physics.is_valid():
+		var advanced_time: Dictionary = before_physics.call()
+		if not bool(advanced_time.get("ok", false)):
+			step_error = advanced_time.duplicate(true)
+			return
+		if defeated:
+			_emit_event(&"player_defeated", {"source_id": "simulation_time", "damage_kind": &"status"})
+			return
 	_update_player(FIXED_STEP)
+	player_position_history.append(Vector2(player.get("pos", Vector2.ZERO)))
+	if player_position_history.size() > 31:
+		player_position_history.pop_front()
 	var enemy_count_at_step_start := enemies.size()
 	for enemy_index in range(enemy_count_at_step_start):
 		if enemy_index >= enemies.size():
 			break
 		_update_enemy(enemy_index, FIXED_STEP)
+		if not step_error.is_empty():
+			return
 	_update_projectiles(FIXED_STEP)
+	if not step_error.is_empty():
+		return
 	_update_lasers(FIXED_STEP)
+	if not step_error.is_empty():
+		return
+	_update_hazards(FIXED_STEP)
+	if not step_error.is_empty():
+		return
 	_check_terminal_state()
 
 
@@ -434,6 +708,7 @@ func _update_player_attack(delta: float) -> void:
 		active_player_attack = _create_player_attack_contract(queued_facing)
 		player["facing"] = Vector2(active_player_attack.get("facing", player.get("facing", Vector2.RIGHT)))
 		_emit_event(&"player_attack_started", active_player_attack)
+		_react_to_player_attack(active_player_attack)
 	elif attack_queued:
 		attack_buffer_remaining = maxf(0.0, attack_buffer_remaining - delta)
 		if attack_buffer_remaining <= EPSILON:
@@ -513,6 +788,10 @@ func _update_enemy(enemy_index: int, delta: float) -> void:
 	var enemy := enemies[enemy_index]
 	if int(enemy.get("hp", 0)) <= 0:
 		return
+	if StringName(enemy.get("behavior_id", &"")) == &"hit_counter":
+		var charge_remaining := maxf(0.0, float(int(enemy.get("counter_window_until", -1)) - tick_index) * FIXED_STEP)
+		enemy["counter_charge_remaining"] = charge_remaining
+		enemy["counter_charge"] = 1 if charge_remaining > 0.0 else 0
 	var entry_grace_remaining := maxf(
 		0.0,
 		float(enemy.get("entry_grace_remaining", 0.0)) - delta
@@ -541,9 +820,29 @@ func _update_enemy(enemy_index: int, delta: float) -> void:
 					StringName(enemy.get("monster_type", &"slime"))
 				).get("idle_seconds", 0.0)
 			)
+			if StringName(enemy.get("behavior_id", &"")) == &"attack_echo":
+				for hazard in hazards:
+					if String(hazard["owner_id"]) != String(enemy["enemy_id"]):
+						continue
+					var is_warning := StringName(hazard["phase"]) == &"warning"
+					enemy["state"] = &"warning" if is_warning else &"active"
+					enemy["state_timer"] = float(hazard["warning_remaining"] if is_warning else hazard["remaining"])
+					enemy["action_started_tick"] = tick_index
+					break
 		enemies[enemy_index] = enemy
 		return
 	var monster_type := StringName(enemy.get("monster_type", &"slime"))
+	if enemy.has("behavior_id"):
+		match StringName(enemy["behavior_id"]):
+			&"aftershock":
+				_update_melee_enemy(enemy_index, delta)
+			&"return_projectile", &"conveyor":
+				_update_bat(enemy_index, delta)
+			&"socket_repair":
+				_update_repair_enemy(enemy_index, delta)
+			_:
+				_update_z1_hazard_enemy(enemy_index, delta)
+		return
 	match monster_type:
 		MonsterCatalogScript.TYPE_SLIME, MonsterCatalogScript.TYPE_SLIMELING:
 			_update_melee_enemy(enemy_index, delta)
@@ -571,6 +870,12 @@ func _update_melee_enemy(enemy_index: int, delta: float) -> void:
 			enemy["attack_done"] = false
 	elif state == &"active":
 		if not bool(enemy.get("attack_done", false)):
+			if StringName(enemy.get("behavior_id", &"")) == &"aftershock":
+				_start_hazard(enemy, {
+					"shape": &"ring", "origin": enemy["pos"],
+					"radius": 0.31, "inner_radius": melee_radius,
+					"warning_seconds": 0.65, "active_seconds": 0.18,
+				})
 			if distance <= melee_radius + EPSILON and has_clear_melee_path:
 				_damage_player(int(enemy.get("damage", 1)), String(enemy.get("enemy_id", "")), &"melee")
 			enemy["attack_done"] = true
@@ -727,7 +1032,7 @@ func _stable_navigation_side(enemy_id: String) -> int:
 
 func _update_bat(enemy_index: int, delta: float) -> void:
 	var enemy := enemies[enemy_index]
-	var definition := MonsterCatalogScript.definition(MonsterCatalogScript.TYPE_BAT)
+	var definition := MonsterCatalogScript.definition(StringName(enemy.get("monster_type", MonsterCatalogScript.TYPE_BAT)))
 	var state := StringName(enemy.get("state", &"idle"))
 	if state == &"aim":
 		enemy["state_timer"] = float(enemy.get("state_timer", 0.0)) - delta
@@ -746,9 +1051,11 @@ func _update_bat(enemy_index: int, delta: float) -> void:
 		if float(enemy["state_timer"]) <= EPSILON:
 			enemy["state"] = &"aim"
 			enemy["state_timer"] = float(definition.get("aim_seconds", 0.5))
+			_prepare_bat_special_attack(enemy, definition)
 	else:
 		enemy["state"] = &"aim"
 		enemy["state_timer"] = float(definition.get("aim_seconds", 0.5))
+		_prepare_bat_special_attack(enemy, definition)
 		_emit_event(&"ranged_aim_started", {"enemy_id": enemy.get("enemy_id", ""), "attack": &"spread"})
 	enemies[enemy_index] = enemy
 
@@ -815,19 +1122,32 @@ func _move_keep_distance(enemy: Dictionary, definition: Dictionary, delta: float
 
 
 func _spawn_bat_spread(enemy: Dictionary, definition: Dictionary) -> void:
-	var base_direction := _normalized_or(Vector2(player.get("pos", Vector2.ZERO)) - Vector2(enemy.get("pos", Vector2.ZERO)), Vector2.LEFT)
+	var origin := Vector2(enemy.get("pos", Vector2.ZERO))
+	var base_direction := _normalized_or(Vector2(player.get("pos", Vector2.ZERO)) - origin, Vector2.LEFT)
+	var returning := StringName(enemy.get("behavior_id", &"")) == &"return_projectile"
+	if returning:
+		base_direction = Vector2(enemy.get("facing", base_direction))
 	var count := int(definition.get("spread_count", 3))
 	var half_angle := deg_to_rad(float(definition.get("spread_half_angle_degrees", 25.0)))
 	for spread_index in range(count):
 		var ratio := 0.5 if count <= 1 else float(spread_index) / float(count - 1)
-		_spawn_projectile(String(enemy.get("enemy_id", "")), Vector2(enemy.get("pos", Vector2.ZERO)), base_direction.rotated(lerpf(-half_angle, half_angle, ratio)), int(enemy.get("damage", MonsterCatalogScript.base_damage(int(player.get("power", 1)), MonsterCatalogScript.TYPE_BAT))))
+		var extra: Dictionary = {}
+		if returning and spread_index == count / 2:
+			var return_point := Vector2(enemy["projectile_return_point"])
+			var return_distance := origin.distance_to(return_point)
+			extra = {
+				"return_origin": origin, "return_point": return_point,
+				"return_distance": return_distance, "distance_remaining": return_distance,
+				"inbound": false,
+			}
+		_spawn_projectile(String(enemy.get("enemy_id", "")), origin, base_direction.rotated(lerpf(-half_angle, half_angle, ratio)), int(enemy.get("damage", MonsterCatalogScript.base_damage(int(player.get("power", 1)), MonsterCatalogScript.TYPE_BAT))), extra)
 	_emit_event(&"ranged_fired", {"enemy_id": enemy.get("enemy_id", ""), "projectile_count": count})
 
 
-func _spawn_projectile(owner_id: String, origin: Vector2, direction: Vector2, damage: int) -> void:
+func _spawn_projectile(owner_id: String, origin: Vector2, direction: Vector2, damage: int, extra: Dictionary = {}) -> void:
 	var projectile_id := "projectile_%04d" % next_projectile_index
 	next_projectile_index += 1
-	projectiles.append({
+	var projectile := {
 		"projectile_id": projectile_id,
 		"owner_id": owner_id,
 		"pos": origin,
@@ -836,7 +1156,9 @@ func _spawn_projectile(owner_id: String, origin: Vector2, direction: Vector2, da
 		"visual_radius": PROJECTILE_RADIUS,
 		"damage": maxi(1, damage),
 		"state": &"active",
-	})
+	}
+	projectile.merge(extra, true)
+	projectiles.append(projectile)
 
 
 func _spawn_drone_laser(enemy: Dictionary, definition: Dictionary) -> void:
@@ -864,7 +1186,21 @@ func _update_projectiles(delta: float) -> void:
 	var survivors: Array[Dictionary] = []
 	for projectile in projectiles:
 		var from := Vector2(projectile.get("pos", Vector2.ZERO))
-		var to := from + Vector2(projectile.get("velocity", Vector2.ZERO)) * delta
+		var velocity := Vector2(projectile.get("velocity", Vector2.ZERO))
+		var to := from + velocity * delta
+		var travel := velocity.length() * delta
+		var completes_leg := false
+		if projectile.has("return_distance"):
+			var owner := _enemy_by_id(String(projectile.get("owner_id", "")))
+			if owner.is_empty() or int(owner.get("hp", 0)) <= 0:
+				continue
+			var remaining := float(projectile.get("distance_remaining", 0.0))
+			completes_leg = travel + EPSILON >= remaining
+			travel = minf(travel, remaining)
+			projectile["distance_remaining"] = maxf(0.0, remaining - travel)
+			to = from + velocity.normalized() * travel
+			if completes_leg:
+				to = Vector2(projectile["return_origin"] if bool(projectile["inbound"]) else projectile["return_point"])
 		var projectile_radius := float(projectile.get("radius", PROJECTILE_RADIUS))
 		var player_hit_fraction := _segment_circle_hit_fraction(
 			from,
@@ -881,6 +1217,8 @@ func _update_projectiles(delta: float) -> void:
 			continue
 		if player_hit_fraction <= 1.0:
 			_damage_player(int(projectile.get("damage", 1)), String(projectile.get("owner_id", "")), &"projectile")
+			if not step_error.is_empty():
+				return
 			_emit_event(&"projectile_hit", {
 				"projectile_id": projectile.get("projectile_id", ""),
 				"position": from.lerp(to, player_hit_fraction),
@@ -890,6 +1228,14 @@ func _update_projectiles(delta: float) -> void:
 			_emit_event(&"projectile_despawned", {"projectile_id": projectile.get("projectile_id", "")})
 			continue
 		projectile["pos"] = to
+		if completes_leg:
+			if bool(projectile.get("inbound", false)):
+				_emit_event(&"projectile_despawned", {"projectile_id": projectile["projectile_id"]})
+				continue
+			projectile["inbound"] = true
+			projectile["velocity"] = -velocity
+			projectile["distance_remaining"] = float(projectile["return_distance"])
+			_emit_event(&"projectile_returned", {"projectile_id": projectile["projectile_id"], "position": to})
 		survivors.append(projectile)
 	projectiles = survivors
 
@@ -923,6 +1269,8 @@ func _update_lasers(delta: float) -> void:
 			laser["tick_timer"] += float(laser.get("tick_seconds", 0.3))
 			if _distance_point_to_segment(Vector2(player.get("pos", Vector2.ZERO)), origin, endpoint) <= float(laser.get("radius", LASER_RADIUS)) + PLAYER_RADIUS:
 				_damage_player(int(laser.get("damage", 1)), String(laser.get("owner_id", "")), &"laser")
+				if not step_error.is_empty():
+					return
 			_emit_event(&"laser_tick", {
 				"enemy_id": laser.get("owner_id", ""),
 				"endpoint": endpoint,
@@ -941,23 +1289,71 @@ func _damage_enemy(enemy_index: int, damage: int) -> void:
 	var enemy := enemies[enemy_index]
 	if int(enemy.get("hp", 0)) <= 0:
 		return
-	enemy["hp"] = maxi(0, int(enemy.get("hp", 0)) - maxi(1, damage))
-	_emit_event(&"enemy_damaged", {"enemy_id": enemy.get("enemy_id", ""), "damage": damage, "hp": enemy["hp"]})
+	var applied := maxi(1, damage)
+	var behavior := StringName(enemy.get("behavior_id", &""))
+	if enemy.has("visual_lift"):
+		enemy["visual_lift"] = 0.0
+	if behavior == &"directional_guard" and StringName(enemy.get("state", &"")) != &"cooldown":
+		var incoming := _normalized_or(Vector2(player.get("pos", Vector2.ZERO)) - Vector2(enemy["pos"]), Vector2.LEFT)
+		if incoming.dot(Vector2(enemy.get("facing", Vector2.LEFT))) >= 0.5:
+			var definition := MonsterCatalogScript.definition(StringName(enemy["monster_type"]))
+			applied = maxi(1, int(round(float(applied) * float(definition.get("guard_multiplier", 0.25)))))
+			_emit_event(&"guard_blocked", {"enemy_id": enemy["enemy_id"], "damage": applied})
+	enemy["hp"] = maxi(0, int(enemy.get("hp", 0)) - applied)
+	_emit_event(&"enemy_damaged", {"enemy_id": enemy.get("enemy_id", ""), "damage": applied, "hp": enemy["hp"]})
 	if int(enemy["hp"]) <= 0:
 		enemy["state"] = &"dead"
+		_cancel_enemy_hazards(String(enemy["enemy_id"]))
 		enemies[enemy_index] = enemy
 		_emit_event(&"enemy_defeated", {"enemy_id": enemy.get("enemy_id", ""), "monster_type": enemy.get("monster_type", &"")})
-		if StringName(enemy.get("monster_type", &"")) == MonsterCatalogScript.TYPE_SLIME:
+		if StringName(enemy.get("monster_type", &"")) == MonsterCatalogScript.TYPE_SLIME or behavior == &"aftershock":
 			_spawn_slimelings(enemy)
 	else:
 		enemy["state"] = &"hurt"
 		enemy["state_timer"] = ENEMY_HURT_SECONDS
+		if behavior != &"attack_echo":
+			_cancel_enemy_hazards(String(enemy["enemy_id"]))
+		if behavior == &"hit_counter":
+			_prime_hit_counter(enemy)
+		elif behavior == &"socket_repair":
+			_react_to_repair_damage(enemy)
 		enemies[enemy_index] = enemy
 
 
-func _damage_player(damage: int, source_id: String, damage_kind: StringName) -> void:
+func _damage_player(damage: int, source_id: String, damage_kind: StringName, pressure_delta: int = 0) -> bool:
 	if defeated or float(player.get("invulnerability", 0.0)) > EPSILON:
-		return
+		return false
+	var applied := maxi(1, damage)
+	var packet := {
+		"damage": applied, "damage_kind": String(damage_kind), "source_id": source_id,
+		"pressure_delta": maxi(0, pressure_delta), "combat_tick": tick_index,
+		"hit_id": "combat:%s:tick:%d:hit:%d" % [encounter_id, tick_index, next_hit_index],
+	}
+	var hp_before := int(player.get("hp", 0))
+	var resolved := {
+		"ok": true, "hp": maxi(0, hp_before - applied),
+		"max_hp": int(player.get("max_hp", 1)), "power": int(player.get("power", 1)),
+		"shield": int(player.get("shield", 0)), "actual_hp_loss": mini(hp_before, applied),
+		"absorbed": 0, "dead": hp_before <= applied,
+	}
+	if hit_resolver.is_valid():
+		var returned: Variant = hit_resolver.call(packet.duplicate(true))
+		if not returned is Dictionary or not bool(returned.get("ok", false)):
+			step_error = returned.duplicate(true) if returned is Dictionary else {"reason": "invalid_combat_hit_result"}
+			step_error["ok"] = false
+			return false
+		for field in ["hp", "max_hp", "power", "shield", "actual_hp_loss", "absorbed", "dead"]:
+			if not returned.has(field):
+				step_error = {"ok": false, "reason": "incomplete_combat_hit_result", "field": field}
+				return false
+		resolved = returned
+	next_hit_index += 1
+	# Install survival/shield feedback before considering death or later collisions.
+	player["hp"] = int(resolved["hp"])
+	player["max_hp"] = int(resolved["max_hp"])
+	player["power"] = int(resolved["power"])
+	player["shield"] = int(resolved["shield"])
+	var dead := bool(resolved["dead"]) or int(player["hp"]) <= 0
 	_clear_attack_buffer()
 	if not active_player_attack.is_empty() and not bool(active_player_attack.get("resolved", false)):
 		_emit_event(&"player_attack_interrupted", {
@@ -967,18 +1363,20 @@ func _damage_player(damage: int, source_id: String, damage_kind: StringName) -> 
 			"damage_kind": damage_kind,
 		})
 	active_player_attack.clear()
-	var applied := maxi(1, damage)
-	player["hp"] = maxi(0, int(player.get("hp", 0)) - applied)
-	player["invulnerability"] = PLAYER_INVULNERABILITY
-	player["state"] = &"hurt" if int(player["hp"]) > 0 else &"dead"
+	player["invulnerability"] = maxf(0.0, float(resolved.get("invulnerability", PLAYER_INVULNERABILITY)))
+	player["state"] = &"dead" if dead else &"hurt"
 	player["state_timer"] = PLAYER_HURT_SECONDS
-	_emit_event(&"player_damaged", {"source_id": source_id, "damage_kind": damage_kind, "damage": applied, "hp": player["hp"]})
-	if int(player["hp"]) <= 0:
+	var event := packet.duplicate(true)
+	for field in ["hp", "max_hp", "power", "shield", "actual_hp_loss", "absorbed", "dead"]:
+		event[field] = resolved[field]
+	_emit_event(&"player_damaged", event)
+	if dead:
 		defeated = true
 		active = false
 		_clear_attack_buffer()
 		active_player_attack.clear()
-		_emit_event(&"player_defeated", {"source_id": source_id, "damage_kind": damage_kind})
+		_emit_event(&"player_defeated", {"source_id": source_id, "damage_kind": damage_kind, "hit_id": packet["hit_id"]})
+	return true
 
 
 func _spawn_enemy(
@@ -1026,6 +1424,13 @@ func _spawn_enemy(
 		spawned_enemy["enemy_name"] = String(enemy_profile.get("enemy_name", "异常体"))
 	if enemy_profile.has("enemy_power"):
 		spawned_enemy["enemy_power"] = int(enemy_profile.get("enemy_power", 0))
+	if definition.has("source_id"):
+		spawned_enemy["visual_key"] = definition["visual_key"]
+		spawned_enemy["visual_subject"] = monster_type
+		spawned_enemy["behavior_id"] = definition["behavior_id"]
+		spawned_enemy["base_power"] = int(enemy_profile.get("base_power", enemy_profile.get("enemy_power", 12)))
+		spawned_enemy["enemy_name"] = String(definition["display_name"])
+		spawned_enemy["facing"] = Vector2.LEFT
 	enemies.append(spawned_enemy)
 
 
@@ -1067,7 +1472,347 @@ func _check_terminal_state() -> void:
 	active_player_attack.clear()
 	projectiles.clear()
 	lasers.clear()
+	hazards.clear()
 	_emit_event(&"combat_cleared", {"tick": tick_index})
+
+
+func _prepare_bat_special_attack(enemy: Dictionary, definition: Dictionary) -> void:
+	var behavior := StringName(enemy.get("behavior_id", &""))
+	if behavior not in [&"return_projectile", &"conveyor"]:
+		return
+	var direction := _direction_to_player(enemy)
+	enemy["facing"] = direction
+	var warning_seconds := float(definition.get("aim_seconds", 0.50))
+	if behavior == &"return_projectile":
+		var origin := Vector2(enemy["pos"])
+		var room_endpoint := _ray_endpoint_inside_unit_room(origin, direction, ROOM_MIN, ROOM_MAX)
+		var return_point := origin.move_toward(room_endpoint, RETURN_PROJECTILE_MAX_DISTANCE)
+		enemy["projectile_return_point"] = return_point
+		_start_hazard(enemy, {
+			"shape": &"circle", "origin": return_point,
+			"radius": 0.025, "damage": 0,
+			"warning_seconds": warning_seconds, "active_seconds": 0.55,
+		})
+	else:
+		_start_hazard(enemy, _line_hazard(Vector2(enemy["pos"]), direction, 0.60, 0.055, {
+			"damage": 0, "control": &"push", "control_speed": 0.22,
+			"warning_seconds": warning_seconds, "active_seconds": 1.20,
+		}))
+
+
+func _update_z1_hazard_enemy(enemy_index: int, delta: float) -> void:
+	var enemy := enemies[enemy_index]
+	var definition := MonsterCatalogScript.definition(StringName(enemy["monster_type"]))
+	var behavior := StringName(enemy["behavior_id"])
+	var state := StringName(enemy.get("state", &"idle"))
+	if state == &"warning" and int(enemy.get("action_started_tick", -1)) == tick_index:
+		return
+	if state in [&"idle", &"move"]:
+		if behavior in [&"hit_counter", &"attack_echo"]:
+			return
+		var distance := Vector2(enemy["pos"]).distance_to(Vector2(player["pos"]))
+		var approach_range := 0.19 if behavior == &"directional_guard" else 0.40
+		if behavior in [&"directional_guard", &"magnetic_pull"] and distance > approach_range:
+			var from := Vector2(enemy["pos"])
+			enemy["pos"] = _resolve_body_motion(from, from + _obstacle_aware_melee_direction(enemy, _direction_to_player(enemy)) * float(definition.get("move_speed", 0.18)) * delta, _enemy_body_radius(enemy))
+			enemy["state"] = &"move"
+		else:
+			_start_z1_action(enemy, definition)
+	elif state == &"warning":
+		enemy["state_timer"] = float(enemy["state_timer"]) - delta
+		if float(enemy["state_timer"]) <= EPSILON:
+			enemy["state"] = &"active"
+			enemy["state_timer"] = float(definition.get("active_seconds", 0.28))
+			enemy["attack_done"] = false
+	elif state == &"active":
+		if behavior == &"rail_charge":
+			_advance_rail_charge(enemy, definition, delta)
+		elif behavior == &"marked_jump":
+			var duration := float(definition.get("active_seconds", 0.25))
+			var progress := clampf(1.0 - (float(enemy["state_timer"]) - delta) / duration, 0.0, 1.0)
+			enemy["pos"] = Vector2(enemy["jump_origin"]).lerp(Vector2(enemy["jump_target"]), progress)
+			enemy["visual_lift"] = sin(progress * PI) * 22.0
+		if StringName(enemy["state"]) == &"active":
+			enemy["state_timer"] = float(enemy["state_timer"]) - delta
+			if float(enemy["state_timer"]) <= EPSILON:
+				enemy["state"] = &"cooldown"
+				enemy["state_timer"] = float(definition.get("cooldown_seconds", 0.55))
+				enemy["visual_lift"] = 0.0
+				if behavior == &"marked_jump":
+					enemy["pos"] = enemy["jump_target"]
+					_emit_event(&"jump_landed", {"enemy_id": enemy["enemy_id"], "position": enemy["pos"]})
+	elif state == &"cooldown":
+		enemy["state_timer"] = float(enemy["state_timer"]) - delta
+		if float(enemy["state_timer"]) <= EPSILON:
+			enemy["state"] = &"idle"
+	enemies[enemy_index] = enemy
+
+
+func _start_z1_action(enemy: Dictionary, definition: Dictionary, requested_direction: Vector2 = Vector2.ZERO) -> void:
+	var behavior := StringName(enemy["behavior_id"])
+	var origin := Vector2(enemy["pos"])
+	var direction := _normalized_or(requested_direction, _direction_to_player(enemy))
+	var warning_seconds := float(definition.get("warning_seconds", 0.50))
+	var active_seconds := float(definition.get("active_seconds", 0.28))
+	enemy["facing"] = direction
+	enemy["state"] = &"warning"
+	enemy["state_timer"] = warning_seconds
+	enemy["action_started_tick"] = tick_index
+	var common := {"warning_seconds": warning_seconds, "active_seconds": active_seconds, "direction": direction}
+	match behavior:
+		&"rail_charge":
+			var length := float(definition.get("charge_speed", 0.90)) * active_seconds
+			common["damage"] = 0
+			_start_hazard(enemy, _line_hazard(origin, direction, length, _enemy_body_radius(enemy), common))
+		&"directional_guard", &"hit_counter", &"attack_echo":
+			common["shape"] = &"sector"
+			common["origin"] = origin
+			common["radius"] = 0.24 if behavior == &"hit_counter" else 0.21
+			common["half_angle"] = PI / 3.0
+			_start_hazard(enemy, common)
+		&"delayed_archive":
+			common["shape"] = &"rectangle"
+			common["origin"] = player_position_history[maxi(0, player_position_history.size() - 25)]
+			common["size"] = Vector2(0.20, 0.15)
+			_start_hazard(enemy, common)
+		&"four_way_laser":
+			common["tick_seconds"] = 0.30
+			for ray_direction: Vector2 in [Vector2.UP, Vector2.RIGHT, Vector2.DOWN, Vector2.LEFT]:
+				_start_hazard(enemy, _line_hazard(origin, ray_direction, 1.4, LASER_RADIUS, common))
+		&"magnetic_pull":
+			common.merge({"shape": &"sector", "origin": origin, "radius": 0.42, "half_angle": PI / 3.0, "control": &"pull", "control_speed": 0.20, "tick_seconds": 0.30}, true)
+			_start_hazard(enemy, common)
+		&"pressure_pulse":
+			common["pressure_delta"] = 4
+			_start_hazard(enemy, _line_hazard(origin, direction, 0.70, 0.018, common))
+		&"live_cable":
+			var center := _clamp_position(origin + direction * 0.15)
+			var tangent := direction.orthogonal()
+			var first := _line_hazard(center, tangent, 0.35, LASER_RADIUS, {})
+			var second := _line_hazard(center, -tangent, 0.35, LASER_RADIUS, {})
+			common.merge({"shape": &"line", "origin": first["endpoint"], "endpoint": second["endpoint"], "half_width": LASER_RADIUS, "tick_seconds": 0.30}, true)
+			_start_hazard(enemy, common)
+		&"marked_jump":
+			var target := _resolve_spawn_outside_obstacles(_clamp_position(Vector2(player["pos"])), _enemy_body_radius(enemy))
+			enemy["jump_origin"] = origin
+			enemy["jump_target"] = target
+			common.merge({"shape": &"circle", "origin": target, "radius": 0.13, "warning_seconds": warning_seconds + active_seconds, "active_seconds": 0.18}, true)
+			_start_hazard(enemy, common)
+
+
+func _advance_rail_charge(enemy: Dictionary, definition: Dictionary, delta: float) -> void:
+	var from := Vector2(enemy["pos"])
+	var desired := from + Vector2(enemy["facing"]) * float(definition.get("charge_speed", 0.90)) * delta
+	var resolved := _resolve_body_motion(from, desired, _enemy_body_radius(enemy))
+	enemy["pos"] = resolved
+	if not bool(enemy.get("attack_done", false)) and _distance_point_to_segment(Vector2(player["pos"]), from, resolved) <= _enemy_body_radius(enemy) + PLAYER_RADIUS:
+		_damage_player(int(enemy["damage"]), String(enemy["enemy_id"]), &"charge")
+		enemy["attack_done"] = true
+	if resolved.distance_to(desired) > GEOMETRY_EPSILON:
+		enemy["state"] = &"cooldown"
+		enemy["state_timer"] = 1.0
+		_cancel_enemy_hazards(String(enemy["enemy_id"]))
+		_emit_event(&"charge_blocked", {"enemy_id": enemy["enemy_id"], "position": resolved})
+
+
+func _line_hazard(origin: Vector2, direction: Vector2, length: float, half_width: float, values: Dictionary) -> Dictionary:
+	var result := values.duplicate(true)
+	var endpoint := _clamp_position(origin + direction.normalized() * length)
+	var fraction := _first_obstacle_hit_fraction(origin, endpoint, half_width)
+	if fraction <= 1.0:
+		endpoint = origin.lerp(endpoint, maxf(0.0, fraction - GEOMETRY_EPSILON))
+	result.merge({"shape": &"line", "origin": origin, "endpoint": endpoint, "direction": direction, "half_width": half_width}, true)
+	return result
+
+
+func _start_hazard(enemy: Dictionary, values: Dictionary) -> void:
+	var hazard := {
+		"hazard_id": "hazard_%04d" % next_hazard_index,
+		"owner_id": String(enemy["enemy_id"]),
+		"behavior_id": StringName(enemy.get("behavior_id", &"")),
+		"direction": Vector2(enemy.get("facing", Vector2.LEFT)),
+		"phase": &"warning",
+		"warning_remaining": 0.50,
+		"remaining": 0.28,
+		"damage": int(enemy.get("damage", 1)),
+		"pressure_delta": 0,
+		"tick_seconds": 0.0,
+		"tick_timer": 0.0,
+		"hit": false,
+		"created_tick": tick_index,
+	}
+	hazard.merge(values, true)
+	hazard["warning_remaining"] = float(values.get("warning_seconds", 0.50))
+	hazard["remaining"] = float(values.get("active_seconds", 0.28))
+	next_hazard_index += 1
+	hazards.append(hazard)
+	_emit_event(&"z1_attack_started", {"enemy_id": enemy["enemy_id"], "behavior_id": hazard["behavior_id"], "hazard_id": hazard["hazard_id"], "direction": hazard["direction"]})
+
+
+func _update_hazards(delta: float) -> void:
+	var survivors: Array[Dictionary] = []
+	for hazard in hazards:
+		var owner := _enemy_by_id(String(hazard["owner_id"]))
+		if owner.is_empty() or int(owner.get("hp", 0)) <= 0:
+			continue
+		if int(hazard["created_tick"]) == tick_index:
+			survivors.append(hazard)
+			continue
+		if StringName(hazard["phase"]) == &"warning":
+			hazard["warning_remaining"] = float(hazard["warning_remaining"]) - delta
+			if float(hazard["warning_remaining"]) > EPSILON:
+				survivors.append(hazard)
+				continue
+			hazard["phase"] = &"active"
+			_emit_event(&"hazard_activated", {"hazard_id": hazard["hazard_id"], "owner_id": hazard["owner_id"], "behavior_id": hazard["behavior_id"]})
+		var intersects := _hazard_hits_player(hazard)
+		if intersects:
+			_apply_hazard_control(hazard, delta)
+		hazard["tick_timer"] = maxf(0.0, float(hazard["tick_timer"]) - delta)
+		if intersects and int(hazard.get("damage", 0)) > 0 and not bool(hazard["hit"]) and float(hazard["tick_timer"]) <= EPSILON:
+			var damaged := _damage_player(int(hazard["damage"]), String(hazard["owner_id"]), StringName(hazard["behavior_id"]), int(hazard.get("pressure_delta", 0)))
+			if not step_error.is_empty():
+				return
+			hazard["hit"] = float(hazard["tick_seconds"]) <= 0.0
+			hazard["tick_timer"] = float(hazard["tick_seconds"])
+			if damaged:
+				_emit_event(&"hazard_hit", {"hazard_id": hazard["hazard_id"], "behavior_id": hazard["behavior_id"]})
+		hazard["remaining"] = float(hazard["remaining"]) - delta
+		if float(hazard["remaining"]) > EPSILON:
+			survivors.append(hazard)
+		else:
+			_emit_event(&"hazard_ended", {"hazard_id": hazard["hazard_id"], "behavior_id": hazard["behavior_id"]})
+	hazards = survivors
+
+
+func _hazard_hits_player(hazard: Dictionary) -> bool:
+	var point := Vector2(player["pos"])
+	var origin := Vector2(hazard.get("origin", Vector2.ZERO))
+	if _line_occluded(origin, point):
+		return false
+	match StringName(hazard.get("shape", &"circle")):
+		&"line":
+			return _distance_point_to_segment(point, origin, Vector2(hazard["endpoint"])) <= float(hazard.get("half_width", 0.01)) + PLAYER_RADIUS
+		&"rectangle":
+			var half_size := Vector2(hazard.get("size", Vector2(0.2, 0.15))) * 0.5
+			var closest := point.clamp(origin - half_size, origin + half_size)
+			return point.distance_to(closest) <= PLAYER_RADIUS
+		&"sector":
+			return _circle_intersects_attack_sector(origin, Vector2(hazard["direction"]), float(hazard.get("radius", 0.21)), cos(float(hazard.get("half_angle", PI / 3.0))), point, PLAYER_RADIUS)
+		&"ring":
+			var distance := point.distance_to(origin)
+			return distance <= float(hazard.get("radius", 0.31)) + PLAYER_RADIUS and distance + PLAYER_RADIUS >= float(hazard.get("inner_radius", 0.20))
+	return point.distance_to(origin) <= float(hazard.get("radius", 0.13)) + PLAYER_RADIUS
+
+
+func _apply_hazard_control(hazard: Dictionary, delta: float) -> void:
+	var control := StringName(hazard.get("control", &""))
+	if control == &"":
+		return
+	var from := Vector2(player["pos"])
+	var direction := Vector2(hazard.get("direction", Vector2.ZERO))
+	if control == &"pull":
+		direction = _normalized_or(Vector2(hazard["origin"]) - from, Vector2.ZERO)
+	var distance := float(hazard.get("control_speed", 0.20)) * delta
+	player["pos"] = _resolve_body_motion(from, from + direction * distance, PLAYER_RADIUS)
+
+
+func _cancel_enemy_hazards(enemy_id: String) -> void:
+	var survivors: Array[Dictionary] = []
+	for hazard in hazards:
+		if String(hazard.get("owner_id", "")) != enemy_id:
+			survivors.append(hazard)
+	hazards = survivors
+
+
+func _prime_hit_counter(enemy: Dictionary) -> void:
+	if int(enemy.get("counter_window_until", -1)) > tick_index:
+		enemy["counter_window_until"] = -1
+		_start_z1_action(enemy, MonsterCatalogScript.definition(StringName(enemy["monster_type"])))
+		_emit_event(&"counter_primed", {"enemy_id": enemy["enemy_id"]})
+	else:
+		var definition := MonsterCatalogScript.definition(StringName(enemy["monster_type"]))
+		enemy["counter_window_until"] = tick_index + int(ceil(float(definition.get("counter_window_seconds", 1.20)) / FIXED_STEP))
+
+
+func _react_to_player_attack(attack: Dictionary) -> void:
+	for enemy in enemies:
+		if int(enemy.get("hp", 0)) <= 0 or StringName(enemy.get("behavior_id", &"")) != &"attack_echo":
+			continue
+		if StringName(enemy.get("state", &"idle")) not in [&"idle", &"move", &"cooldown"]:
+			continue
+		var attack_id := String(attack.get("attack_id", ""))
+		if String(enemy.get("copied_attack_id", "")) == attack_id:
+			continue
+		enemy["copied_attack_id"] = attack_id
+		_start_z1_action(enemy, MonsterCatalogScript.definition(StringName(enemy["monster_type"])), Vector2(attack["facing"]))
+
+
+func _react_to_repair_damage(enemy: Dictionary) -> void:
+	if StringName(enemy.get("repair_mode", &"")) != &"":
+		enemy["repair_mode"] = &""
+		_emit_event(&"repair_interrupted", {"enemy_id": enemy["enemy_id"]})
+		return
+	if bool(enemy.get("repair_attempted", false)) or int(enemy["hp"]) * 2 >= int(enemy["max_hp"]):
+		return
+	enemy["repair_attempted"] = true
+	enemy["repair_mode"] = &"seeking"
+	enemy["repair_remaining"] = 4.0
+	enemy["repair_target"] = _nearest_repair_socket(Vector2(enemy["pos"]), _enemy_body_radius(enemy))
+	enemy["state"] = &"move"
+	_emit_event(&"repair_started", {"enemy_id": enemy["enemy_id"], "target": enemy["repair_target"]})
+
+
+func _nearest_repair_socket(origin: Vector2, body_radius: float) -> Vector2:
+	var result := Vector2(ROOM_MAX, 0.50)
+	var best_distance := INF
+	for candidate: Vector2 in [Vector2(ROOM_MIN, 0.50), Vector2(ROOM_MAX, 0.50), Vector2(0.50, ROOM_MIN), Vector2(0.50, ROOM_MAX)]:
+		var available := _resolve_spawn_outside_obstacles(candidate, body_radius)
+		var distance := origin.distance_squared_to(available)
+		if distance < best_distance:
+			best_distance = distance
+			result = available
+	return result
+
+
+func _update_repair_enemy(enemy_index: int, delta: float) -> void:
+	var enemy := enemies[enemy_index]
+	var mode := StringName(enemy.get("repair_mode", &""))
+	if mode == &"":
+		_update_drone(enemy_index, delta)
+		return
+	var target := Vector2(enemy["repair_target"])
+	enemy["repair_remaining"] = float(enemy["repair_remaining"]) - delta
+	if float(enemy["repair_remaining"]) <= EPSILON:
+		enemy["repair_mode"] = &""
+		enemy["state"] = &"cooldown"
+		enemy["state_timer"] = 2.50
+		_emit_event(&"repair_interrupted", {"enemy_id": enemy["enemy_id"], "reason": &"socket_blocked"})
+	elif mode == &"seeking":
+		var from := Vector2(enemy["pos"])
+		var direction := _normalized_or(target - from, Vector2.ZERO)
+		enemy["pos"] = _resolve_body_motion(from, from.move_toward(target, 0.26 * delta), _enemy_body_radius(enemy))
+		enemy["facing"] = direction
+		if Vector2(enemy["pos"]).distance_to(target) < 0.035 and Vector2(player["pos"]).distance_to(target) > 0.09:
+			enemy["repair_mode"] = &"charging"
+			enemy["state"] = &"warning"
+			enemy["state_timer"] = 1.0
+	else:
+		if Vector2(player["pos"]).distance_to(target) <= 0.09:
+			enemy["repair_mode"] = &""
+			enemy["state"] = &"cooldown"
+			enemy["state_timer"] = 2.50
+			_emit_event(&"repair_interrupted", {"enemy_id": enemy["enemy_id"], "reason": &"socket_blocked"})
+		else:
+			enemy["state_timer"] = float(enemy["state_timer"]) - delta
+			if float(enemy["state_timer"]) <= EPSILON:
+				var healing := maxi(1, int(floor(float(enemy["max_hp"]) * 0.25)))
+				enemy["hp"] = mini(int(enemy["max_hp"]), int(enemy["hp"]) + healing)
+				enemy["repair_mode"] = &""
+				enemy["state"] = &"cooldown"
+				enemy["state_timer"] = 2.50
+				_emit_event(&"monster_healed", {"enemy_id": enemy["enemy_id"], "amount": healing, "hp": enemy["hp"]})
+	enemies[enemy_index] = enemy
 
 
 func _direction_to_player(enemy: Dictionary) -> Vector2:
@@ -1436,17 +2181,17 @@ func _laser_endpoint_contract(origin: Vector2, direction: Vector2, radius: float
 	}
 
 
-func _ray_endpoint_inside_unit_room(origin: Vector2, direction: Vector2) -> Vector2:
+func _ray_endpoint_inside_unit_room(origin: Vector2, direction: Vector2, room_min: float = 0.0, room_max: float = 1.0) -> Vector2:
 	var normalized_direction := _normalized_or(direction, Vector2.LEFT)
 	var closest_distance := INF
 	if normalized_direction.x > EPSILON:
-		closest_distance = minf(closest_distance, (1.0 - origin.x) / normalized_direction.x)
+		closest_distance = minf(closest_distance, (room_max - origin.x) / normalized_direction.x)
 	elif normalized_direction.x < -EPSILON:
-		closest_distance = minf(closest_distance, (0.0 - origin.x) / normalized_direction.x)
+		closest_distance = minf(closest_distance, (room_min - origin.x) / normalized_direction.x)
 	if normalized_direction.y > EPSILON:
-		closest_distance = minf(closest_distance, (1.0 - origin.y) / normalized_direction.y)
+		closest_distance = minf(closest_distance, (room_max - origin.y) / normalized_direction.y)
 	elif normalized_direction.y < -EPSILON:
-		closest_distance = minf(closest_distance, (0.0 - origin.y) / normalized_direction.y)
+		closest_distance = minf(closest_distance, (room_min - origin.y) / normalized_direction.y)
 	if is_inf(closest_distance):
 		return origin
 	return origin + normalized_direction * maxf(0.0, closest_distance)

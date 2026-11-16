@@ -15,6 +15,9 @@ const Art24MotionSettingsScript := preload("res://scripts/presentation/art24/art
 const Art10UISkinKitScript := preload("res://scripts/presentation/art10_ui_skin_kit.gd")
 const Art24InRunAssetContractScript := preload("res://scripts/presentation/art24/art24_in_run_asset_contract.gd")
 const CombatSimulationScript := preload("res://scripts/gameplay/combat/g41_combat_simulation.gd")
+const Z1Events := preload("res://scripts/core/content/z1_event_catalog.gd")
+const TextureCache := preload("res://scripts/presentation/runtime_texture_cache.gd")
+const EventRoomDeviceView := preload("res://scripts/presentation/z1/z1_event_room_device_view.gd")
 const EVENT_BADGE_TEXTURES := {
 	&"trader": preload("res://assets/ui/art25/content/long_term/event/trader.png"),
 	&"dice": preload("res://assets/ui/art25/content/long_term/event/dice.png"),
@@ -319,6 +322,7 @@ func get_door_projections() -> Array[Dictionary]:
 
 
 func clear_runtime() -> void:
+	_sync_event_room_art({})
 	latest_room_snapshot.clear()
 	combat_snapshot.clear()
 	world_projection.clear()
@@ -371,6 +375,7 @@ func _rebuild_world_projection() -> void:
 		focus_lost_elapsed = 0.0
 	world_projection = WorldObjectProjectionScript.build(latest_room_snapshot, combat_snapshot)
 	_merge_room_entry_result_into_projection()
+	_sync_event_room_art(world_projection.get("event_room", {}))
 	door_projections = _dictionary_array(world_projection.get("doors", []))
 	door_projection_revision += 1
 	_sync_door_visuals()
@@ -381,6 +386,37 @@ func _rebuild_world_projection() -> void:
 	_sync_special_objects(objects)
 	projection_room_key = room_key
 	_rebuild_obstacle_projection()
+
+
+func _sync_event_room_art(room: Dictionary) -> void:
+	var layer := get_node_or_null("EventRoomDecor") as Node2D
+	if room.is_empty():
+		if layer != null:
+			layer.hide()
+		return
+	if layer == null:
+		layer = Node2D.new()
+		layer.name = "EventRoomDecor"
+		layer.show_behind_parent = true
+		add_child(layer)
+	layer.show()
+	layer.set_meta("event_room_id", room["id"])
+	for role in ["floor", "wall"]:
+		var sprite := layer.get_node_or_null(role.capitalize()) as Sprite2D
+		if sprite == null:
+			sprite = Sprite2D.new()
+			sprite.name = role.capitalize()
+			sprite.centered = false
+			sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			sprite.z_index = 1 if role == "wall" else 0
+			layer.add_child(sprite)
+		var texture_path := String(room[role + "_path"])
+		if sprite.texture == null or sprite.texture.resource_path != texture_path:
+			sprite.texture = TextureCache.texture(texture_path)
+		if sprite.texture != null:
+			var rect := Rect2(room[role + "_rect"])
+			sprite.position = G41RuntimeLayout.local_to_world(rect.position)
+			sprite.scale = G41RuntimeLayout.local_size_to_world(rect.size) / sprite.texture.get_size()
 
 
 func _rebuild_door_projection() -> void:
@@ -513,7 +549,9 @@ func _sync_foreground_occluders(occluders: Array[Dictionary]) -> void:
 
 
 func _apply_foreground_occluder(sprite: Sprite2D, descriptor: Dictionary) -> void:
-	var texture := Art24InRunAssetContractScript.texture(StringName(descriptor.get("visual_key", &"")))
+	var payload: Dictionary = descriptor.get("payload", {})
+	var path := String(payload.get("texture_path", ""))
+	var texture := Art24InRunAssetContractScript.texture(StringName(descriptor.get("visual_key", &""))) if path.is_empty() else TextureCache.texture(path)
 	sprite.texture = texture
 	sprite.visible = texture != null
 	if texture == null:
@@ -534,7 +572,6 @@ func _apply_foreground_occluder(sprite: Sprite2D, descriptor: Dictionary) -> voi
 		world_size.x / maxf(1.0, source_rect.size.x),
 		world_size.y / maxf(1.0, source_rect.size.y)
 	)
-	var payload: Dictionary = descriptor.get("payload", {})
 	sprite.z_index = (
 		PresentationDescriptor.ground_depth(Vector2(descriptor["ground_anchor_local"]).y)
 		if StringName(descriptor.get("depth_key", &"")) == &"world.foreground_occluder"
@@ -751,12 +788,19 @@ func _apply_special_art(entity, projection: Dictionary) -> void:
 		sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		visual_root.add_child(sprite)
 	var kind := StringName(projection.get("interaction_kind", &""))
+	var payload: Dictionary = projection.get("payload", {})
 	var texture: Texture2D
 	var uses_projected_geometry := false
 	match kind:
 		&"event":
-			var event_type := StringName((projection.get("payload", {}) as Dictionary).get("event_type", &"trader"))
-			texture = EVENT_BADGE_TEXTURES.get(event_type, EVENT_BADGE_TEXTURES[&"trader"]) as Texture2D
+			var event_type := StringName(payload.get("event_type", &"trader"))
+			var station_path := String(payload.get("station_texture_path", ""))
+			if not station_path.is_empty():
+				texture = TextureCache.texture(station_path)
+			elif Z1Events.number(event_type) > 0:
+				texture = TextureCache.texture("res://assets/z1/events/e%02d.png" % Z1Events.number(event_type))
+			else:
+				texture = EVENT_BADGE_TEXTURES.get(event_type, EVENT_BADGE_TEXTURES[&"trader"]) as Texture2D
 			uses_projected_geometry = true
 		&"mine":
 			texture = MINE_TRAP_TEXTURE
@@ -768,6 +812,15 @@ func _apply_special_art(entity, projection: Dictionary) -> void:
 		sprite.texture = texture
 	if uses_projected_geometry:
 		_apply_projected_special_geometry(sprite, projection)
+	var device := visual_root.get_node_or_null("DeviceReadout") as Node2D
+	if not String(payload.get("event_room_id", "")).is_empty():
+		if device == null:
+			device = EventRoomDeviceView.new()
+			device.name = "DeviceReadout"
+			visual_root.add_child(device)
+		device.call("configure", projection)
+	elif device != null:
+		device.queue_free()
 	var placeholder := visual_root.get_node_or_null("ProgramPlaceholder") as Polygon2D
 	if placeholder != null:
 		placeholder.visible = texture == null
@@ -806,7 +859,7 @@ func _apply_special_focus_visual(entity) -> void:
 		_apply_special_prompt_visibility(entity)
 		return
 	var alpha := 1.0
-	if StringName(entity.interaction_kind) == &"event" and bool(payload.get("completed", false)):
+	if StringName(entity.interaction_kind) == &"event" and bool(payload.get("completed", false)) and not payload.has("event_room_id"):
 		alpha = 0.55
 	sprite.modulate = Color(1.0, 0.96, 0.82, alpha) if entity.focused else Color(1.0, 1.0, 1.0, alpha)
 	_apply_special_prompt_visibility(entity)
@@ -1375,6 +1428,10 @@ func _remove_missing_views(views: Dictionary, active_ids: Dictionary) -> void:
 func _rebuild_obstacle_projection() -> void:
 	obstacle_descriptors.clear()
 	logical_obstacles.clear()
+	if room_type == &"Event" and not (world_projection.get("event_room", {}) as Dictionary).is_empty():
+		var station = special_entities.get("event:%s" % room_key)
+		if station != null:
+			_append_interactable_obstacle_descriptor(station, true)
 	for raw_occluder in (world_projection.get("occluders", []) as Array):
 		if not raw_occluder is Dictionary:
 			continue
@@ -1529,6 +1586,7 @@ func _draw() -> void:
 	for door in door_projections:
 		_draw_door_projection(door)
 	_draw_enemy_melee_geometry()
+	_draw_z1_hazards()
 	_draw_player_attack_geometry()
 	for raw_laser in (combat_snapshot.get("lasers", []) as Array):
 		if not (raw_laser is Dictionary):
@@ -1552,6 +1610,69 @@ func _draw() -> void:
 		draw_line(origin, endpoint, Color(1.0, 0.74, 0.42, 0.96), maxf(1.0, beam_width * 0.16), true)
 		draw_circle(origin, radius_pixels, Color(1.0, 0.34, 0.12, 0.92))
 		draw_circle(endpoint, radius_pixels, Color(0.92, 0.08, 0.035, 0.75))
+
+
+func _draw_z1_hazards() -> void:
+	for hazard: Dictionary in combat_snapshot.get("hazards", []):
+		var origin_local := Vector2(hazard.get("origin", Vector2.ZERO))
+		var origin := ActorViewScript.local_to_world(origin_local)
+		var active := StringName(hazard.get("phase", &"warning")) == &"active"
+		var edge := Color(1.0, 0.28, 0.09, 0.95) if active else Color(1.0, 0.69, 0.24, 0.8)
+		var fill := Color(edge.r, edge.g, edge.b, 0.22 if active else 0.07)
+		var width := 2.4 if active else 1.5
+		var radius_local := float(hazard.get("radius", 0.0))
+		var radius := G41RuntimeLayout.local_size_to_world(Vector2.ONE * radius_local).x
+		match StringName(hazard.get("shape", &"circle")):
+			&"ring":
+				var inner := G41RuntimeLayout.local_size_to_world(Vector2.ONE * float(hazard.get("inner_radius", 0.0))).x
+				draw_arc(origin, radius, 0, TAU, 64, edge, width)
+				draw_arc(origin, inner, 0, TAU, 64, edge, width)
+				if active and radius > inner:
+					draw_arc(origin, (radius + inner) * 0.5, 0, TAU, 64, fill, radius - inner)
+			&"sector":
+				var direction := Vector2(hazard.get("direction", Vector2.RIGHT))
+				var angle := float(hazard.get("half_angle", PI / 4.0))
+				var polygon := PackedVector2Array([origin])
+				for step in range(33):
+					var ray := Vector2.from_angle(direction.angle() - angle + 2.0 * angle * step / 32.0)
+					polygon.append(_z1_hazard_endpoint(origin_local, ray, radius_local))
+				draw_colored_polygon(polygon, fill)
+				polygon.append(origin)
+				draw_polyline(polygon, edge, width)
+			&"line":
+				var end_local := Vector2(hazard.get("endpoint", origin_local))
+				var endpoint := _z1_hazard_endpoint(origin_local, (end_local - origin_local).normalized(), origin_local.distance_to(end_local))
+				var half_width := G41RuntimeLayout.local_size_to_world(Vector2.ONE * float(hazard.get("half_width", 0.02))).x
+				draw_line(origin, endpoint, fill, maxf(2.0, half_width * 2.0))
+				draw_line(origin, endpoint, edge, width)
+			&"rectangle":
+				var size := G41RuntimeLayout.local_size_to_world(Vector2(hazard.get("size", Vector2(0.2, 0.2))))
+				var area := Rect2(origin - size * 0.5, size).intersection(G41RuntimeLayout.ROOM_RECT)
+				draw_rect(area, fill)
+				draw_rect(area, edge, false, width)
+			_:
+				var polygon := _clipped_radial_outline(origin_local, radius_local, 64)
+				if polygon.size() >= 3:
+					draw_colored_polygon(polygon, fill)
+					polygon.append(polygon[0])
+					draw_polyline(polygon, edge, width)
+	for enemy: Dictionary in combat_snapshot.get("enemies", []):
+		if String(enemy.get("repair_mode", "")).is_empty() or not enemy.has("repair_target"):
+			continue
+		var socket := ActorViewScript.local_to_world(Vector2(enemy["repair_target"]))
+		var owner := ActorViewScript.local_to_world(Vector2(enemy.get("pos", Vector2.ZERO)))
+		var color := Color(1.0, 0.76, 0.2, 0.95)
+		draw_circle(socket, 13.0, Color(color.r, color.g, color.b, 0.15))
+		draw_arc(socket, 13.0, 0.0, TAU, 32, color, 2.0)
+		draw_dashed_line(owner, socket, Color(color.r, color.g, color.b, 0.45), 1.5, 6.0)
+
+
+func _z1_hazard_endpoint(origin_local: Vector2, direction: Vector2, distance: float) -> Vector2:
+	var fraction := 1.0
+	for obstacle: Rect2 in logical_obstacles:
+		fraction = minf(fraction, _segment_rect_hit_fraction(origin_local, origin_local + direction * distance, obstacle))
+	var endpoint := ActorViewScript.local_to_world(origin_local + direction * distance * fraction)
+	return endpoint.clamp(G41RuntimeLayout.ROOM_RECT.position, G41RuntimeLayout.ROOM_RECT.end)
 
 
 func _draw_door_projection(door: Dictionary) -> void:
@@ -1698,6 +1819,8 @@ func _draw_enemy_melee_geometry() -> void:
 		if not raw_enemy is Dictionary:
 			continue
 		var enemy := raw_enemy as Dictionary
+		if not String(enemy.get("behavior_id", "")).is_empty() and String(enemy.get("behavior_id", "")) != "aftershock":
+			continue
 		var state := StringName(enemy.get("state", &"idle"))
 		if state not in [&"warning", &"active"]:
 			continue
@@ -1790,6 +1913,8 @@ func _segment_rect_hit_fraction(start: Vector2, finish: Vector2, rect: Rect2) ->
 
 
 func _has_visible_combat_geometry(snapshot: Dictionary) -> bool:
+	if not (snapshot.get("hazards", []) as Array).is_empty():
+		return true
 	var attack: Dictionary = snapshot.get("player_attack_geometry", {})
 	if not attack.is_empty() and bool(attack.get("visible", false)):
 		return true
@@ -1799,6 +1924,8 @@ func _has_visible_combat_geometry(snapshot: Dictionary) -> bool:
 		if not raw_enemy is Dictionary:
 			continue
 		var enemy := raw_enemy as Dictionary
+		if not String(enemy.get("repair_mode", "")).is_empty():
+			return true
 		var state := StringName(enemy.get("state", &"idle"))
 		if state in [&"warning", &"active"]:
 			return true

@@ -11,6 +11,9 @@ signal scale_requested(scale_id: StringName)
 signal map_requested(map_config_id: StringName)
 
 const EXPECTED_SCALE_IDS := [&"5x5", &"7x7", &"10x10", &"13x13"]
+const MAP_GRID_CELL_PITCH := 3
+const MAP_SCALE_PLATE_TEXT_MARGIN := 56
+const MAP_PREVIEW_RIM := Color(0.28, 0.77, 0.72)
 
 var current_projection: Dictionary = {}
 var scale_options: Array = []
@@ -65,7 +68,7 @@ func build(projection: Dictionary = {}) -> void:
 	_add_panel("MapDetailColumn", DeployPrepLayoutContractScript.MAP_DETAIL_COLUMN, &"surface")
 	_add_color_rect("MapSplitDivider", Rect2(484, 120, 1, 522), Color(0.46, 0.36, 0.20, 0.42))
 	_add_label("MapScaleTitle", DeployPrepLayoutContractScript.MAP_SCALE_TITLE, "地图规模", 20, Art10UISkinKitScript.color(&"gold"))
-	var caption := _add_label("MapScaleCaption", DeployPrepLayoutContractScript.MAP_SCALE_CAPTION, "同页查看地图与难度", 13, Art10UISkinKitScript.color(&"caption"))
+	var caption := _add_label("MapScaleCaption", DeployPrepLayoutContractScript.MAP_SCALE_CAPTION, "在右侧确认采用难度", 13, Art10UISkinKitScript.color(&"caption"))
 	caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	scale_status_label = _add_label("MapScaleStatus", DeployPrepLayoutContractScript.MAP_SCALE_STATUS, "", 13, Art10UISkinKitScript.color(&"caption"))
 	scale_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -296,17 +299,18 @@ func _rebuild_scale_buttons() -> void:
 			"MapScale_%s" % String(scale_id),
 			DeployPrepLayoutContractScript.MAP_SCALE_BUTTON_RECTS[index],
 			_scale_button_text(option),
-			&"selected" if scale_id == selected_scale_id else &"secondary",
+			&"secondary",
 			&"body_small"
 		)
 		button.toggle_mode = true
 		button.button_group = scale_button_group
 		button.set_meta("scale_id", scale_id)
-		button.set_pressed_no_signal(scale_id == selected_scale_id)
-		button.tooltip_text = "查看%s的%d个难度" % [_scale_label(option), _maps_for_scale(option).size()]
+		_add_scale_grid(button, int(option.get("width", String(scale_id).get_slice("x", 0).to_int())))
+		button.tooltip_text = "查看 %s 地图与开放条件" % _scale_label(option)
 		button.pressed.connect(_on_scale_pressed.bind(scale_id))
 		scale_buttons[scale_id] = button
 		_register_focus_button(button, StringName("scale:%s" % String(scale_id)))
+	_refresh_scale_buttons()
 	_refresh_scale_status()
 
 
@@ -321,24 +325,21 @@ func _rebuild_difficulty_buttons() -> void:
 	difficulty_buttons.clear()
 	difficulty_button_group = ButtonGroup.new()
 	difficulty_button_group.allow_unpress = false
-	var preview_map_id := get_preview_map_id()
 	for index in range(difficulty_options.size()):
 		var option := _dictionary_copy(difficulty_options[index])
 		var map_id := StringName(option.get("map_config_id", option.get("id", &"")))
 		if map_id.is_empty():
 			continue
-		var is_previewed := map_id == preview_map_id
 		var button := _add_button(
 			"MapDifficulty_%s" % String(map_id),
 			DeployPrepLayoutContractScript.map_difficulty_button_rect(index, difficulty_options.size()),
 			_difficulty_button_text(option),
-			_difficulty_tone(option, is_previewed),
+			&"secondary",
 			&"body_small"
 		)
 		button.toggle_mode = true
 		button.button_group = difficulty_button_group
 		button.set_meta("map_config_id", map_id)
-		button.set_pressed_no_signal(is_previewed)
 		button.tooltip_text = _difficulty_tooltip(option)
 		button.pressed.connect(_on_difficulty_pressed.bind(map_id))
 		difficulty_buttons[map_id] = button
@@ -352,9 +353,8 @@ func _refresh_scale_buttons() -> void:
 		var button := scale_buttons.get(scale_id) as Button
 		if button == null:
 			continue
-		var selected := scale_id == selected_scale_id
-		button.set_pressed_no_signal(selected)
-		_apply_button_skin(button, &"selected" if selected else &"secondary", &"body_small", &"filter", &"selected" if selected else &"normal")
+		var has_open_map := _scale_unlocked_count(option) > 0
+		_apply_map_choice_skin(button, &"normal" if has_open_map else &"locked", scale_id == selected_scale_id)
 
 
 func _refresh_difficulty_buttons() -> void:
@@ -365,9 +365,12 @@ func _refresh_difficulty_buttons() -> void:
 		var button := difficulty_buttons.get(map_id) as Button
 		if button == null:
 			continue
-		var previewed := map_id == preview_map_id
-		button.set_pressed_no_signal(previewed)
-		_apply_button_skin(button, _difficulty_tone(option, previewed), &"body_small", &"filter", &"selected" if previewed else (&"locked" if not _map_unlocked(option) else &"normal"))
+		var state := &"normal"
+		if not _map_unlocked(option):
+			state = &"locked"
+		elif map_id == selected_map_id:
+			state = &"selected"
+		_apply_map_choice_skin(button, state, map_id == preview_map_id)
 
 
 func _refresh_scale_status() -> void:
@@ -392,6 +395,7 @@ func _refresh_scale_status() -> void:
 
 
 func _refresh_detail() -> void:
+	_refresh_difficulty_buttons()
 	var empty := selected_detail.is_empty()
 	if empty_state_panel != null:
 		empty_state_panel.visible = empty
@@ -438,10 +442,16 @@ func _refresh_detail() -> void:
 	var exit_full := "出口  %d\n固定 %d · 隐藏 %d" % [total_exits, visible_exits, hidden_exits] if has_exit_data else "出口  —"
 	var exit_copy := "出口  %d（%d/%d）" % [total_exits, visible_exits, hidden_exits] if ui_scale_factor >= 1.25 and has_exit_data else exit_full
 	_set_metric(&"exit", exit_copy, exit_full.replace("\n", " · "))
-	var has_experience := selected_detail.has("success_exp") or selected_detail.has("experience")
-	var experience_copy := "档案  完成记录" if tutorial_map else (("经验  +%d" if ui_scale_factor >= 1.25 else "成功经验  +%d") % int(selected_detail.get("success_exp", selected_detail.get("experience", 0))) if has_experience else ("经验  —" if ui_scale_factor >= 1.25 else "成功经验  —"))
+	var experience_copy := "档案  完成记录" if tutorial_map else "资历经验  —"
+	var experience_percent := int(selected_detail.get("experience_percent", 0))
+	var experience_cap := int(selected_detail.get("experience_cap", 0))
+	if not tutorial_map and experience_percent > 0 and experience_cap > 0:
+		experience_copy = "资历经验  倍率 %d%% · 上限 %d" % [experience_percent, experience_cap]
 	_set_metric(&"experience", experience_copy)
 	detail_description_label.text = _detail_description(selected_detail, unlocked)
+	detail_description_label.add_theme_color_override(
+		"font_color", Art10UISkinKitScript.color(&"caption" if unlocked else &"warning")
+	)
 
 	var action := _dictionary_copy(selected_detail.get("select_action", {}))
 	var action_enabled := bool(action.get("enabled", false)) and unlocked and not active_run_locked and not is_selected
@@ -449,7 +459,6 @@ func _refresh_detail() -> void:
 	select_action_button.text = _action_text(unlocked, is_selected)
 	select_action_button.tooltip_text = _action_tooltip(action, unlocked, is_selected)
 	_apply_button_skin(select_action_button, &"primary" if action_enabled else &"disabled", &"button", &"action", &"normal" if action_enabled else &"disabled")
-	_refresh_difficulty_buttons()
 	_refresh_scale_status()
 	_refit_dynamic_controls()
 
@@ -621,35 +630,67 @@ func _scale_label(option: Dictionary) -> String:
 
 
 func _scale_button_text(option: Dictionary) -> String:
-	var map_name := String(option.get("map_name", option.get("display_name", "常规扫雷"))).strip_edges()
-	var count := int(option.get("map_count", _maps_for_scale(option).size()))
+	var maps := _maps_for_scale(option)
+	for raw_map in maps:
+		var map := raw_map as Dictionary
+		if bool(map.get("tutorial_map", false)):
+			var completion := "可重播" if bool(map.get("tutorial_completed", false)) else "待完成"
+			return "%s 教程\n%s" % [_scale_label(option), completion]
+	return "%s\n开放 %d/%d" % [_scale_label(option), _scale_unlocked_count(option), maps.size()]
+
+
+func _scale_unlocked_count(option: Dictionary) -> int:
+	if option.has("unlocked_count"):
+		return int(option["unlocked_count"])
+	var count := 0
 	for raw_map in _maps_for_scale(option):
-		if bool((raw_map as Dictionary).get("tutorial_map", false)):
-			return "%s\n%s · 固定模式" % [map_name, _scale_label(option)]
-	return "%s\n%s · %d 个难度" % [map_name, _scale_label(option), count]
+		if _map_unlocked(raw_map as Dictionary):
+			count += 1
+	return count
+
+
+func _add_scale_grid(button: Button, side: int) -> void:
+	if side <= 0:
+		return
+	var grid_extent := side * MAP_GRID_CELL_PITCH + 1
+	var texture_extent := grid_extent + 6
+	var pixels := Image.create_empty(texture_extent, texture_extent, false, Image.FORMAT_RGBA8)
+	pixels.fill(Color("524431"))
+	pixels.fill_rect(Rect2i(1, 1, texture_extent - 2, texture_extent - 2), Color("162827"))
+	pixels.fill_rect(Rect2i(3, 3, grid_extent, grid_extent), Color("37605a"))
+	for row in range(side):
+		for column in range(side):
+			var x := 4 + column * MAP_GRID_CELL_PITCH
+			var y := 4 + row * MAP_GRID_CELL_PITCH
+			pixels.fill_rect(Rect2i(x, y, 2, 2), Color("1e3a37"))
+	var grid := TextureRect.new()
+	grid.name = "MapScaleGrid"
+	grid.texture = ImageTexture.create_from_image(pixels)
+	grid.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	grid.position = Vector2(
+		floorf((MAP_SCALE_PLATE_TEXT_MARGIN - texture_extent) * 0.5) + 1.0,
+		floorf((button.size.y - texture_extent) * 0.5)
+	)
+	button.add_child(grid)
 
 
 func _difficulty_button_text(option: Dictionary) -> String:
 	var label := String(option.get("difficulty_label", option.get("difficulty", "难度")))
 	if not _map_unlocked(option):
-		return "%s · 未开放" % label
+		return "%s\n未解锁" % label
 	var map_id := StringName(option.get("map_config_id", option.get("id", &"")))
-	return "%s · 已采用" % label if map_id == selected_map_id else label
+	var state := "已采用" if map_id == selected_map_id else ("配置锁定" if active_run_locked else "可采用")
+	return "%s\n%s" % [label, state]
 
 
 func _difficulty_tooltip(option: Dictionary) -> String:
 	var name := String(option.get("display_name", option.get("map_config_id", "地图")))
 	if not _map_unlocked(option):
-		return "查看%s详情；该难度尚未解锁" % name
+		return "查看%s详情\n%s" % [name, _map_lock_reason(option)]
 	if active_run_locked:
 		return "查看%s详情；探索进行中不可更改" % name
 	return "查看%s详情；右下角确认采用" % name
-
-
-func _difficulty_tone(option: Dictionary, previewed: bool) -> StringName:
-	if previewed:
-		return &"selected"
-	return &"secondary" if _map_unlocked(option) else &"locked"
 
 
 func _map_unlocked(option: Dictionary) -> bool:
@@ -681,16 +722,21 @@ func _detail_state_color(unlocked: bool, is_selected: bool) -> Color:
 
 
 func _detail_description(detail: Dictionary, unlocked: bool) -> String:
+	if not unlocked:
+		return "解锁条件\n%s" % _map_lock_reason(detail).replace(" · ", "\n")
 	var provided := Art10UISkinKitScript.sanitize_player_copy(String(detail.get("detail", detail.get("description", ""))))
 	if not provided.is_empty():
 		if bool(detail.get("tutorial_map", false)):
 			return "%s\n完成状态：%s" % [provided, str(detail.get("completion_label", "未完成"))]
 		return provided
-	if not unlocked:
-		return "满足对应研究、资历或成就条件后开放。"
 	if bool(detail.get("visible_exit_position_known", false)):
 		return "固定出口位置可见；实际房间在确认出发后生成。"
 	return "实际房间与出口位置在确认出发后生成。"
+
+
+func _map_lock_reason(detail: Dictionary) -> String:
+	var reason := Art10UISkinKitScript.sanitize_player_copy(String(detail.get("lock_reason", "")))
+	return reason if not reason.is_empty() else "满足该难度的解锁条件后开放。"
 
 
 func _action_text(unlocked: bool, is_selected: bool) -> String:
@@ -709,7 +755,7 @@ func _action_tooltip(action: Dictionary, unlocked: bool, is_selected: bool) -> S
 	if active_run_locked:
 		return "探索进行中，本局地图不可更改"
 	if not unlocked:
-		return "该难度尚未解锁，可继续查看详情"
+		return _map_lock_reason(selected_detail)
 	if is_selected:
 		return "该地图已用于本次出发"
 	var reason := String(action.get("reason", ""))
@@ -809,6 +855,55 @@ func _add_button(node_name: String, rect: Rect2, text: String, tone: StringName,
 	return button
 
 
+func _apply_map_choice_skin(button: Button, state: StringName, previewed: bool) -> void:
+	button.set_pressed_no_signal(previewed)
+	var plate_state := &"disabled" if state == &"locked" else state
+	var plate := Art10UISkinKitScript.style_box_from_asset_ref(
+		Art22DeployPrepAssetContractScript.control_ref(&"filter", plate_state), 8, 16
+	)
+	var left_margin := MAP_SCALE_PLATE_TEXT_MARGIN if button.has_meta("scale_id") else 12
+	var right_margin := 10 if button.has_meta("scale_id") else 12
+	plate.content_margin_left = left_margin
+	plate.content_margin_right = right_margin
+	plate.content_margin_top = 4
+	plate.content_margin_bottom = 4
+	button.add_theme_stylebox_override("normal", plate)
+	button.add_theme_stylebox_override("pressed", plate)
+	var hovered_plate := plate.duplicate() as StyleBoxTexture
+	hovered_plate.modulate_color = Color(1.08, 1.08, 1.08)
+	button.add_theme_stylebox_override("hover", hovered_plate)
+	button.add_theme_stylebox_override("hover_pressed", hovered_plate)
+	button.add_theme_stylebox_override("focus", _choice_rim(Color("326e68")))
+	var ink := Color("321f11")
+	if state == &"selected":
+		ink = Color("f5d48f")
+	elif state == &"locked":
+		ink = Color("101512")
+	for color_name in [&"font_color", &"font_hover_color", &"font_focus_color", &"font_pressed_color", &"font_hover_pressed_color"]:
+		button.add_theme_color_override(color_name, ink)
+	button.set_meta("deploy_map_text_bounds", button.size - Vector2(left_margin + right_margin, 0))
+	button.set_meta("deploy_map_text_padding", Vector2(0, 4))
+	_apply_scaled_control_font(button)
+
+	var rim := button.get_node_or_null("MapPreviewRim") as Panel
+	if rim == null:
+		rim = Panel.new()
+		rim.name = "MapPreviewRim"
+		rim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rim.add_theme_stylebox_override("panel", _choice_rim(MAP_PREVIEW_RIM))
+		button.add_child(rim)
+		_set_rect(rim, Rect2(Vector2(3, 3), button.size - Vector2(6, 6)))
+	rim.visible = previewed
+
+
+func _choice_rim(color: Color) -> StyleBoxFlat:
+	var rim := StyleBoxFlat.new()
+	rim.draw_center = false
+	rim.border_color = color
+	rim.set_border_width_all(2)
+	return rim
+
+
 func _apply_button_skin(button: Button, tone: StringName, token: StringName, control_id: StringName, state: StringName) -> void:
 	if button == null:
 		return
@@ -877,6 +972,7 @@ func _apply_scaled_control_font(control: Control) -> void:
 		text = button.text
 		multiline = text.contains("\n")
 		alignment = button.alignment
+		padding = button.get_meta("deploy_map_text_padding", padding)
 	var fit := DeployPrepLayoutContractScript.fit_text(
 		text,
 		control.get_theme_font("font"),

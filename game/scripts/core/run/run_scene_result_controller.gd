@@ -21,7 +21,7 @@ static func build_result_display_snapshot(result_snapshot: Dictionary, meta_prog
 	display_snapshot["persistence_state"] = persistence_state
 	display_snapshot["normal_exit_allowed"] = normal_exit_allowed
 	display_snapshot["retry_save_allowed"] = not awaiting_salvage and not normal_exit_allowed
-	display_snapshot["discard_unsaved_allowed"] = not awaiting_salvage and not normal_exit_allowed
+	display_snapshot["discard_unsaved_allowed"] = not awaiting_salvage and not normal_exit_allowed and not bool(meta_progress_commit.get("durable_checkpoint", false))
 	display_snapshot["discard_unsaved_confirmation_count"] = 2
 	display_snapshot["meta_progress_summary"] = meta_progress_summary.duplicate(true)
 	display_snapshot["commit_authority"] = "RunRuntimeController"

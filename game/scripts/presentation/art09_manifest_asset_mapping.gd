@@ -338,6 +338,9 @@ static func deploy_card_asset_ref(card_id: StringName, category: String, filter_
 
 
 static func inventory_item_icon_ref(item: Dictionary) -> Dictionary:
+	var z1_record := Z1ItemVisualCatalog.entry(String(item.get("item_id", item.get("definition_id", ""))))
+	if not z1_record.is_empty():
+		return asset_ref(StringName(z1_record.get("asset_id", "")), FALLBACK_ICON, &"item_icon", &"z1")
 	var explicit_asset := StringName(item.get("asset_id", &""))
 	if String(explicit_asset).begins_with("item."):
 		var explicit_text := String(explicit_asset).to_lower()

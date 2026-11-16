@@ -3,6 +3,7 @@ class_name MetaProgressAdapter
 
 const SaveAdapterScript := preload("res://scripts/core/save/save_adapter.gd")
 const SaveProfileManifestScript := preload("res://scripts/core/save/save_profile_manifest.gd")
+const RunStateSnapshotScript := preload("res://scripts/core/run/run_state_snapshot.gd")
 const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
 const M7ProgressionServiceScript := preload("res://scripts/core/progression/m7_progression_service.gd")
 const M7TalentCatalogScript := preload("res://scripts/core/progression/m7_talent_catalog.gd")
@@ -102,9 +103,56 @@ func load_or_create_default() -> Dictionary:
 	)
 	write_blocked = bool(result.get("read_only_fallback", false))
 	write_block_reason = "meta_progress_read_only_fallback" if write_blocked else ""
+	var format_error := SaveAdapterScript.z2_meta_error(data)
+	if format_error.is_empty() and data.get("ruleset_id", "") == "z2" and not _restore_terminal_storage():
+		format_error = "invalid_terminal_storage"
+	if format_error.is_empty() and data.has("ruleset_id") and data.get("profile_id") != active_profile_id:
+		format_error = "meta_profile_mismatch"
+	if not format_error.is_empty():
+		write_blocked = true
+		write_block_reason = format_error
 	if not bool(result.get("ok", false)):
 		last_error = str(result.get("error", save_adapter.last_error))
 	return data.duplicate(true)
+
+
+func initialize_z2_profile(content_version: String = "z2") -> Dictionary:
+	if not _ensure_writable("initialize_z2_profile") or content_version.is_empty():
+		return {"ok": false, "status": "write_blocked", "error": last_error}
+	# An existing file is never guessed to be pristine. The caller selects a new profile.
+	for suffix in ["", SaveAdapterScript.LAST_VALID_BACKUP_SUFFIX, SaveAdapterScript.ATOMIC_TEMP_SUFFIX, SaveAdapterScript.CORRUPT_RECOVERY_SUFFIX]:
+		if FileAccess.file_exists(active_meta_progress_path + str(suffix)):
+			return {"ok": false, "status": "existing_profile_requires_explicit_migration"}
+	if last_load_status != "missing":
+		return {"ok": false, "status": "profile_not_missing"}
+	var previous := data.duplicate(true)
+	data = save_adapter.default_meta_progress()
+	data.merge({
+		"ruleset_id": "z2", "profile_id": active_profile_id, "content_version": content_version,
+		"admission": {}, "run_receipts": {}, "checkpoint_cleanup_run_id": "",
+	}, true)
+	if not save():
+		data = previous
+		return {"ok": false, "status": "save_failed", "error": last_error}
+	last_load_status = "loaded"
+	return {"ok": true, "status": "initialized", "profile_id": active_profile_id}
+
+
+func reserved_instance_ids() -> Array:
+	var admission := _dictionary_from(data.get("admission", {}))
+	return _array_from(admission.get("reserved_instance_ids", []))
+
+
+func commit_admission(admission: Dictionary) -> Dictionary:
+	if not _ensure_writable("commit_admission") or data.get("ruleset_id", "") != "z2" or _meta_action_transaction_active:
+		return {"ok": false, "status": "write_blocked", "error": last_error}
+	var previous := data.duplicate(true)
+	data["admission"] = admission.duplicate(true)
+	data["checkpoint_cleanup_run_id"] = ""
+	if not save():
+		data = previous
+		return {"ok": false, "status": "save_failed", "error": last_error}
+	return {"ok": true, "status": str(admission.get("phase", ""))}
 
 
 func save() -> bool:
@@ -192,6 +240,9 @@ func execute_idempotent_meta_action(
 
 
 func clear() -> Dictionary:
+	if data.has("ruleset_id"):
+		last_error = "z2_profile_clear_requires_explicit_migration"
+		return get_summary()
 	if not _ensure_writable("clear"):
 		return get_summary()
 	data = save_adapter.default_meta_progress()
@@ -200,6 +251,87 @@ func clear() -> Dictionary:
 
 
 func apply_settlement(result_snapshot: Dictionary) -> Dictionary:
+	if data.get("ruleset_id", "") == "z2":
+		return _apply_z2_settlement(result_snapshot)
+	return _apply_legacy_settlement(result_snapshot)
+
+
+func _apply_z2_settlement(result_snapshot: Dictionary) -> Dictionary:
+	if not _ensure_writable("apply_settlement") or _meta_action_transaction_active:
+		return {"ok": false, "status": "write_blocked", "error": last_error}
+	var run_id := str(result_snapshot.get("run_id", ""))
+	if run_id.is_empty() or str(result_snapshot.get("profile_id", active_profile_id)) != active_profile_id:
+		return {"ok": false, "status": "settlement_reference_mismatch"}
+	var payload: Variant = _json_safe(result_snapshot)
+	var fingerprint := SaveAdapterScript.json_fingerprint(payload)
+	var fingerprint_encoding := "json"
+	if fingerprint.is_empty() and _is_lossless_terminal_payload(payload):
+		fingerprint = SaveAdapterScript.json_fingerprint(RunStateSnapshotScript.encode(payload))
+		fingerprint_encoding = "run_state_snapshot_v1"
+	if fingerprint.is_empty():
+		return {"ok": false, "status": "invalid_settlement_payload"}
+	var receipts := _dictionary_from(data.get("run_receipts", {}))
+	if receipts.has(run_id):
+		var receipt := _dictionary_from(receipts[run_id])
+		if receipt.get("fingerprint", "") != fingerprint or receipt.get("fingerprint_encoding", "json") != fingerprint_encoding:
+			return {"ok": false, "status": "run_receipt_conflict", "run_id": run_id}
+		return _dictionary_from(receipt.get("result", {}))
+	var admission := _dictionary_from(data.get("admission", {}))
+	if admission.get("phase", "") != "active" or admission.get("run_id", "") != run_id:
+		return {"ok": false, "status": "active_admission_required"}
+	var settlement := _dictionary_from(result_snapshot.get("settlement", {}))
+	if bool(settlement.get("requires_salvage_selection", false)) and not bool(settlement.get("finalized", false)):
+		return {"ok": false, "status": "awaiting_salvage_selection", "run_id": run_id}
+	var outcome := str(result_snapshot.get("outcome", settlement.get("outcome", "")))
+	if outcome not in ["Extracted", "Training Complete", "Failed", "Abandoned"] and settlement.get("outcome", "") not in ["success", "failure", "abandon"]:
+		return {"ok": false, "status": "terminal_outcome_required"}
+	var previous := data.duplicate(true)
+	# Reuse legacy reward logic, but defer its save until the receipt and release are included.
+	_meta_action_transaction_active = true
+	_meta_action_deferred_save_requested = false
+	var result := _apply_legacy_settlement(result_snapshot)
+	_meta_action_transaction_active = false
+	_meta_action_deferred_save_requested = false
+	if not bool(result.get("ok", false)):
+		data = previous
+		return result
+	data["admission"] = {}
+	data["checkpoint_cleanup_run_id"] = run_id
+	result.erase("summary")
+	result = _dictionary_from(_json_safe(result))
+	receipts[run_id] = {
+		"schema_version": 1, "profile_id": active_profile_id, "run_id": run_id,
+		"fingerprint": fingerprint, "result": result.duplicate(true),
+	}
+	if fingerprint_encoding != "json":
+		receipts[run_id]["fingerprint_encoding"] = fingerprint_encoding
+	data["run_receipts"] = receipts
+	if not _save_now():
+		data = previous
+		return {"ok": false, "status": "save_failed", "error": last_error, "rolled_back": true}
+	last_commit = result.duplicate(true)
+	return result.duplicate(true)
+
+
+func _is_lossless_terminal_payload(value: Variant, depth: int = 0) -> bool:
+	if depth > 96:
+		return false
+	if value is int:
+		return true
+	if value is Dictionary:
+		for key in value:
+			if not key is String or not _is_lossless_terminal_payload(value[key], depth + 1):
+				return false
+		return true
+	if value is Array:
+		for entry in value:
+			if not _is_lossless_terminal_payload(entry, depth + 1):
+				return false
+		return true
+	return SaveAdapterScript.is_json_safe(value)
+
+
+func _apply_legacy_settlement(result_snapshot: Dictionary) -> Dictionary:
 	if data.is_empty():
 		load_or_create_default()
 	if (
@@ -230,7 +362,7 @@ func apply_settlement(result_snapshot: Dictionary) -> Dictionary:
 	if _is_tutorial_result(result_snapshot):
 		return _apply_tutorial_settlement(result_snapshot, result_id)
 	var committed_ids: Array = _array_from(data.get("committed_result_ids", []))
-	if result_id in committed_ids:
+	if result_id in committed_ids and data.get("ruleset_id", "") != "z2":
 		last_commit = {
 			"ok": true,
 			"status": "duplicate_ignored",
@@ -282,6 +414,9 @@ func apply_settlement(result_snapshot: Dictionary) -> Dictionary:
 	elif is_abandon:
 		data["abandon_count"] = int(data.get("abandon_count", 0)) + 1
 		data["gold"] = int(data.get("gold", 0)) + _settlement_gold(result_snapshot, settlement)
+		var event_delivery := _dictionary_from(settlement.get("event_item_delivery", {}))
+		for item in _array_from(event_delivery.get("delivered", settlement.get("warehouse_items", []))):
+			_upsert_warehouse_item(warehouse_items, _minimal_item_record(item))
 		data["warehouse_items"] = warehouse_items
 	if is_success or is_failure or is_abandon:
 		var history_records: Array = _array_from(data.get("history_records", []))
@@ -320,12 +455,26 @@ func get_summary() -> Dictionary:
 	if data.is_empty():
 		load_or_create_default()
 	var warehouse_items: Array = _array_from(data.get("warehouse_items", []))
+	var reserved_ids := reserved_instance_ids()
+	var reserved_items: Array = []
+	var available_items: Array = []
+	for raw_item in warehouse_items:
+		if reserved_ids.has(str(_dictionary_from(raw_item).get("instance_id", ""))):
+			reserved_items.append(raw_item)
+		else:
+			available_items.append(raw_item)
+	warehouse_items = available_items
 	var summary := {
 		"schema_version": int(data.get("schema_version", 1)),
 		"gold": int(data.get("gold", 0)),
 		"long_term_gold": int(data.get("gold", 0)),
 		"warehouse_items_count": warehouse_items.size(),
 		"warehouse_items": warehouse_items.duplicate(true),
+		"reserved_instance_ids": reserved_ids,
+		"reserved_warehouse_items": reserved_items,
+		"admission": _dictionary_from(data.get("admission", {})),
+		"ruleset_id": str(data.get("ruleset_id", "")),
+		"content_version": str(data.get("content_version", "")),
 		"history_records": _array_from(data.get("history_records", [])),
 		"history_record_count": _array_from(data.get("history_records", [])).size(),
 		"profile_level": maxi(1, int(data.get("profile_level", 1))),
@@ -397,15 +546,15 @@ func purchase_items(
 			"minimum": 1,
 			"maximum": MAX_BATCH_PURCHASE_QUANTITY,
 		}
-	data = M7ProgressionServiceScript.normalize_meta(data)
+	var normalized := M7ProgressionServiceScript.normalize_meta(data)
 	var shop := M7ContentCatalogScript.shop_definition(item_id)
 	if shop.is_empty():
 		return {"ok": false, "status": "unknown_shop_item", "item_id": item_id}
-	if not M7ContentCatalogScript.is_shop_unlocked(shop, data):
+	if not M7ContentCatalogScript.is_shop_unlocked(shop, normalized):
 		return {"ok": false, "status": "locked", "item_id": item_id}
 	var unit_price := maxi(0, int(shop.get("price", 0)))
 	var total_price := unit_price * quantity
-	var gold_before := int(data.get("gold", 0))
+	var gold_before := int(normalized.get("gold", 0))
 	if gold_before < total_price:
 		return {
 			"ok": false,
@@ -417,6 +566,7 @@ func purchase_items(
 			"gold_before": gold_before,
 		}
 	var previous_data := data.duplicate(true)
+	data = normalized
 	data["gold"] = gold_before - total_price
 	var purchased: Array = data.get("purchased_instance_ids", [])
 	var created_items: Array[Dictionary] = []
@@ -434,7 +584,12 @@ func purchase_items(
 				"rolled_back": true,
 			}
 		var instance_id := str(item.get("instance_id", ""))
-		if instance_id.is_empty() or created_ids.has(instance_id):
+		var existing_id := false
+		for existing in _array_from(previous_data.get("warehouse_items", [])):
+			if str(_dictionary_from(existing).get("instance_id", "")) == instance_id:
+				existing_id = true
+				break
+		if instance_id.is_empty() or created_ids.has(instance_id) or existing_id or reserved_instance_ids().has(instance_id):
 			data = previous_data
 			return {
 				"ok": false,
@@ -486,7 +641,7 @@ func purchase_items(
 func sell_collectible(instance_id: String, blocked_instance_ids: Array = []) -> Dictionary:
 	if not _ensure_writable("sell_collectible"):
 		return {"ok": false, "status": "write_blocked", "reason": write_block_reason}
-	if blocked_instance_ids.has(instance_id):
+	if blocked_instance_ids.has(instance_id) or reserved_instance_ids().has(instance_id):
 		return {"ok": false, "status": "configured_item_blocked", "instance_id": instance_id}
 	var items: Array = _array_from(data.get("warehouse_items", []))
 	var index := -1
@@ -532,7 +687,7 @@ func sell_collectibles_batch(instance_ids: Array, blocked_instance_ids: Array = 
 			"summary": get_summary(),
 		}
 	var blocked_lookup := {}
-	for blocked_id in _normalized_instance_ids(blocked_instance_ids):
+	for blocked_id in _normalized_instance_ids(blocked_instance_ids + reserved_instance_ids()):
 		blocked_lookup[blocked_id] = true
 	var items: Array = _array_from(data.get("warehouse_items", []))
 	var item_by_id := {}
@@ -630,7 +785,7 @@ func unlock_talent(talent_id: String) -> Dictionary:
 	if not _ensure_writable("unlock_talent"):
 		return {"ok": false, "status": "write_blocked", "reason": write_block_reason, "talent_id": talent_id}
 	var previous_data := data.duplicate(true)
-	M7TalentCatalogScript.sync_progress(data, not data.has("talent_budget_granted"))
+	M7TalentCatalogScript.sync_progress(data)
 	var evaluation := M7TalentCatalogScript.unlock_evaluation(data, talent_id)
 	if not bool(evaluation.get("ok", false)):
 		data = previous_data
@@ -673,11 +828,11 @@ func unlock_talent(talent_id: String) -> Dictionary:
 func complete_research(research_id: String, blocked_instance_ids: Array = []) -> Dictionary:
 	if not _ensure_writable("complete_research"):
 		return {"ok": false, "status": "write_blocked", "reason": write_block_reason}
-	data = M7ProgressionServiceScript.normalize_meta(data)
+	var normalized := M7ProgressionServiceScript.normalize_meta(data)
 	var definition := M7ContentCatalogScript.research_definition(research_id)
 	if definition.is_empty():
 		return {"ok": false, "status": "unknown_research", "research_id": research_id}
-	var completed: Array = data.get("research_completed_ids", [])
+	var completed: Array = normalized.get("research_completed_ids", [])
 	if completed.has(research_id):
 		return {"ok": true, "status": "duplicate_ignored", "research_id": research_id}
 	var prerequisite := str(definition.get("prerequisite", ""))
@@ -695,7 +850,7 @@ func complete_research(research_id: String, blocked_instance_ids: Array = []) ->
 		if str(material.get("item_id", "")) != material_id:
 			continue
 		var candidate_instance_id := str(material.get("instance_id", ""))
-		if blocked_instance_ids.has(candidate_instance_id):
+		if blocked_instance_ids.has(candidate_instance_id) or reserved_instance_ids().has(candidate_instance_id):
 			continue
 		material_index = item_index
 		material_instance_id = candidate_instance_id
@@ -703,6 +858,7 @@ func complete_research(research_id: String, blocked_instance_ids: Array = []) ->
 	if material_index < 0:
 		return {"ok": false, "status": "material_missing_or_configured", "research_id": research_id, "material_item_id": material_id}
 	var previous_data := data.duplicate(true)
+	data = normalized
 	items.remove_at(material_index)
 	data["warehouse_items"] = items
 	data["gold"] = int(data.get("gold", 0)) - gold_cost
@@ -713,8 +869,8 @@ func complete_research(research_id: String, blocked_instance_ids: Array = []) ->
 	if research_id == "research_protocol_formula":
 		_append_codex_discovery(data, "rule:protocol_pressure")
 	if research_id == "research_extraction_signal":
-		_append_string(data["unlocked_map_ids"] as Array, "classic_13x13_normal")
 		_append_codex_discovery(data, "rule:extraction_right")
+	M7ProgressionServiceScript.refresh_map_unlocks(data)
 	M7ProgressionServiceScript.refresh_red_dots(data)
 	if not save():
 		data = previous_data
@@ -854,6 +1010,7 @@ func _m7_map_catalog() -> Array[Dictionary]:
 		var definition := raw_definition.duplicate(true)
 		var map_id := str(definition.get("id", ""))
 		definition["unlocked"] = unlocked.has(map_id)
+		definition["lock_reason"] = "" if definition["unlocked"] else " · ".join(M7ProgressionServiceScript.map_unlock_blockers(data, definition))
 		definition["success_count"] = 0 if map_id == "tutorial_5x5" else int(success_counts.get(map_id, 0))
 		if map_id == "tutorial_5x5":
 			definition["tutorial_completed"] = bool(data.get("tutorial_completed", false))
@@ -933,6 +1090,7 @@ func _apply_tutorial_settlement(result_snapshot: Dictionary, result_id: String) 
 		return last_commit.duplicate(true)
 	var previous_data := data.duplicate(true)
 	data["tutorial_completed"] = true
+	var new_unlocks := M7ProgressionServiceScript.refresh_map_unlocks(data)
 	var saved := save()
 	if not saved:
 		data = previous_data
@@ -941,6 +1099,7 @@ func _apply_tutorial_settlement(result_snapshot: Dictionary, result_id: String) 
 		"status": "tutorial_completed" if saved else "save_failed",
 		"result_id": result_id,
 		"tutorial_completed": saved,
+		"new_unlock_ids": new_unlocks if saved else [],
 		"summary": get_summary(),
 		"error": last_error,
 	}
@@ -960,6 +1119,9 @@ func _history_record(result_id: String, outcome: String, result_snapshot: Dictio
 	if run_start.is_empty():
 		var run_result := _dictionary_from(result_snapshot.get("RunResult", result_snapshot.get("run_result", {})))
 		run_start = _dictionary_from(run_result.get("run_start_config", {}))
+	var recorded_seed := int(result_snapshot.get("seed", 0))
+	if data.get("ruleset_id", "") == "z2":
+		recorded_seed = int(result_snapshot.get("seed", run_start.get("seed_value", run_start.get("seed", 0))))
 	var record := {
 		"history_id": result_id,
 		"result_id": result_id,
@@ -973,7 +1135,7 @@ func _history_record(result_id: String, outcome: String, result_snapshot: Dictio
 		"difficulty_label": str(run_start.get("difficulty_label", "")),
 		"commission_id": str(run_start.get("selected_objective_id", "")),
 		"commission_label": str(run_start.get("selected_objective_label", "")),
-		"seed": int(result_snapshot.get("seed", 0)),
+		"seed": recorded_seed,
 		"recorded_at_unix": int(Time.get_unix_time_from_system()),
 		"carried_equipment": _array_from(run_start.get("selected_equipment_items", [])),
 		"carried_consumables": _array_from(run_start.get("selected_consumable_items", [])),
@@ -1034,6 +1196,8 @@ func _remove_carry_in_items(warehouse_items: Array, result_snapshot: Dictionary)
 		var run_result: Dictionary = _dictionary_from(result_snapshot.get("run_result", result_snapshot.get("RunResult", {})))
 		run_start_config = _dictionary_from(run_result.get("run_start_config", {}))
 	var carry_ids: Dictionary = {}
+	for reserved_id in reserved_instance_ids():
+		carry_ids[str(reserved_id)] = true
 	for raw_item in _array_from(run_start_config.get("selected_equipment_items", [])):
 		var item := _dictionary_from(raw_item)
 		var instance_id := str(item.get("instance_id", ""))
@@ -1138,9 +1302,50 @@ func _save_now() -> bool:
 		last_error = "debug_injected_next_save_failure"
 		save_adapter.last_error = last_error
 		return false
-	var ok := save_adapter.save_json(data, active_meta_progress_path, false)
+	var output := data
+	if data.get("ruleset_id", "") == "z2":
+		output = data.duplicate(true)
+		var history: Array = output.get("history_records", [])
+		for index in range(history.size()):
+			if not RunStateSnapshotScript.can_encode(history[index]):
+				last_error = "invalid_terminal_storage"
+				save_adapter.last_error = last_error
+				return false
+			history[index] = RunStateSnapshotScript.encode(history[index])
+		for receipt in output.get("run_receipts", {}).values():
+			if not RunStateSnapshotScript.can_encode(receipt.get("result")):
+				last_error = "invalid_terminal_storage"
+				save_adapter.last_error = last_error
+				return false
+			receipt["result"] = RunStateSnapshotScript.encode(receipt["result"])
+		output["terminal_storage_version"] = 1
+	var ok := save_adapter.save_json(output, active_meta_progress_path, false)
 	last_error = save_adapter.last_error
 	return ok
+
+
+func _restore_terminal_storage() -> bool:
+	if not data.has("terminal_storage_version"):
+		return true
+	var restored := data.duplicate(true)
+	var history: Array = restored.get("history_records", [])
+	for index in range(history.size()):
+		if not RunStateSnapshotScript.valid_encoding(history[index]):
+			return false
+		var record: Variant = RunStateSnapshotScript.decode(history[index])
+		if not record is Dictionary:
+			return false
+		history[index] = record
+	for receipt in restored.get("run_receipts", {}).values():
+		if not RunStateSnapshotScript.valid_encoding(receipt.get("result")):
+			return false
+		var result: Variant = RunStateSnapshotScript.decode(receipt["result"])
+		if not result is Dictionary:
+			return false
+		receipt["result"] = result
+	restored.erase("terminal_storage_version")
+	data = restored
+	return true
 
 
 func _meta_action_transaction_result(

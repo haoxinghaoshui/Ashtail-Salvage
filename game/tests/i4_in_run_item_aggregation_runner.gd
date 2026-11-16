@@ -101,7 +101,7 @@ func _run() -> void:
 
 	var ledger := RunAssetLedgerScript.new()
 	ledger.setup({
-		"backpack_capacity": 20,
+		"backpack_capacity": 100,
 		"selected_consumable_items": raw_items,
 	})
 	var use_result := ledger.consume_inventory_item(emitted_use_instance_id)

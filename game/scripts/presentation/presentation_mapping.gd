@@ -6,6 +6,7 @@ class_name PresentationMapping
 
 const Art09ManifestAssetMappingScript := preload("res://scripts/presentation/art09_manifest_asset_mapping.gd")
 const SemanticActionHintScript := preload("res://scripts/core/input/semantic_action_hint.gd")
+const EventRoomCatalog := preload("res://scripts/presentation/z1/z1_event_room_catalog.gd")
 
 const ROOM_MINIMAP_ASSET := {
 	&"Spawn": &"icon.room.spawn",
@@ -60,6 +61,8 @@ static func map_marker_state(marker: Dictionary) -> StringName:
 	# a hidden Mine from a hidden Monster by inspecting room_type directly.
 	if bool(marker.get("is_current", false)):
 		return &"player"
+	if bool(marker.get("confirmed_mine", false)):
+		return &"mine"
 	if bool(marker.get("flagged", false)):
 		return &"flagged"
 	var known_state := StringName(marker.get("known_state", marker.get("state", &"unknown")))
@@ -170,9 +173,12 @@ static func tooltip_for_cell(room_type: StringName, adjacent_mines: int, flagged
 static func room_visual_from_snapshot(snapshot: Dictionary) -> Dictionary:
 	var room_type := StringName(snapshot.get("current_room", &"Unknown"))
 	var adjacent := int(snapshot.get("adjacent_mines", 0))
+	var background := StringName(ROOM_BACKGROUND_ASSET.get(room_type, &"room.background.normal"))
+	if not EventRoomCatalog.from_snapshot(snapshot).is_empty():
+		background = EventRoomCatalog.SHELL_ASSET_ID
 	return {
 		"room_type": room_type,
-		"background_asset_id": ROOM_BACKGROUND_ASSET.get(room_type, &"room.background.normal"),
+		"background_asset_id": background,
 		"prop_asset_id": prop_asset_for_room(room_type),
 		"theme_key": ROOM_THEME_KEY.get(room_type, &"mini.normal"),
 		"title": _room_type_label(room_type),

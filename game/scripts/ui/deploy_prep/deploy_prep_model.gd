@@ -9,7 +9,6 @@ const ItemRarityDescriptorScript := preload("res://scripts/presentation/item_rar
 
 const EMERGENCY_CLAIM_ID := &"m6_emergency_ration"
 const EMERGENCY_CLAIM_CARD_ID := &"claim_emergency_ration"
-const MAX_CARRIED_CONSUMABLES := 3
 
 
 static func build(snapshot: Dictionary = {}) -> Dictionary:
@@ -492,13 +491,13 @@ static func _claim_rows(config: Dictionary, selected_filter: StringName) -> Arra
 	var claimed := _array_from(config.get("enabled_claims", [])).has(EMERGENCY_CLAIM_ID)
 	if selected_filter in [DeployTabModelScript.FILTER_ALL, DeployTabModelScript.FILTER_CLAIM_RECEIVE]:
 		var ration := M7ContentCatalogScript.item_definition("con_ration")
-		var slot_available := _array_from(config.get("selected_consumable_items", [])).size() < MAX_CARRIED_CONSUMABLES
-		var claim_enabled := not active_locked and (claimed or slot_available)
+		var capacity_available := int(config.get("equipment_used", 0)) + int(ration.get("weight", 0)) <= int(config.get("equipment_capacity", 100))
+		var claim_enabled := not active_locked and (claimed or capacity_available)
 		var claim_reason := &"ok"
 		if active_locked:
 			claim_reason = &"active_run_locked"
-		elif not claimed and not slot_available:
-			claim_reason = &"supply_slots_full"
+		elif not claimed and not capacity_available:
+			claim_reason = &"equipment_overweight"
 		var claim_action := _action(&"toggle_claim", "移出携带" if claimed else "领取并携带", claim_enabled, false, false, claim_reason, {"claim_id": EMERGENCY_CLAIM_ID})
 		result.append({
 			"id": EMERGENCY_CLAIM_CARD_ID,
@@ -705,24 +704,26 @@ static func _loadout_rows(config: Dictionary, map_projection: Dictionary) -> Arr
 		result.append(_loadout_item_row(_dictionary_from(raw_item), "装备", &"loadout_equipment", active_locked))
 	for raw_item in _array_from(config.get("selected_consumable_items", [])):
 		result.append(_loadout_item_row(_dictionary_from(raw_item), "补给", &"loadout_consumable", active_locked))
-	var used := int(config.get("bag_used", 0))
-	var limit := int(config.get("bag_limit", config.get("backpack_capacity", 10)))
+	var used := int(config.get("equipment_used", 0))
+	var limit := int(config.get("equipment_capacity", 100))
+	var loot_used := int(config.get("bag_used", 0))
+	var loot_limit := int(config.get("bag_limit", config.get("backpack_capacity", 100)))
 	result.append({
 		"id": &"loadout_capacity",
 		"filter_id": DeployTabModelScript.FILTER_ALL,
 		"art_filter_id": &"loadout_bag",
-		"title": "携带容量",
+		"title": "共享负重",
 		"category": "容量",
-		"state": "ready" if used <= limit else "over_limit",
+		"state": "ready" if used <= limit and loot_used <= loot_limit else "over_limit",
 		"summary": "%d / %d" % [used, limit],
-		"detail": "装备不占背包；携入补给按重量计入容量。",
+		"detail": "穿戴装备与补给共用负重；未穿戴装备与战利品使用独立背包。",
 		"detail_kind": &"loadout_capacity",
 		"used": used,
 		"limit": limit,
 		"facts": [
-			_fact("已用", str(used)),
-			_fact("上限", str(limit)),
-			_fact("剩余", str(maxi(0, limit - used)), &"positive" if used <= limit else &"warning"),
+			_fact("共享负重", "%d / %d" % [used, limit]),
+			_fact("剩余负重", str(maxi(0, limit - used)), &"positive" if used <= limit else &"warning"),
+			_fact("战利品", "%d / %d" % [loot_used, loot_limit]),
 		],
 		"actions": [],
 		"preview": false,
@@ -845,8 +846,10 @@ static func _summary_projection(config: Dictionary, map_projection: Dictionary) 
 			)
 		)
 		consumable_type_keys[type_key] = true
-	var used := int(config.get("bag_used", 0))
-	var limit := int(config.get("bag_limit", config.get("backpack_capacity", 10)))
+	var used := int(config.get("equipment_used", 0))
+	var limit := int(config.get("equipment_capacity", 100))
+	var loot_used := int(config.get("bag_used", 0))
+	var loot_limit := int(config.get("bag_limit", config.get("backpack_capacity", 100)))
 	var map_summary := _map_summary_text(map_name, scale_label, difficulty_label)
 	var remaining := maxi(0, limit - used)
 	if tutorial_map:
@@ -901,7 +904,7 @@ static func _summary_projection(config: Dictionary, map_projection: Dictionary) 
 		"委托：%s · %s" % [objective_name, condition],
 		"装备：%s" % equipment_names,
 		"补给：%d 件 / %d 种" % [consumables.size(), consumable_type_keys.size()],
-		"容量：%d / %d（剩余 %d）" % [used, limit, remaining],
+		"容量：共享负重 %d / %d（剩余 %d）\n战利品：%d / %d" % [used, limit, remaining, loot_used, loot_limit],
 		(
 			"出发状态：可以出发"
 			if bool(validity.get("can_start", false))
@@ -913,7 +916,7 @@ static func _summary_projection(config: Dictionary, map_projection: Dictionary) 
 	var config_lines := _summary_item_rows(equipment, "装备", "未携带装备")
 	config_lines.append_array(_summary_item_rows(consumables, "补给", "未携带补给"))
 	config_lines.append("合计：装备 %d 件，补给 %d 件" % [equipment.size(), consumables.size()])
-	config_lines.append("容量：%d / %d（剩余 %d）" % [used, limit, remaining])
+	config_lines.append("容量：共享负重 %d / %d（剩余 %d）\n战利品：%d / %d" % [used, limit, remaining, loot_used, loot_limit])
 	var effect_lines: Array = ["协议：难度 %d" % int(config.get("protocol_difficulty", 5))]
 	var active_talents := _array_from(config.get("active_talent_effects", []))
 	if active_talents.is_empty():
@@ -984,7 +987,7 @@ static func _effect_summary_lines(config: Dictionary, equipment: Array, consumab
 		result.append("补给效果：%s · %s" % [str(item.get("display_name", item.get("item_id", "补给"))), str(item.get("short_description", "局内使用"))])
 	if result.is_empty():
 		result.append("物品效果：无额外装备或补给效果")
-	result.append("结算边界：背包 %d；失败抢救 %d" % [int(config.get("bag_limit", 10)), int(config.get("failure_salvage_capacity", 4))])
+	result.append("结算边界：战利品 %d；失败抢救 %d" % [int(config.get("bag_limit", 100)), int(config.get("failure_salvage_capacity", 40))])
 	return result
 
 
@@ -1169,7 +1172,7 @@ static func _reward_text(reward: Dictionary) -> String:
 	if int(reward.get("gold", 0)) > 0:
 		parts.append("金币 %d" % int(reward.get("gold", 0)))
 	if int(reward.get("exp", 0)) > 0:
-		parts.append("经验 %d" % int(reward.get("exp", 0)))
+		parts.append("探索分 +%d" % int(reward.get("exp", 0)))
 	var items := _array_from(reward.get("items", []))
 	if not items.is_empty():
 		parts.append("物品 %s" % ", ".join(PackedStringArray(items)))
@@ -1210,8 +1213,10 @@ static func _validity_reason_text(reason_code: StringName) -> String:
 			return "地图尚未解锁"
 		&"difficulty_mismatch":
 			return "难度与地图不匹配"
+		&"equipment_overweight":
+			return "共享负重超限"
 		&"backpack_overweight":
-			return "携带容量超限"
+			return "战利品容量超限"
 		&"unknown_map_id":
 			return "地图配置不存在"
 		_:
@@ -1220,7 +1225,8 @@ static func _validity_reason_text(reason_code: StringName) -> String:
 
 static func _effect_text(kind: String, amount: int) -> String:
 	match kind:
-		"backpack_capacity": return "背包容量 +%d" % amount
+		"equipment_capacity": return "共享负重上限 +%d" % amount
+		"backpack_capacity": return "战利品容量 +%d" % amount
 		"salvage_capacity": return "失败抢救容量 +%d" % amount
 		"mine_damage_reduce": return "触雷伤害降低 %d" % amount
 		"protocol_pressure_reduce": return "协议压力增量降低 %d" % amount

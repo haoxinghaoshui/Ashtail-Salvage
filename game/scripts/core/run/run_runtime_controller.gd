@@ -6,6 +6,11 @@ const G41InRunRuntimeScript := preload("res://scripts/core/run/g41_in_run_runtim
 const RunContextScript := preload("res://scripts/core/run/run_context.gd")
 const RunStartConfigScript := preload("res://scripts/core/run/run_start_config.gd")
 const RunStateMachineScript := preload("res://scripts/core/run/run_state_machine.gd")
+const CheckpointServiceScript := preload("res://scripts/core/save/run_checkpoint_service.gd")
+const VitalsEffects := preload("res://scripts/core/run/run_effect_applier.gd")
+const Z2_CONTENT_VERSION := "z2-t00-t04-20261115"
+const StateSnapshotScript := preload("res://scripts/core/run/run_state_snapshot.gd")
+const ActionTransactionScript := preload("res://scripts/core/run/run_action_transaction.gd")
 
 const META_ACTION_PURCHASE := &"purchase"
 const META_ACTION_SELL := &"sell_collectible"
@@ -35,6 +40,23 @@ var state_machine
 var meta_progress_adapter
 var last_meta_commit: Dictionary = {}
 var _meta_action_cache: Dictionary = {}
+var transaction_revision: int = 0
+var action_receipts: Dictionary = {}
+var checkpoint_writer: Callable = Callable()
+var checkpoint_service
+var _planning_action: bool = false
+var _pending_terminal_reason: String = ""
+var persistence_error: Dictionary = {}
+var _persistence_manager
+var _content_hash: String = ""
+var _local_position := Vector2.ZERO
+var _has_local_position := false
+var _checkpoint_elapsed := 0.0
+var _idle_accumulator := 0.0
+var _pending_change_scope: StringName = &""
+var _pending_commands: Array[Dictionary] = []
+var _combat_hit_receipts: Dictionary = {}
+var _active_action_id: String = ""
 
 
 func _init() -> void:
@@ -45,6 +67,7 @@ func _init() -> void:
 	command_bus.result_available.connect(_on_terminal_result_available)
 	in_run_runtime = G41InRunRuntimeScript.new()
 	in_run_runtime.bind(self)
+	command_bus.item_command_handler.combat_active_query = Callable(in_run_runtime, "has_active_combat")
 
 
 func describe_ownership() -> Dictionary:
@@ -514,7 +537,7 @@ func _on_terminal_result_available(result_snapshot: Dictionary) -> void:
 			"committed": false,
 		}
 		return
-	last_meta_commit = meta_progress_adapter.apply_settlement(result_snapshot)
+	last_meta_commit = _commit_terminal_snapshot(result_snapshot)
 
 
 func retry_terminal_commit() -> Dictionary:
@@ -553,11 +576,20 @@ func retry_terminal_commit() -> Dictionary:
 			"result_id": String(result_snapshot.get("result_id", "")),
 		}
 		return _with_actor(last_meta_commit)
-	last_meta_commit = meta_progress_adapter.apply_settlement(result_snapshot)
+	last_meta_commit = _commit_terminal_snapshot(result_snapshot)
 	return _with_actor(last_meta_commit)
 
 
+func _commit_terminal_snapshot(result_snapshot: Dictionary) -> Dictionary:
+	var result: Dictionary = checkpoint_service.apply_settlement(result_snapshot) if checkpoint_service != null else meta_progress_adapter.apply_settlement(result_snapshot)
+	if checkpoint_service != null:
+		result["durable_checkpoint"] = true
+	return result
+
+
 func discard_unsaved_terminal_commit(confirmed: bool = false) -> Dictionary:
+	if checkpoint_service != null:
+		return _atomic_error("durable_terminal_retry_required")
 	if not confirmed:
 		return _with_actor({
 			"ok": false,
@@ -616,6 +648,10 @@ func debug_force_extract() -> Dictionary:
 
 
 func fail_run(reason: String = "forced_failure") -> Dictionary:
+	if _planning_action:
+		if _pending_terminal_reason.is_empty():
+			_pending_terminal_reason = reason
+		return _with_actor({"ok": true, "status": &"failure_pending"})
 	var result := _with_actor(state_machine.fail_run(context, reason))
 	in_run_runtime.reset()
 	return result
@@ -649,6 +685,11 @@ func _finalize_start(result: Dictionary, room_resolver: RoomResolver) -> void:
 	if not bool(result.get("ok", false)):
 		return
 	last_meta_commit.clear()
+	_combat_hit_receipts.clear()
+	_checkpoint_elapsed = 0.0
+	_idle_accumulator = 0.0
+	_has_local_position = false
+	context.shield += RunInventory.claim_departure_shield(context.asset_ledger, str(context.run_id))
 	in_run_runtime.reset()
 	_enter_room_after_start(room_resolver)
 
@@ -659,3 +700,503 @@ func _with_actor(result: Dictionary) -> Dictionary:
 		output["actor_id"] = &"player"
 	output["runtime_authority"] = "RunRuntimeController"
 	return output
+
+func capture_authoritative_state() -> Dictionary:
+	var bridge: Dictionary = {}
+	if in_run_runtime.has_method("export_transaction_state"):
+		bridge = in_run_runtime.export_transaction_state()
+	else:
+		bridge = StateSnapshotScript.capture_data(in_run_runtime, ["context", "runtime_controller", "command_bus", "simulation"])
+	return {
+		"schema_version": 1, "run_id": str(context.run_id), "revision": transaction_revision,
+		"context": StateSnapshotScript.capture_context(context), "bridge": bridge,
+		"command_sequence": command_bus.command_sequence, "receipts": action_receipts.duplicate(true),
+		"last_meta_commit": last_meta_commit.duplicate(true), "meta_action_cache": _meta_action_cache.duplicate(true),
+		"local_position": _local_position, "has_local_position": _has_local_position,
+		"checkpoint_elapsed": _checkpoint_elapsed, "combat_hit_receipts": _combat_hit_receipts.duplicate(true),
+		"idle_accumulator": _idle_accumulator,
+		"pending_terminal": {"phase": str(context.phase), "reason": _pending_terminal_reason} if context.run_started and not context.run_active else {},
+	}
+
+func install_authoritative_state(snapshot: Dictionary) -> Dictionary:
+	if int(snapshot.get("schema_version", 0)) != 1 or not snapshot.get("context") is Dictionary:
+		return {"ok": false, "reason": "invalid_runtime_snapshot"}
+	var installed := StateSnapshotScript.install_context(context, snapshot["context"])
+	if not bool(installed.get("ok", false)):
+		return installed
+	transaction_revision = int(snapshot.get("revision", 0))
+	action_receipts = snapshot.get("receipts", {}).duplicate(true)
+	command_bus.command_sequence = int(snapshot.get("command_sequence", 0))
+	last_meta_commit = snapshot.get("last_meta_commit", {}).duplicate(true)
+	_meta_action_cache = snapshot.get("meta_action_cache", {}).duplicate(true)
+	_local_position = snapshot.get("local_position", Vector2.ZERO)
+	_has_local_position = bool(snapshot.get("has_local_position", false))
+	_checkpoint_elapsed = float(snapshot.get("checkpoint_elapsed", 0.0))
+	_idle_accumulator = float(snapshot.get("idle_accumulator", 0.0))
+	_combat_hit_receipts = snapshot.get("combat_hit_receipts", {}).duplicate(true)
+	_pending_terminal_reason = ""
+	if in_run_runtime.has_method("import_transaction_state"):
+		in_run_runtime.import_transaction_state(snapshot.get("bridge", {}))
+	else:
+		StateSnapshotScript.install_data(in_run_runtime, snapshot.get("bridge", {}))
+	return {"ok": true}
+
+func encode_checkpoint_state(snapshot: Dictionary) -> Variant:
+	return StateSnapshotScript.pack_checkpoint(snapshot)
+
+func decode_checkpoint_state(encoded: Variant) -> Dictionary:
+	return StateSnapshotScript.unpack_checkpoint(encoded)
+
+func restore_checkpoint_state(encoded: Variant, envelope: Dictionary = {}, install: bool = true) -> Dictionary:
+	var unpacked := decode_checkpoint_state(encoded)
+	if not bool(unpacked.get("ok", false)):
+		return _atomic_error("invalid_encoded_snapshot")
+	var decoded: Variant = unpacked["state"]
+	if not decoded is Dictionary:
+		return {"ok": false, "reason": "invalid_encoded_snapshot"}
+	if not _valid_runtime_snapshot(decoded):
+		return _atomic_error("invalid_runtime_snapshot")
+	for field in ["schema_version", "run_id", "revision"]:
+		if not envelope.is_empty() and decoded[field] != envelope.get(field):
+			return _atomic_error("checkpoint_state_mismatch")
+	if not StateSnapshotScript.valid_context(decoded.get("context", {})):
+		return _atomic_error("invalid_context_snapshot")
+	if str(decoded.get("run_id", "")) != str(decoded["context"]["data"]["run_id"]):
+		return _atomic_error("snapshot_run_mismatch")
+	if not in_run_runtime.validate_transaction_state(decoded["bridge"]):
+		return _atomic_error("invalid_combat_snapshot")
+	return install_authoritative_state(decoded) if install else {"ok": true, "validated": true}
+
+func _valid_runtime_snapshot(snapshot: Dictionary) -> bool:
+	var template := capture_authoritative_state()
+	if snapshot.size() != template.size():
+		return false
+	for key in template:
+		if not snapshot.has(key) or typeof(snapshot[key]) != typeof(template[key]):
+			return false
+	if snapshot.schema_version != 1 or snapshot.revision < 0 or snapshot.command_sequence < 0 or snapshot.checkpoint_elapsed < 0.0 or snapshot.idle_accumulator < 0.0 or snapshot.idle_accumulator >= 1.0 / 60.0:
+		return false
+	for field in ["receipts", "combat_hit_receipts"]:
+		for id in snapshot[field]:
+			var receipt: Variant = snapshot[field][id]
+			if not id is String or id.is_empty() or not receipt is Dictionary or receipt.size() != 2 or not receipt.get("fingerprint") is String or str(receipt.fingerprint).length() != 64 or not receipt.get("result") is Dictionary:
+				return false
+			if field == "receipts" and (receipt.result.get("action_id") != id or not receipt.result.get("revision") is int or receipt.result.revision < 0 or receipt.result.revision > snapshot.revision):
+				return false
+	for id in snapshot.meta_action_cache:
+		var entry: Variant = snapshot.meta_action_cache[id]
+		if not id is String or not entry is Dictionary or not entry.get("payload") is Dictionary or not entry.get("envelope") is Dictionary:
+			return false
+	return true
+
+func persist_candidate_state(snapshot: Dictionary) -> Dictionary:
+	if checkpoint_writer.is_valid():
+		var written: Variant = checkpoint_writer.call(snapshot.duplicate(true))
+		return written if written is Dictionary else {"ok": false, "reason": "invalid_persistence_response"}
+	if checkpoint_service != null:
+		return _persist_checkpoint(snapshot)
+	return {"ok": true, "memory_only": true}
+
+func _persist_checkpoint(snapshot: Dictionary) -> Dictionary:
+	if not bool(snapshot["context"]["data"].get("run_started", false)):
+		return {"ok": true, "status": "no_run"}
+	var checkpoint := {
+		"schema_version": 1, "profile_id": checkpoint_service.profile_id,
+		"run_id": str(snapshot["run_id"]), "ruleset_id": "z2", "content_version": Z2_CONTENT_VERSION,
+		"content_hash": _content_hash, "revision": int(snapshot["revision"]),
+		"state": encode_checkpoint_state(snapshot),
+	}
+	var admission: Dictionary = meta_progress_adapter.data.get("admission", {})
+	if admission.is_empty() or str(admission.get("run_id", "")) != str(snapshot["run_id"]):
+		var reserved: Array = []
+		var config: Dictionary = snapshot["context"]["data"].get("run_start_config", {})
+		for field in ["selected_equipment_items", "selected_consumable_items"]:
+			for item in config.get(field, []):
+				reserved.append(str(item.get("instance_id", "")))
+		return checkpoint_service.begin_admission(checkpoint, reserved)
+	return checkpoint_service.save_checkpoint(checkpoint)
+
+func execute_atomic_command(command_name: StringName, payload: Dictionary) -> Dictionary:
+	if command_name == &"retry_terminal_commit":
+		# Settlement owns its durable receipt and removes the run checkpoint.
+		# It must never execute inside a speculative run-state candidate.
+		if bool(payload.get("preview", false)):
+			return {"ok": true, "preview": true, "status": &"terminal_retry_preview"}
+		if not persistence_error.is_empty():
+			return _atomic_error("persistence_retry_required")
+		_planning_action = true
+		var retried: Dictionary = command_bus.dispatch(command_name, payload)
+		_planning_action = false
+		return retried
+	return execute_atomic_operation(command_name, payload, Callable(command_bus, "dispatch").bind(command_name, payload), str(payload.get("action_id", "")))
+
+func defer_state_change(change_scope: StringName) -> void:
+	if _pending_change_scope != &"all":
+		_pending_change_scope = change_scope
+
+func defer_command_request(command: Dictionary) -> void:
+	_pending_commands.append(command.duplicate(true))
+
+func _publish_command_requests(commands: Array[Dictionary]) -> void:
+	for command in commands:
+		command_bus.command_requested.emit(StringName(command["command_name"]), command)
+
+func _action_identity_payload(payload: Dictionary) -> Dictionary:
+	var identity := payload.duplicate(true)
+	for key in ["action_id", "expected_revision", "expected_conditions", "preview", "durability_required"]:
+		identity.erase(key)
+	return identity
+
+func action_condition_fingerprint(kind: StringName, payload: Dictionary) -> String:
+	# Economic/eligibility state is independent of checkpoint revisions, local
+	# movement, simulation clocks and presentation bookkeeping. Expiry, costs,
+	# capacity, exact item ownership and room/target eligibility still invalidate.
+	var data := StateSnapshotScript.capture_data(context, StateSnapshotScript.CONTEXT_BINDINGS + [
+		"active_command", "last_message", "last_reward", "event_state", "enemy_state",
+		"result_snapshot", "settlement_result", "failure_salvage",
+		"tutorial_triggers", "tutorial_shown", "tutorial_popup", "debug_commands",
+	])
+	for status in data.get("temporary_statuses", []):
+		status.erase("remaining")
+		status.erase("elapsed")
+		status.erase("dot_remainder")
+		status.erase("heal_remainder")
+	var ledger := {}
+	if context.asset_ledger != null:
+		ledger = {"capacity": context.asset_ledger.get_capacity_snapshot(),
+			"balances": context.asset_ledger.currency_balances,
+			"instances": context.asset_ledger.item_instances,
+			"statuses": context.asset_ledger.status_effects}
+	return StateSnapshotScript.fingerprint({"kind": kind, "payload": _action_identity_payload(payload),
+		"context": data, "assets": ledger,
+		"intel": StateSnapshotScript.capture_data(context.intel_map),
+		"modifiers": [] if context.rule_pipeline == null else context.rule_pipeline.modifiers})
+
+func guarded_event_display(event_state: Dictionary) -> Dictionary:
+	var display := event_state.duplicate(true)
+	for option in display.get("options", []):
+		var payload: Dictionary = option.get("payload", {}).duplicate(true)
+		payload["option_id"] = StringName(option.get("id", &""))
+		payload["source"] = "ui"
+		payload["expected_conditions"] = action_condition_fingerprint(&"select_event_option", payload)
+		option["payload"] = payload
+	return display
+
+func execute_atomic_operation(kind: StringName, payload: Dictionary, operation: Callable, action_id: String = "") -> Dictionary:
+	if _planning_action:
+		return operation.call()
+	if not persistence_error.is_empty():
+		return _atomic_error("persistence_retry_required")
+	var identity_payload := _action_identity_payload(payload)
+	var fingerprint := StateSnapshotScript.fingerprint({"kind": kind, "payload": identity_payload})
+	if not action_id.is_empty() and action_receipts.has(action_id):
+		var receipt: Dictionary = action_receipts[action_id]
+		if str(receipt.get("fingerprint", "")) != fingerprint:
+			return _atomic_error("action_id_conflict")
+		var duplicate: Dictionary = receipt["result"].duplicate(true)
+		duplicate["duplicate"] = true
+		duplicate["action_id"] = action_id
+		return duplicate
+	if payload.has("expected_revision") and int(payload["expected_revision"]) != transaction_revision:
+		return _atomic_error("stale_revision")
+	var conditions := action_condition_fingerprint(kind, payload) if bool(payload.get("preview", false)) or payload.has("expected_conditions") else ""
+	if payload.has("expected_conditions") and payload["expected_conditions"] != conditions:
+		var stale := _atomic_error("stale_preview")
+		stale["message"] = "选项条件已变化，请重新确认。"
+		stale["action_result"] = stale.duplicate(true)
+		return stale
+	if action_id.is_empty():
+		action_id = "action:" + Crypto.new().generate_random_bytes(16).hex_encode()
+	var before := capture_authoritative_state()
+	var was_blocking: bool = command_bus.is_blocking_signals()
+	command_bus.set_block_signals(true)
+	_planning_action = true
+	_active_action_id = action_id
+	_pending_change_scope = &""
+	_pending_commands.clear()
+	_pending_terminal_reason = ""
+	var returned: Variant = operation.call()
+	var result: Dictionary = returned if returned is Dictionary else _atomic_error("invalid_action_result")
+	if not bool(result.get("ok", false)) and context.last_message != str(before["context"]["data"].get("last_message", "")):
+		result["message"] = context.last_message
+		if result.get("action_result") is Dictionary:
+			result["action_result"]["message"] = context.last_message
+	if bool(result.get("ok", false)) and context.run_active and (context.hp <= 0 or not _pending_terminal_reason.is_empty()):
+		state_machine.fail_run(context, _pending_terminal_reason if not _pending_terminal_reason.is_empty() else "hp_depleted")
+		# Preserve the complete combat step in the candidate; presentation stops after commit.
+	var durability := bool(result.get("durability_required", payload.get("durability_required", true)))
+	durability = durability or (bool(before["context"]["data"]["run_active"]) and not context.run_active)
+	if bool(result.get("ok", false)) and not durability and not bool(payload.get("preview", false)):
+		# Motion/timer-only steps commit in memory. No receipt, encoding or disk
+		# candidate is needed; the pre-step image still covers operation failure.
+		_planning_action = false
+		_active_action_id = ""
+		_pending_terminal_reason = ""
+		command_bus.set_block_signals(was_blocking)
+		result["revision"] = transaction_revision
+		result["action_id"] = action_id
+		return result
+	var change_scope := _pending_change_scope
+	var requested_commands := _pending_commands.duplicate(true)
+	var after := capture_authoritative_state()
+	_planning_action = false
+	_active_action_id = ""
+	_pending_terminal_reason = ""
+	install_authoritative_state(before)
+	command_bus.set_block_signals(was_blocking)
+	if not bool(result.get("ok", false)):
+		if not bool(payload.get("preview", false)):
+			_publish_command_requests(requested_commands)
+		return _without_uncommitted_facts(result)
+	if bool(payload.get("preview", false)):
+		result["preview"] = true
+		result["condition_fingerprint"] = conditions
+		return result
+	if action_id.is_empty():
+		action_id = "%s:%d:%d:%s" % [str(after.get("run_id", "")), int(after.get("command_sequence", 0)), transaction_revision, str(kind)]
+	var planned := ActionTransactionScript.plan(before, {
+		"kind": kind, "action_id": action_id, "payload": identity_payload,
+		"expected_revision": before["revision"], "computed_state": after,
+		"result": result, "durability_required": durability,
+		"record_receipt": kind not in [&"checkpoint", &"idle_time"],
+	})
+	if not bool(planned.get("ok", false)):
+		return _atomic_error(str(planned.get("reason", "invalid_plan")))
+	var committed := ActionTransactionScript.commit(self, planned["plan"])
+	if not bool(committed.get("ok", false)):
+		install_authoritative_state(before)
+		if str(committed.get("status", "")) == "save_failed":
+			persistence_error = committed.duplicate(true)
+		_publish_command_requests(requested_commands)
+		return committed
+	_publish_command_requests(requested_commands)
+	if durability and kind != &"checkpoint":
+		command_bus._emit_state(change_scope if change_scope != &"" else (&"combat" if kind in [&"combat_fixed_step", &"idle_time", &"combat_hit"] else &"all"))
+		var previous_result: Dictionary = before["context"]["data"].get("result_snapshot", {})
+		if not context.result_snapshot.is_empty() and not context.run_active and context.result_snapshot != previous_result:
+			command_bus.result_available.emit(context.result_snapshot.duplicate(true))
+	return committed
+
+func retry_persistence() -> Dictionary:
+	if persistence_error.is_empty():
+		return {"ok": true, "status": &"ready"}
+	var result: Dictionary
+	if checkpoint_writer.is_valid():
+		result = persist_candidate_state(capture_authoritative_state())
+	elif checkpoint_service == null and _persistence_manager != null:
+		return initialize_z2_session(_persistence_manager)
+	elif checkpoint_service != null:
+		result = _restore_durable_checkpoint(false)
+	else:
+		result = {"ok": true}
+	if bool(result.get("ok", false)):
+		persistence_error.clear()
+	return result
+
+func initialize_z2_session(manager) -> Dictionary:
+	_persistence_manager = manager
+	if meta_progress_adapter == null:
+		return _storage_error(_atomic_error("meta_progress_adapter_missing"))
+	if not meta_progress_adapter.can_write_persistence():
+		return _storage_error(_atomic_error(meta_progress_adapter.write_block_reason))
+	if not meta_progress_adapter.data.has("ruleset_id"):
+		# Z2 explicitly starts a separate profile. Existing legacy progress remains intact.
+		manager.switch_profile("z2_default")
+		manager.configure_meta_adapter(meta_progress_adapter)
+	if meta_progress_adapter.last_load_status == "missing":
+		var initialized: Dictionary = meta_progress_adapter.initialize_z2_profile(Z2_CONTENT_VERSION)
+		if not bool(initialized.get("ok", false)):
+			return _storage_error(initialized)
+	if str(meta_progress_adapter.data.get("ruleset_id", "")) != "z2":
+		return _storage_error(_atomic_error("z2_profile_required"))
+	var manifest_saved: Dictionary = manager.save_manifest()
+	if not bool(manifest_saved.get("ok", false)):
+		return _storage_error(manifest_saved)
+	var registry := ContentDefRegistry.new()
+	registry.setup_defaults()
+	_content_hash = StateSnapshotScript.fingerprint(registry.definitions)
+	checkpoint_service = CheckpointServiceScript.new()
+	var configured: Dictionary = manager.configure_checkpoint_service(checkpoint_service, meta_progress_adapter, "z2", Z2_CONTENT_VERSION)
+	if not bool(configured.get("ok", false)):
+		checkpoint_service = null
+		return _storage_error(configured)
+	var restored := _restore_durable_checkpoint(true)
+	if bool(restored.get("ok", false)):
+		persistence_error.clear()
+	return restored
+
+func _restore_durable_checkpoint(force_install: bool) -> Dictionary:
+	var loaded: Dictionary = checkpoint_service.recover_admission()
+	if str(loaded.get("status", "")) == "no_admission":
+		return {"ok": true, "status": "ready"}
+	if not bool(loaded.get("ok", false)):
+		return _storage_error(loaded)
+	if not loaded.has("snapshot"):
+		return loaded
+	var checkpoint: Dictionary = loaded["snapshot"]
+	if str(checkpoint.get("content_hash", "")) != _content_hash:
+		return _storage_error(_atomic_error("checkpoint_content_mismatch"))
+	# Validate even at the same revision. Retain unsaved motion when the primary
+	# is valid and current; a recovered backup must install before repair.
+	var install := force_install or str(loaded.get("status", "")) == "recovered_backup" or str(checkpoint["run_id"]) != str(context.run_id) or int(checkpoint["revision"]) != transaction_revision
+	var restored := restore_checkpoint_state(checkpoint["state"], checkpoint, install)
+	if not bool(restored.get("ok", false)):
+		return _storage_error(restored)
+	if str(loaded.get("status", "")) == "recovered_backup":
+		var recovered: Dictionary = checkpoint_service.confirm_checkpoint_recovery(int(loaded["generation"]), str(loaded["snapshot_hash"]))
+		if not bool(recovered.get("ok", false)):
+			return _storage_error(recovered)
+	if not bool(loaded.get("can_simulate", false)):
+		return _storage_error(_atomic_error("admission_not_active"))
+	if not context.run_active and not context.result_snapshot.is_empty():
+		_on_terminal_result_available(context.result_snapshot)
+	return {"ok": true, "status": "restored", "run_id": str(context.run_id), "revision": transaction_revision}
+
+func _storage_error(result: Dictionary) -> Dictionary:
+	persistence_error = result.duplicate(true)
+	return result
+
+func save_current_checkpoint() -> Dictionary:
+	if not context.run_started or checkpoint_service == null:
+		return {"ok": persistence_error.is_empty(), "status": "no_active_checkpoint"}
+	if not persistence_error.is_empty():
+		return _atomic_error("persistence_retry_required")
+	if not context.run_active and meta_progress_adapter != null and meta_progress_adapter.data.get("run_receipts", {}).has(str(context.run_id)):
+		return {"ok": true, "status": "settled"}
+	return execute_atomic_operation(&"checkpoint", {}, func() -> Dictionary:
+		_checkpoint_elapsed = 0.0
+		return {"ok": true}
+	)
+
+func is_combat_flee_authorized() -> bool:
+	return in_run_runtime.flee_authorized and in_run_runtime.current_room_key == context.cell_key(context.get_current_pos())
+
+
+func authorize_combat_flee() -> void:
+	update_player_location(in_run_runtime.get_player_local_position(_local_position))
+	in_run_runtime.current_room_key = context.cell_key(context.get_current_pos())
+	in_run_runtime.flee_authorized = true
+	in_run_runtime.simulation = null
+
+
+func sync_room_transition(direction: Vector2i, preferred_entry: Vector2 = Vector2(-1, -1)) -> void:
+	# Called by the room-changing command while its candidate is still mutable.
+	# The Scene supplies its read-only sprite clearance; room solids and combat
+	# initialization are resolved here, before the original checkpoint is saved.
+	var inset := G41RuntimeLayout.PLAYER_BODY_RADIUS + 0.005
+	var floor_rect := G41WorldObjectProjection.room_floor_interior().grow(-inset)
+	var landing := preferred_entry
+	if not landing.is_finite() or landing.x < 0.0 or landing.y < 0.0:
+		landing = Vector2(0.30, 0.50)
+		if direction.x != 0:
+			landing = Vector2(floor_rect.position.x if direction.x > 0 else floor_rect.end.x, 0.5)
+		elif direction.y != 0:
+			landing = Vector2(0.5, floor_rect.position.y if direction.y > 0 else floor_rect.end.y)
+	landing = landing.clamp(floor_rect.position, floor_rect.end)
+	var event_type := EventService.get_event_type(context, context.get_current_pos()) if context.current_room_type == &"Event" else &""
+	var solids := G41WorldObjectProjection.room_solid_rects(context.current_room_type, event_type)
+	for point: Vector2 in [landing, Vector2(0.50, 0.72), Vector2(0.50, 0.28), Vector2(0.28, 0.72), Vector2(0.72, 0.72)]:
+		if not solids.any(func(rect: Rect2) -> bool: return rect.grow(G41RuntimeLayout.PLAYER_BODY_RADIUS).has_point(point)):
+			landing = point
+			break
+	update_player_location(landing)
+	in_run_runtime.sync_room(landing)
+	var placed: Dictionary = in_run_runtime.place_player_from_room_entry(landing, direction)
+	if bool(placed.get("applied", false)):
+		update_player_location(Vector2(placed["position"]))
+
+
+func update_player_location(position: Vector2) -> void:
+	if persistence_error.is_empty() and is_finite(position.x) and is_finite(position.y):
+		_local_position = position
+		_has_local_position = true
+
+func get_restored_local_position(fallback: Vector2) -> Vector2:
+	if in_run_runtime.has_active_combat():
+		return in_run_runtime.get_player_local_position(fallback)
+	return _local_position if _has_local_position else fallback
+
+func advance_simulation_time(delta: float, trigger: Dictionary = {}) -> Dictionary:
+	if not context.run_active or not is_finite(delta) or delta < 0.0:
+		return {"ok": false, "reason": "invalid_simulation_time"}
+	var result: Dictionary = VitalsEffects.advance_statuses(context, delta, trigger)
+	if not bool(result.get("ok", false)):
+		return result
+	_checkpoint_elapsed += delta
+	if _checkpoint_elapsed >= 1.0:
+		result["durability_required"] = true
+		_checkpoint_elapsed = fmod(_checkpoint_elapsed, 1.0)
+	return result
+
+func advance_idle_frame(delta: float) -> Dictionary:
+	if not context.run_active or not persistence_error.is_empty():
+		return {"ok": false, "reason": "simulation_blocked"}
+	if not is_finite(delta) or delta < 0.0:
+		return _atomic_error("invalid_simulation_time")
+	return execute_atomic_operation(&"idle_time", {"durability_required": false}, func() -> Dictionary:
+		_idle_accumulator += minf(delta, 0.25)
+		var durable := false
+		while _idle_accumulator + 0.000000001 >= 1.0 / 60.0:
+			_idle_accumulator = maxf(0.0, _idle_accumulator - 1.0 / 60.0)
+			var advanced := advance_simulation_time(1.0 / 60.0)
+			if not bool(advanced.get("ok", false)):
+				return advanced
+			durable = durable or bool(advanced.get("durability_required", false))
+			if context.hp <= 0:
+				_idle_accumulator = 0.0
+				break
+		return {"ok": true, "durability_required": durable}
+	)
+
+func apply_combat_hit(packet: Dictionary) -> Dictionary:
+	if not _planning_action:
+		return execute_atomic_operation(&"combat_hit", packet, Callable(self, "_apply_combat_hit").bind(packet), str(packet.get("hit_id", "")))
+	return _apply_combat_hit(packet)
+
+func _apply_combat_hit(packet: Dictionary) -> Dictionary:
+	var hit_id := str(packet.get("hit_id", ""))
+	var fingerprint := StateSnapshotScript.fingerprint(packet)
+	if not hit_id.is_empty() and _combat_hit_receipts.has(hit_id):
+		var previous: Dictionary = _combat_hit_receipts[hit_id]
+		return previous["result"].duplicate(true) if previous["fingerprint"] == fingerprint else _atomic_error("hit_id_conflict")
+	var source_id := str(packet.get("source_id", "combat"))
+	var damage: Dictionary = VitalsEffects.apply_damage_packet(context, {"amount": maxi(0, int(packet.get("damage", 0))), "damage_type": "physical", "source_id": source_id})
+	if not bool(damage.get("ok", false)):
+		return damage
+	var pressure := int(packet.get("pressure_delta", 0))
+	if pressure != 0:
+		var pressure_result: Dictionary = VitalsEffects.apply_pressure_packet(context, {"amount": pressure, "source_id": source_id, "reason": "combat"})
+		if not bool(pressure_result.get("ok", false)):
+			return pressure_result
+	var triggered := advance_simulation_time(0.0, {"kind": "hit", "hit_id": hit_id})
+	if not bool(triggered.get("ok", false)):
+		return triggered
+	var facts: Dictionary = damage.get("facts", {})
+	context.run_stats["combat_damage"] = int(context.run_stats.get("combat_damage", 0)) + int(facts.get("actual_hp_loss", 0))
+	context.enemy_state["runtime_combat_tick"] = int(packet.get("combat_tick", 0))
+	context.record_event(&"runtime_combat_damage", str(context.active_command.get("command_id", "")), &"player", source_id, {"hit_id": hit_id, "facts": facts.duplicate(true), "combat_tick": int(packet.get("combat_tick", 0))})
+	var result := {"ok": true, "hp": context.hp, "max_hp": context.max_hp, "power": context.power, "shield": context.shield, "actual_hp_loss": int(facts.get("actual_hp_loss", 0)), "absorbed": int(facts.get("absorbed", 0)), "dead": context.hp <= 0, "facts": facts}
+	if not hit_id.is_empty():
+		_combat_hit_receipts[hit_id] = {"fingerprint": fingerprint, "result": result.duplicate(true)}
+	return result
+
+func _atomic_error(reason: String) -> Dictionary:
+	return {"ok": false, "accepted": false, "status": StringName(reason), "reason": reason, "reason_code": reason, "blocked_reason": reason}
+
+func _without_uncommitted_facts(value: Variant) -> Variant:
+	if value is Array:
+		var clean_array: Array = []
+		for entry in value:
+			clean_array.append(_without_uncommitted_facts(entry))
+		return clean_array
+	if value is Dictionary:
+		var clean: Dictionary = {}
+		for key in value:
+			if str(key) in ["produced_events", "produced_transactions", "transactions", "facts"]:
+				clean[key] = [] if value[key] is Array else {}
+			elif str(key) == "transaction":
+				clean[key] = {}
+			else:
+				clean[key] = _without_uncommitted_facts(value[key])
+		return clean
+	return value

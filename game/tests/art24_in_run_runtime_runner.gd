@@ -68,7 +68,7 @@ func _run() -> void:
 		failures.append("ground_loot_action_bypasses_nearby_world_context")
 	if not run_scene_source.contains("room_runtime_view.attach_context_popup(surface_overlay_slot)"):
 		failures.append("world_context_popup_not_hosted_in_interactive_overlay")
-	if not run_scene_source.contains("room_runtime_view.set_context_ui_suppressed(runtime_paused)"):
+	if not run_scene_source.contains("room_runtime_view.set_context_ui_suppressed(input_blocked)") or not run_scene_source.contains("in_run_runtime.set_paused(false)"):
 		failures.append("world_context_popup_not_suppressed_during_overlays")
 	var run_surface_source := FileAccess.get_file_as_string("res://scripts/ui/run_surface/run_surface.gd")
 	if not run_surface_source.contains("slot.set_anchors_preset(Control.PRESET_TOP_LEFT)"):

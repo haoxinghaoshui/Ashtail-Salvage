@@ -18,7 +18,7 @@ func _run() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(evidence_dir))
 	journey_started_msec = Time.get_ticks_msec()
 	if not await _boot_run():
-		_finish_bag()
+		await _finish_bag()
 		return
 
 	# The route is an offline-audited seed-13 fixture. Runtime traversal still
@@ -41,9 +41,8 @@ func _run() -> void:
 		_require(await _transition_room(Vector2i.LEFT, Vector2i(5, 5), &"Normal"), "bag journey could not enter normal (5,5)")
 		await _search_and_collect_normal("bag_09_normal_d")
 	if not replacement_completed:
-		# Once the bag reaches exactly 10/10, follow already audited safe rooms
-		# back to the unsearched normal cell at (1,6). Its search overflow must
-		# stay on the floor and expose the replacement decision.
+		# Follow audited safe rooms to another item that exceeds the remaining
+		# capacity. Its search overflow stays on the floor for replacement.
 		_require(await _transition_room(Vector2i.DOWN, Vector2i(5, 6), &"Normal"), "bag journey could not return to normal (5,6)")
 		_require(await _transition_room(Vector2i.LEFT, Vector2i(4, 6), &"Normal"), "bag journey could not return to normal (4,6)")
 		_require(await _transition_room(Vector2i.LEFT, Vector2i(3, 6), &"Chest"), "bag journey could not return through chest (3,6)")
@@ -53,7 +52,7 @@ func _run() -> void:
 
 	_require(replacement_completed, "audited production route did not reach a full-bag replacement decision")
 	await _checkpoint("bag_11_complete", "full-bag replacement settled through player input")
-	_finish_bag()
+	await _finish_bag()
 
 
 func _boot_run() -> bool:
@@ -68,10 +67,8 @@ func _boot_run() -> bool:
 	_require(run_scene != null, "bag journey is missing production RunScene")
 	if run_scene == null:
 		return false
-	var adapter = MetaProgressAdapterScript.new()
-	adapter.set_active_profile_path("%s/meta_%d.json" % [evidence_dir, Time.get_ticks_usec()], "i3_production_full_bag")
-	run_scene.get("runtime_controller").bind_meta_progress_adapter(adapter)
-	run_scene.set("meta_progress_adapter", adapter)
+	if not _configure_isolated_z2_profile("full_bag"):
+		return false
 	await _checkpoint("bag_01_main", "full-bag journey begins at main.tscn")
 	_require(
 		await _enter_deploy_through_cave_transition("bag_01b_enter_cave_motion"),
@@ -143,10 +140,6 @@ func _search_and_collect_normal(checkpoint_id: String) -> void:
 		var capacity := int(_status().get("backpack_capacity", 0))
 		var remaining := capacity - used
 		if int(item.get("weight", 0)) > remaining:
-			if used != capacity:
-				# Preserve the authoritative item and continue searching for an exact
-				# fill; insufficient capacity is not mislabeled as a full bag.
-				break
 			await _tap_key(KEY_G, "%s.open_replacement" % checkpoint_id)
 			var popup = _context_popup()
 			_require(await _wait_until(func() -> bool: return String(popup.get("replacement_ground_id")) != "", 2.0), "full bag did not open replacement candidates")
@@ -260,6 +253,7 @@ func _finish_bag() -> void:
 	var final_used := int(final_status.get("backpack_used", 0))
 	var final_capacity := int(final_status.get("backpack_capacity", 0))
 	var evidence_path := _write_evidence()
+	await _drain_bag_audio()
 	_dispose_main_immediately()
 	if failures.is_empty():
 		print("%s seed=%d searched_rooms=%d capacity=%d replacement=real_input screenshots=%d inputs=%d evidence=%s csv=%s" % [BAG_PASS_MARKER, FIXED_SEED, searched_room_count, final_capacity, screenshot_count, evidence_rows.size(), evidence_path, ProjectSettings.globalize_path("%s/journey.csv" % evidence_dir)])
@@ -269,3 +263,23 @@ func _finish_bag() -> void:
 		push_error("I3 production full-bag journey failure: " + failure)
 	print("%s failures=%d used=%d capacity=%d screenshots=%d evidence=%s csv=%s" % [BAG_FAIL_MARKER, failures.size(), final_used, final_capacity, screenshot_count, evidence_path, ProjectSettings.globalize_path("%s/journey.csv" % evidence_dir)])
 	_schedule_quit(1)
+
+
+func _drain_bag_audio() -> void:
+	if run_scene == null or not is_instance_valid(run_scene):
+		return
+	# Gameplay assertions/evidence are complete. AudioServer releases playback
+	# references asynchronously; a fixed count of fast headless frames is not a fence.
+	run_scene.set_process(false)
+	var streams: Array[WeakRef] = []
+	for child in run_scene.player_feedback_service.get_children():
+		if child is AudioStreamPlayer and child.stream != null:
+			streams.append(weakref(child.stream))
+			child.stop()
+			child.stream = null
+	var deadline := Time.get_ticks_msec() + 1000
+	while streams.any(func(stream: WeakRef) -> bool: return stream.get_ref() != null) and Time.get_ticks_msec() < deadline:
+		await process_frame
+	var released := not streams.any(func(stream: WeakRef) -> bool: return stream.get_ref() != null)
+	_require(released, "full-bag audio teardown timed out")
+	print("I3_FULL_BAG_AUDIO_DRAIN streams=%d released=%s" % [streams.size(), released])

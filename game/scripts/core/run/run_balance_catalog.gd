@@ -5,8 +5,8 @@ class_name RunBalanceCatalog
 # Placeholder numbers live here until a future content/balance table stage replaces them.
 
 const DEFAULT_MAX_HP := 100
-const DEFAULT_POWER := 5
-const DEFAULT_BACKPACK_CAPACITY := 10
+const DEFAULT_POWER := 20
+const DEFAULT_BACKPACK_CAPACITY := 100
 const BASE_MINE_DAMAGE := 30
 const MIN_MINE_DAMAGE := 5
 const EXPLORE_PRESSURE_DELTA := 2
@@ -16,7 +16,7 @@ const ALTAR_HP_COST := 10
 const ALTAR_BLACK_COIN_REWARD := 8
 const ALTAR_HP_COSTS := [10, 15, 25, 35, 50]
 const ALTAR_BLACK_COIN_REWARDS := [2, 5, 8, 10, 15]
-const TRAP_POWER_REQUIREMENT := 8
+const TRAP_BASE_POWER := 22
 const TRAP_FAILURE_DAMAGE := 1
 const DICE_BET := 20
 const TRADER_TREATMENT_COST := 12
@@ -33,6 +33,19 @@ static func altar_hp_cost_for_stage(stage_index: int) -> int:
 static func altar_black_coin_reward_for_stage(stage_index: int) -> int:
 	var clamped := clampi(stage_index, 0, ALTAR_BLACK_COIN_REWARDS.size() - 1)
 	return int(ALTAR_BLACK_COIN_REWARDS[clamped])
+
+
+static func trap_power_range(adjacent_mines: int, difficulty: StringName) -> Vector2i:
+	var coefficient := 1.0
+	match difficulty:
+		&"simple", &"easy":
+			coefficient = 0.8
+		&"hard":
+			coefficient = 1.3
+		&"hell":
+			coefficient = 1.6
+	var middle := roundi((TRAP_BASE_POWER + maxi(0, adjacent_mines) * 3) * coefficient)
+	return Vector2i(maxi(1, roundi(middle * 0.85)), roundi(middle * 1.15))
 
 
 static func mine_damage(mine_damage_reduce: int, immune: bool) -> int:

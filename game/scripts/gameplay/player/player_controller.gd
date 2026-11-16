@@ -67,9 +67,18 @@ func get_move_vector() -> Vector2:
 
 
 func reset_local_position() -> void:
-	local_velocity = Vector2.ZERO
 	# Spawn on the clear left aisle, away from the room's upright furniture.
-	set_local_position(Vector2(0.30, 0.5))
+	place_on_clear_floor(Vector2(0.30, 0.5))
+
+
+func place_on_clear_floor(preferred: Vector2) -> Vector2:
+	local_velocity = Vector2.ZERO
+	for point: Vector2 in [preferred, Vector2(0.50, 0.72), Vector2(0.50, 0.28), Vector2(0.28, 0.72), Vector2(0.72, 0.72)]:
+		if not _position_hits_obstacle(point):
+			set_local_position(point)
+			return local_pos
+	set_local_position(preferred)
+	return local_pos
 
 
 func set_local_position(next_local_pos: Vector2) -> void:
@@ -248,8 +257,7 @@ func place_from_entry(direction: Vector2i) -> Vector2:
 	if floor_rect.has_area():
 		var safe_floor := floor_rect.grow(-PLAYER_RADIUS - DOOR_ENTRY_INSET)
 		landing = landing.clamp(safe_floor.position, safe_floor.end)
-	set_local_position(landing)
-	return local_pos
+	return place_on_clear_floor(landing)
 
 
 func presentation_bounds_local() -> Rect2:

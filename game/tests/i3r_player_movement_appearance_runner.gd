@@ -105,6 +105,17 @@ func _check_unknown_catalog_selection_fails_closed(unknown_catalog_config: Dicti
 
 
 func _start_production_case(appearance_config: Dictionary) -> Dictionary:
+	# Main restores the manifest's durable profile. Each appearance case must
+	# start from a distinct, real Z2 profile rather than resume the previous run.
+	var profile_manager := SaveManager.new()
+	profile_manager.load_manifest()
+	var profile_id := "i3r_movement_%s" % Crypto.new().generate_random_bytes(16).hex_encode()
+	_require(bool(profile_manager.switch_profile(profile_id).get("ok", false)), "fresh movement profile could not be selected")
+	var profile_meta := MetaProgressAdapter.new()
+	_require(bool(profile_manager.configure_meta_adapter(profile_meta).get("ok", false)), "fresh movement profile adapter could not be configured")
+	_require(bool(profile_meta.initialize_z2_profile(RunRuntimeController.Z2_CONTENT_VERSION).get("ok", false)), "fresh Z2 movement profile could not be initialized")
+	_require(bool(profile_manager.save_manifest().get("ok", false)), "fresh movement profile selection could not be persisted")
+
 	var packed := load("res://scenes/main/main.tscn") as PackedScene
 	_require(packed != null, "production main scene could not be loaded")
 	if packed == null:
@@ -127,8 +138,9 @@ func _start_production_case(appearance_config: Dictionary) -> Dictionary:
 	_require(adapter != null and bus != null, "production start authorities are missing")
 	if adapter == null or bus == null:
 		return {"main": main, "run_scene": run_scene}
-	var fixture_meta: Dictionary = adapter.save_adapter.default_meta_progress()
+	var fixture_meta: Dictionary = adapter.data.duplicate(true)
 	fixture_meta["player_appearance"] = appearance_config.duplicate(true)
+	fixture_meta["unlocked_map_ids"].append("classic_10x10_standard")
 	adapter.data = fixture_meta
 	var summary: Dictionary = adapter.get_summary()
 	var run_start := RunStartConfigScript.default_config()
@@ -665,6 +677,15 @@ func _check_blocked_edge_has_no_reverse_step(fixture: Dictionary) -> void:
 
 
 func _dispose_case(fixture: Dictionary) -> void:
+	var run_scene: Variant = fixture.get("run_scene")
+	if run_scene != null and is_instance_valid(run_scene):
+		var runtime: Variant = run_scene.get("in_run_runtime")
+		if runtime != null:
+			runtime.call("bind", null)
+		var bus: Variant = run_scene.get("command_bus")
+		if bus != null:
+			bus.call("bind_runtime_controller", null)
+
 	var main: Variant = fixture.get("main")
 	if main != null:
 		main.queue_free()

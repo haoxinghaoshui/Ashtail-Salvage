@@ -161,11 +161,12 @@ func apply_snapshot(snapshot: Dictionary) -> void:
 	if summary_label == null:
 		build()
 	var ground_items: Array = _array_from(snapshot, "room_floor_items")
-	summary_label.text = "当前房间地面回收物：%s | 背包容量：%s/%s | 剩余容量：%s" % [
+	summary_label.text = "当前房间地面回收物：%s\n共享负重：%s/%s　战利品：%s/%s" % [
 		ground_items.size(),
+		snapshot.get("equipment_used", 0),
+		snapshot.get("equipment_capacity", 100),
 		snapshot.get("backpack_used", 0),
 		snapshot.get("backpack_capacity", 0),
-		snapshot.get("backpack_remaining", 0),
 	]
 	Art10UISkinKitScript.apply_label(summary_label, 15, PresentationTheme.text_color())
 	_set_scaled_font(summary_label, 15)

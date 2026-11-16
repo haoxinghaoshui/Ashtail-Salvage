@@ -28,6 +28,8 @@ var command_sequence: int = 0
 
 
 func dispatch(command_name: StringName, payload: Dictionary = {}) -> Dictionary:
+	if runtime_controller != null and runtime_controller.has_method("execute_atomic_command") and not runtime_controller._planning_action:
+		return runtime_controller.execute_atomic_command(command_name, payload)
 	var command: Dictionary = _normalize_command(command_name, payload)
 	var command_payload: Dictionary = command.get("payload", {})
 	if _is_debug_command_request(command_name, command_payload) and not _debug_tools_enabled():
@@ -41,7 +43,10 @@ func dispatch(command_name: StringName, payload: Dictionary = {}) -> Dictionary:
 		context.active_command = command.duplicate(true)
 		if _is_debug_command_request(command_name, command_payload):
 			context.record_debug_command(String(command_name), command_payload)
-	command_requested.emit(command_name, command)
+	if is_blocking_signals() and runtime_controller != null and runtime_controller.has_method("defer_command_request"):
+		runtime_controller.defer_command_request(command)
+	else:
+		command_requested.emit(command_name, command)
 	var action_result: Dictionary = {}
 	match command_name:
 		&"start_demo_run":
@@ -51,7 +56,7 @@ func dispatch(command_name: StringName, payload: Dictionary = {}) -> Dictionary:
 		&"move_by":
 			action_result = move_by(command_payload.get("delta", Vector2i.ZERO))
 		&"attempt_room_transition":
-			action_result = attempt_room_transition(command_payload.get("direction", Vector2i.ZERO))
+			action_result = attempt_room_transition(command_payload.get("direction", Vector2i.ZERO), command_payload.get("entry_position", Vector2(-1, -1)))
 		&"toggle_flag_cell":
 			action_result = toggle_flag_cell(command_payload.get("pos", null))
 		&"flag_current_cell":
@@ -75,7 +80,7 @@ func dispatch(command_name: StringName, payload: Dictionary = {}) -> Dictionary:
 		&"teleport_to_explored":
 			action_result = teleport_to_explored(command_payload.get("pos", Vector2i.ZERO))
 		&"select_event_option":
-			action_result = select_event_option(StringName(command_payload.get("option_id", &"default")))
+			action_result = select_event_option(StringName(command_payload.get("option_id", &"default")), command_payload)
 		&"select_encounter_option":
 			action_result = select_encounter_option(StringName(command_payload.get("option_id", &"default")))
 		&"pickup_ground_item":
@@ -193,13 +198,15 @@ func start_standard_run(payload: Dictionary = {}) -> Dictionary:
 	return result
 
 
-func attempt_room_transition(direction: Vector2i) -> Dictionary:
-	return move_by(direction)
+func attempt_room_transition(direction: Vector2i, entry_position: Vector2 = Vector2(-1, -1)) -> Dictionary:
+	return move_by(direction, entry_position)
 
 
-func move_by(delta: Vector2i) -> Dictionary:
+func move_by(delta: Vector2i, entry_position: Vector2 = Vector2(-1, -1)) -> Dictionary:
 	if not _can_accept_command():
 		return _blocked(&"blocked", "command_blocked")
+	if bool(EventService.cage_state(context, context.get_current_pos()).get("active", false)):
+		return _blocked(&"cage_locked", "cage_locked")
 	if abs(delta.x) + abs(delta.y) != 1:
 		context.blocked_reason = "invalid_direction"
 		context.last_message = "Invalid move: only four-direction movement is allowed."
@@ -227,6 +234,8 @@ func move_by(delta: Vector2i) -> Dictionary:
 	context.current_pos = target
 	RunInventory.record_move(context)
 	var room_entry: Dictionary = room_resolver.enter_room(context)
+	if runtime_controller != null and runtime_controller.has_method("sync_room_transition"):
+		runtime_controller.sync_room_transition(delta, entry_position)
 	_emit_state()
 	if context.failed:
 		result_available.emit(context.result_snapshot)
@@ -271,7 +280,10 @@ func interact_current_room() -> Dictionary:
 			return confirm_extract()
 		else:
 			return request_extract()
+	var previous_room := context.get_current_pos()
 	var result: Dictionary = room_resolver.interact_current_room(context)
+	if bool(result.get("ok", false)) and context.get_current_pos() != previous_room and runtime_controller != null and runtime_controller.has_method("sync_room_transition"):
+		runtime_controller.sync_room_transition(Vector2i.ZERO)
 	_emit_state()
 	if context.failed:
 		result_available.emit(context.result_snapshot)
@@ -331,15 +343,24 @@ func flee_runtime_combat(payload: Dictionary) -> Dictionary:
 		return _blocked(&"unauthorized_runtime_command", "unauthorized_runtime_command")
 	if not _can_accept_command():
 		return _blocked(&"blocked", _current_blocked_reason())
+	if runtime_controller != null and runtime_controller.has_method("is_combat_flee_authorized") and runtime_controller.is_combat_flee_authorized():
+		return {"ok": true, "status": &"combat_flee_already_authorized"}
 	var result: Dictionary = room_resolver.flee_runtime_combat(context, payload)
+	if bool(result.get("ok", false)) and runtime_controller != null and runtime_controller.has_method("authorize_combat_flee"):
+		# Authorization and the ended encounter belong to the same durable action
+		# as the fee/items, before candidate capture and state publication.
+		runtime_controller.authorize_combat_flee()
 	_emit_state()
 	return result
 
 
-func select_event_option(option_id: StringName = &"default") -> Dictionary:
+func select_event_option(option_id: StringName = &"default", payload: Dictionary = {}) -> Dictionary:
 	if not _can_accept_command():
 		return _blocked(&"blocked", _current_blocked_reason())
-	var result: Dictionary = room_resolver.select_event_option(context, option_id)
+	var previous_room := context.get_current_pos()
+	var result: Dictionary = room_resolver.select_event_option(context, option_id, payload)
+	if bool(result.get("ok", false)) and context.get_current_pos() != previous_room and runtime_controller != null and runtime_controller.has_method("sync_room_transition"):
+		runtime_controller.sync_room_transition(Vector2i.ZERO)
 	_emit_state()
 	if context.failed:
 		result_available.emit(context.result_snapshot)
@@ -448,6 +469,8 @@ func discard_unsaved_terminal_commit(confirmed: bool = false) -> Dictionary:
 func teleport_to_explored(pos: Vector2i) -> Dictionary:
 	if not _can_accept_command():
 		return _blocked(&"blocked", "command_blocked")
+	if bool(EventService.cage_state(context, context.get_current_pos()).get("active", false)):
+		return _blocked(&"cage_locked", "cage_locked")
 	if context.intel_map == null or context.truth_map == null:
 		return _blocked(&"not_ready", "not_ready")
 	if not context.is_inside(pos):
@@ -683,6 +706,9 @@ func _mark_open_map_placeholder() -> Dictionary:
 
 
 func _emit_state(change_scope: StringName = &"all") -> void:
+	if is_blocking_signals() and runtime_controller != null and runtime_controller.has_method("defer_state_change"):
+		runtime_controller.defer_state_change(change_scope)
+		return
 	if context != null:
 		var snapshot := _combat_state_snapshot() if change_scope == &"combat" else context.get_status_snapshot()
 		snapshot["_change_scope"] = change_scope
@@ -718,6 +744,7 @@ func _normalize_command(command_name: StringName, payload: Dictionary) -> Dictio
 	var source: String = String(payload.get("source", "ui"))
 	return {
 		"command_id": "cmd_%04d_%s" % [command_sequence, String(command_name)],
+		"action_id": runtime_controller._active_action_id if runtime_controller != null and runtime_controller.has_method("execute_atomic_command") else str(payload.get("action_id", "")),
 		"command_name": command_name,
 		"actor_id": actor_id,
 		"source": source,

@@ -16,8 +16,11 @@ const Art10UISkinKitScript := preload("res://scripts/presentation/art10_ui_skin_
 const Art21UIPlacementContractScript := preload("res://scripts/presentation/art21_ui_placement_contract.gd")
 const RuntimeInputProfileScript := preload("res://scripts/core/input/runtime_input_profile.gd")
 const SemanticActionHintScript := preload("res://scripts/core/input/semantic_action_hint.gd")
+const EventChoicePanel := preload("res://scripts/ui/run_surface/z1_event_choice_panel.gd")
+const EventRooms := preload("res://scripts/ui/run_surface/z1_event_room_presentation.gd")
 
 var title_label: Label
+var event_icon: TextureRect
 var hint_label: Label
 var item_list: VBoxContainer
 var item_scroll: ScrollContainer
@@ -35,6 +38,7 @@ var reserved_rects: Array[Rect2] = []
 var last_signature := ""
 var current_context: Dictionary = {}
 var replacement_ground_id := ""
+var event_feedback: Dictionary = {}
 
 
 func _ready() -> void:
@@ -51,6 +55,8 @@ func refresh_input_hints() -> void:
 		and not bool(current_context.get("container_open", false))
 	):
 		hint_label.text = "使用 %s 打开" % SemanticActionHintScript.current_display_label(&"interact")
+	elif primary_button != null and context_kind == &"event" and primary_button.visible:
+		_apply_event_action(current_context.get("payload", {}))
 
 
 func apply_context(context: Dictionary) -> void:
@@ -67,6 +73,8 @@ func apply_context(context: Dictionary) -> void:
 	context_items = _dictionary_array(context.get("items", []))
 	inventory_items = _dictionary_array(context.get("inventory_items", []))
 	current_context = context.duplicate(true)
+	if not _event_feedback_matches_context():
+		event_feedback.clear()
 	if replacement_ground_id != "" and not _contains_instance(context_items, replacement_ground_id):
 		replacement_ground_id = ""
 	var signature := _context_signature(context)
@@ -83,6 +91,7 @@ func clear_context() -> void:
 	context_items.clear()
 	inventory_items.clear()
 	current_context.clear()
+	event_feedback.clear()
 	has_player_world = false
 	gameplay_focus_rect = Rect2()
 	reserved_rects.clear()
@@ -148,6 +157,48 @@ func show_command_result(result: Dictionary) -> void:
 	_request_content_fit()
 
 
+func show_event_result(room_key: String, result: Dictionary) -> void:
+	var event_type := StringName(result.get("event_type", &""))
+	if room_key.is_empty() or event_type == &"" or not result.has("ok"):
+		return
+	event_feedback = {
+		"room_key": room_key, "event_type": event_type,
+		"text": EventRooms.result_text(event_type, result), "ok": bool(result["ok"]),
+	}
+	_apply_event_feedback()
+	_request_content_fit()
+
+
+func _event_feedback_matches_context() -> bool:
+	if context_kind != &"event" or event_feedback.is_empty():
+		return false
+	var payload: Dictionary = current_context.get("payload", {})
+	return (
+		String(payload.get("room_key", "")) == String(event_feedback.get("room_key", ""))
+		and StringName(payload.get("event_type", &"")) == StringName(event_feedback.get("event_type", &""))
+	)
+
+
+func _apply_event_feedback() -> void:
+	if status_label == null or context_kind != &"event":
+		return
+	var payload: Dictionary = current_context.get("payload", {})
+	var event_type := StringName(payload.get("event_type", &""))
+	var result: Dictionary = payload.get("last_result", {})
+	var copy := EventRooms.result_text(event_type, result)
+	var ok := bool(result.get("ok", false))
+	if copy.is_empty() and _event_feedback_matches_context():
+		copy = String(event_feedback.get("text", ""))
+		ok = bool(event_feedback.get("ok", false))
+	if copy.is_empty():
+		return
+	if bool(payload.get("completed", false)):
+		hint_label.hide()
+	status_label.text = copy
+	status_label.show()
+	status_label.add_theme_color_override("font_color", Color(0.55, 0.92, 0.72, 1.0) if ok else Color(1.0, 0.59, 0.41, 1.0))
+
+
 func _process(_delta: float) -> void:
 	if visible:
 		_place_near_anchor()
@@ -182,11 +233,23 @@ func _build() -> void:
 	root.name = "ContextContent"
 	root.add_theme_constant_override("separation", 6)
 	add_child(root)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 6)
+	root.add_child(header)
+	event_icon = TextureRect.new()
+	event_icon.name = "ContextEventIcon"
+	event_icon.custom_minimum_size = Vector2(24, 24)
+	event_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	event_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	event_icon.texture_filter = TEXTURE_FILTER_NEAREST
+	event_icon.mouse_filter = MOUSE_FILTER_IGNORE
+	event_icon.hide()
+	header.add_child(event_icon)
 	title_label = Label.new()
 	title_label.name = "ContextTitle"
 	title_label.add_theme_font_size_override("font_size", 16)
 	title_label.add_theme_color_override("font_color", Color(0.94, 0.78, 0.35, 1.0))
-	root.add_child(title_label)
+	header.add_child(title_label)
 	hint_label = Label.new()
 	hint_label.name = "ContextHint"
 	hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -222,6 +285,14 @@ func _build() -> void:
 func _rebuild(context: Dictionary) -> void:
 	for child in item_list.get_children():
 		child.queue_free()
+	event_icon.texture = null
+	event_icon.hide()
+	var scale_factor := Art10UISkinKitScript.runtime_ui_scale_factor() if context_kind == &"event" else 1.0
+	title_label.add_theme_font_size_override("font_size", Art10UISkinKitScript.scaled_font_size(16, scale_factor))
+	for label in [hint_label, status_label]:
+		label.add_theme_font_size_override("font_size", Art10UISkinKitScript.scaled_font_size(13, scale_factor))
+	primary_button.add_theme_font_size_override("font_size", Art10UISkinKitScript.scaled_font_size(13, scale_factor))
+	primary_button.custom_minimum_size.y = Art10UISkinKitScript.scaled_control_minimum(Vector2(0.0, 34.0), scale_factor).y
 	var backpack_remaining := int(context.get("backpack_remaining", 0))
 	if context_kind == &"ground_loot" and replacement_ground_id != "":
 		_build_replacement_view(context, backpack_remaining)
@@ -252,6 +323,7 @@ func _rebuild(context: Dictionary) -> void:
 	item_scroll.custom_minimum_size.y = minf(ROW_HEIGHT * maxf(1.0, float(context_items.size())), ROW_HEIGHT * 3.0)
 	status_label.text = ""
 	status_label.visible = false
+	_apply_event_feedback()
 	_request_content_fit()
 
 
@@ -260,10 +332,21 @@ func _rebuild_special_context(context: Dictionary) -> void:
 	item_scroll.visible = false
 	hint_label.visible = true
 	var presentation := SpecialRoomPresentationModelScript.build(context_kind, payload)
+	if context_kind == &"event":
+		event_icon.texture = EventChoicePanel.event_icon_texture(StringName(payload.get("event_type", &"")), payload)
+		event_icon.visible = event_icon.texture != null
 	title_label.text = String(presentation.get("title", "附近目标"))
 	hint_label.text = String(presentation.get("body", "靠近后查看。"))
 	primary_button.text = String(presentation.get("primary_text", ""))
 	primary_button.visible = bool(presentation.get("primary_visible", false))
+	if context_kind == &"event" and primary_button.visible:
+		hint_label.text = EventRooms.near_summary(StringName(payload.get("event_type", &"")), hint_label.text)
+		_apply_event_action(payload)
+
+
+func _apply_event_action(payload: Dictionary) -> void:
+	var action := EventRooms.near_action(StringName(payload.get("event_type", &"")))
+	primary_button.text = "%s  [%s]" % [action, SemanticActionHintScript.current_display_label(&"interact")]
 
 
 func _build_replacement_view(context: Dictionary, backpack_remaining: int) -> void:
@@ -689,6 +772,7 @@ func _context_signature(context: Dictionary) -> String:
 			String(presentation.get("short_description", "")),
 		])
 	var payload: Dictionary = context.get("payload", {})
+	var last_result: Dictionary = payload.get("last_result", {})
 	var parts: Array[String] = [
 		String(context_kind),
 		str(context.get("opened_once", false)),
@@ -699,6 +783,8 @@ func _context_signature(context: Dictionary) -> String:
 		replacement_ground_id,
 		String(payload.get("visual_state", "")),
 		String(payload.get("event_type", "")),
+		String(payload.get("event_icon_asset_id", "")),
+		String(payload.get("room_key", "")),
 		String(payload.get("display_title", "")),
 		str(payload.get("completed", false)),
 		str(payload.get("display_only", false)),
@@ -712,7 +798,14 @@ func _context_signature(context: Dictionary) -> String:
 		str(payload.get("backpack_capacity", 0)),
 		str(payload.get("room_floor_item_count", 0)),
 		String(payload.get("objective_summary", "")),
+		String(last_result.get("rule_request_id", "")),
+		String(last_result.get("option_id", "")),
+		String(last_result.get("message", "")),
+		str(last_result.get("ok", false)),
 	]
+	if context_kind == &"event":
+		parts.append(str(Art10UISkinKitScript.runtime_ui_scale_factor()))
+		parts.append(SemanticActionHintScript.current_display_label(&"interact"))
 	return "|".join(parts)
 
 

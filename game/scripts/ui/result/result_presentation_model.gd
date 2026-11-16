@@ -2,7 +2,9 @@ extends RefCounted
 class_name ResultPresentationModel
 
 const ItemRarityDescriptorScript := preload("res://scripts/presentation/item_rarity_descriptor.gd")
+const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
 const RunUIViewModelScript := preload("res://scripts/ui/shell/run_ui_view_model.gd")
+const SaveProfileManifestScript := preload("res://scripts/core/save/save_profile_manifest.gd")
 
 # Read-only projection for the production result panel.  Currency, item
 # movement, failure reason, persistence and salvage state are copied only from
@@ -41,6 +43,20 @@ static func build(snapshot: Dictionary) -> Dictionary:
 		retry_save_allowed = false
 		discard_unsaved_allowed = false
 	var consequence_text := _consequence_text(result_state, settlement, awaiting_salvage)
+	var career := {}
+	if persistence_state == &"committed":
+		var commit := _dictionary(snapshot.get("meta_progress_commit", {}))
+		var progression := _dictionary(commit.get("m7_progression_delta", {}))
+		if progression.has("exp_gained"):
+			var raw_meta: Variant = snapshot.get("meta_progress_summary", commit.get("summary", {}))
+			var meta: Dictionary = raw_meta if raw_meta is Dictionary else {}
+			var show_follow_up := (
+				normal_exit_allowed
+				and result_state in [&"success", &"failure"]
+				and not bool(snapshot.get("debug_used", false))
+				and str(meta.get("profile_id", "")) != SaveProfileManifestScript.DEBUG_SANDBOX_PROFILE_ID
+			)
+			career = _career_feedback(progression, meta, show_follow_up)
 	return {
 		"presentation_contract": &"i3.result.read_only.v1",
 		"title": _title(result_state),
@@ -55,7 +71,11 @@ static func build(snapshot: Dictionary) -> Dictionary:
 		"salvage_candidates": _item_models(_array(settlement.get("settlement_pool", []))),
 		"salvage_capacity": int(settlement.get("salvage_capacity", 0)),
 		"persistence_state": persistence_state,
-		"persistence_text": _persistence_text(persistence_state),
+		"persistence_text": career.get("text", _persistence_text(persistence_state)),
+		"career_xp_text": career.get("xp_text", ""),
+		"career_map_text": career.get("map_text", ""),
+		"progression_tooltip": career.get("tooltip", ""),
+		"career_follow_up": career.get("follow_up", {}),
 		"normal_exit_allowed": normal_exit_allowed,
 		"retry_save_allowed": retry_save_allowed,
 		"discard_unsaved_allowed": discard_unsaved_allowed,
@@ -106,8 +126,11 @@ static func reason_text_for(result_state: StringName, reason_code: StringName) -
 
 static func _consequence_text(result_state: StringName, settlement: Dictionary, awaiting_salvage: bool) -> String:
 	var warehouse_count := _array(settlement.get("warehouse_items", [])).size()
-	var salvaged_count := _array(settlement.get("salvaged_items", [])).size()
-	var lost_count := _array(settlement.get("lost_items", [])).size()
+	var event_delivery := _dictionary(settlement.get("event_item_delivery", {}))
+	var consigned := _array(event_delivery.get("delivered", []))
+	var forfeited := _array(event_delivery.get("forfeited", []))
+	var salvaged_count := _without_instances(_array(settlement.get("salvaged_items", [])), consigned).size() + consigned.size()
+	var lost_count := _without_instances(_array(settlement.get("lost_items", [])), forfeited).size() + forfeited.size()
 	var floor_count := _array(settlement.get("room_floor_lost_items", [])).size()
 	var cleared_count := _array(settlement.get("cleared_consumables", [])).size()
 	if awaiting_salvage:
@@ -118,7 +141,10 @@ static func _consequence_text(result_state: StringName, settlement: Dictionary, 
 			candidate_count,
 		]
 	if result_state == &"success":
-		return "带回 %d 件物资；现场遗留 %d 件，消耗或清除 %d 件。" % [warehouse_count, floor_count, cleared_count]
+		var summary := "带回 %d 件物资；现场遗留 %d 件，消耗或清除 %d 件。" % [warehouse_count, floor_count, cleared_count]
+		if not forfeited.is_empty():
+			summary += "抵押抵账 %d 件。" % forfeited.size()
+		return summary
 	return "保全 %d 件；未能带回 %d 件，现场遗留 %d 件，消耗或清除 %d 件。" % [
 		salvaged_count,
 		lost_count,
@@ -143,14 +169,39 @@ static func _currency_metrics(result_state: StringName, settlement: Dictionary) 
 
 static func _item_sections(result_state: StringName, settlement: Dictionary) -> Array[Dictionary]:
 	var sections: Array[Dictionary] = []
+	var event_delivery := _dictionary(settlement.get("event_item_delivery", {}))
+	var forfeited := _array(event_delivery.get("forfeited", []))
 	if result_state == &"success":
 		sections.append(_item_section(&"warehouse_items", "带回仓库", _array(settlement.get("warehouse_items", []))))
 	else:
-		sections.append(_item_section(&"salvaged_items", "已保全", _array(settlement.get("salvaged_items", []))))
-		sections.append(_item_section(&"lost_items", "未能带回", _array(settlement.get("lost_items", []))))
+		var consigned := _array(event_delivery.get("delivered", []))
+		var salvaged := _without_instances(_array(settlement.get("salvaged_items", [])), consigned)
+		var lost := _without_instances(_array(settlement.get("lost_items", [])), forfeited)
+		sections.append(_item_section(&"salvaged_items", "已保全", salvaged))
+		if not consigned.is_empty():
+			sections.append(_item_section(&"event_consigned_items", "已托运", consigned))
+		sections.append(_item_section(&"lost_items", "未能带回", lost))
+	if not forfeited.is_empty():
+		sections.append(_item_section(&"event_forfeited_items", "抵押抵账", forfeited))
 	sections.append(_item_section(&"room_floor_lost_items", "遗留在现场", _array(settlement.get("room_floor_lost_items", []))))
 	sections.append(_item_section(&"cleared_consumables", "已消耗或清除", _array(settlement.get("cleared_consumables", []))))
 	return sections
+
+
+static func _without_instances(items: Array, excluded: Array) -> Array:
+	if excluded.is_empty():
+		return items
+	var excluded_ids := {}
+	for item in excluded:
+		if item is Dictionary:
+			var instance_id := String(item.get("instance_id", ""))
+			if not instance_id.is_empty():
+				excluded_ids[instance_id] = true
+	var result: Array = []
+	for item in items:
+		if item is Dictionary and not excluded_ids.has(String(item.get("instance_id", ""))):
+			result.append(item)
+	return result
 
 
 static func _item_section(section_id: StringName, title: String, items: Array) -> Dictionary:
@@ -171,6 +222,8 @@ static func _item_models(items: Array) -> Array[Dictionary]:
 		var presentation := RunUIViewModelScript.item_presentation(item)
 		result.append({
 			"instance_id": String(item.get("instance_id", "")),
+			"item_id": String(item.get("item_id", "")),
+			"item_type": String(item.get("item_type", item.get("category", ""))),
 			"display_name": String(presentation.get("display_name", "未命名物资")),
 			"short_description": String(presentation.get("short_description", "")),
 			"weight": maxi(0, int(presentation.get("weight", 1))),
@@ -203,6 +256,83 @@ static func _persistence_state(snapshot: Dictionary, awaiting_salvage: bool) -> 
 	]:
 		return status
 	return &"missing"
+
+
+static func _career_feedback(progression: Dictionary, meta: Dictionary, show_follow_up: bool) -> Dictionary:
+	var level := int(progression.get("profile_level_after", meta.get("profile_level", 1)))
+	var leveled_up := level > int(progression.get("profile_level_before", level))
+	var text := "进度已保存 · 资历经验 +%d" % int(progression.get("exp_gained", 0))
+	if leveled_up or meta.has("profile_exp"):
+		text += (" · 升至 Lv.%d" if leveled_up else " · Lv.%d") % level
+	if meta.has("profile_exp"):
+		var next_exp := M7ContentCatalogScript.profile_exp_for_level(level + 1)
+		if next_exp >= 0:
+			text += " · 距 Lv.%d %d 经验" % [level + 1, maxi(0, next_exp - int(meta["profile_exp"]))]
+		else:
+			text += " · 已满级"
+	var details := PackedStringArray()
+	var breakdown := _dictionary(progression.get("experience_breakdown", {}))
+	if not breakdown.is_empty():
+		details.append("房间 +%d · 开箱 +%d · 战斗 +%d · 事件 +%d · 委托 +%d" % [
+			int(breakdown.get("room_exp", 0)), int(breakdown.get("chest_exp", 0)),
+			int(breakdown.get("combat_exp", 0)), int(breakdown.get("event_exp", 0)), int(breakdown.get("commission_exp", 0)),
+		])
+		details.append("难度 %d%% · 单局上限 %d · 结算 %d%%" % [
+			int(breakdown.get("difficulty_percent", 100)), int(breakdown.get("cap", 0)), int(breakdown.get("outcome_percent", 0)),
+		])
+	var map_cue := _career_map_cue(_array(progression.get("new_unlock_ids", [])), meta) if show_follow_up else {}
+	var map_text := str(map_cue.get("text", ""))
+	if not map_cue.is_empty():
+		details.append(str(map_cue["tooltip"]))
+	return {
+		"text": text + "\n" + map_text if not map_text.is_empty() else text,
+		"xp_text": text,
+		"map_text": map_text,
+		"tooltip": "\n".join(details),
+		"follow_up": _career_follow_up(progression, meta) if show_follow_up else {},
+	}
+
+
+static func _career_map_cue(new_unlock_ids: Array, meta: Dictionary) -> Dictionary:
+	var opened := PackedStringArray()
+	for map_id in new_unlock_ids:
+		var definition := M7ContentCatalogScript.map_definition_exact(str(map_id))
+		if not definition.is_empty():
+			opened.append(str(definition["display_name"]))
+	if not opened.is_empty():
+		var text := "新开放 %s" % opened[0]
+		if opened.size() > 1:
+			text += " 等 %d 档" % opened.size()
+		return {"text": text, "tooltip": "新开放 %s" % "、".join(opened)}
+	for raw_map in _array(meta.get("map_catalog", [])):
+		var map := _dictionary(raw_map)
+		if map.is_empty() or bool(map.get("unlocked", true)):
+			continue
+		var name := "下一档 %s" % str(map.get("display_name", ""))
+		var requirements := str(map.get("lock_reason", ""))
+		var blockers := requirements.split(" · ", false)
+		var text := name if blockers.is_empty() else "%s · %s" % [name, blockers[0]]
+		var tooltip := name if requirements.is_empty() else "%s · %s" % [name, requirements]
+		var required_exp := M7ContentCatalogScript.profile_exp_for_level(int(map.get("min_profile_level", 1)))
+		if meta.has("profile_exp") and required_exp > int(meta["profile_exp"]):
+			tooltip += " · 还差 %d 经验" % (required_exp - int(meta["profile_exp"]))
+		return {"text": text, "tooltip": tooltip}
+	return {}
+
+
+static func _career_follow_up(progression: Dictionary, meta: Dictionary) -> Dictionary:
+	var achievements := _dictionary(meta.get("achievement_states", {}))
+	var first_return := _dictionary(achievements.get("achievement_first_return", {}))
+	if str(first_return.get("status", "")) == "claimable":
+		return {"label": "查看首撤奖励", "module_id": &"task_archive", "secondary_id": &"achievement", "card_id": "achievement_first_return"}
+	var dots := _dictionary(meta.get("red_dot_state", {}))
+	var talent_available := int(dots.get("talent_available", 0)) > 0
+	var rewards_available := int(dots.get("claimable_rewards", 0)) > 0
+	if talent_available and (int(progression.get("talent_points_gained", 0)) > 0 or not rewards_available):
+		return {"label": "查看可用天赋", "module_id": &"talent"}
+	if rewards_available:
+		return {"label": "查看待领奖励", "module_id": &"task_archive"}
+	return {}
 
 
 static func _persistence_text(state: StringName) -> String:

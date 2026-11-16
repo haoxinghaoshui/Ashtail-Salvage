@@ -91,7 +91,17 @@ func _test_long_term_real_content() -> void:
 		(codex_groups.get("codex/map", []) as Array).size() == map_definition_count,
 		"codex_map_count"
 	)
-	_check((codex_groups.get("codex/monster", []) as Array).size() == 4, "codex_monster_count")
+	var expected_monster_ids: Array[String] = ["monster:slime", "monster:slimeling", "monster:bat", "monster:drone"]
+	for number in range(1, 15):
+		expected_monster_ids.append("monster:z1_monster_m%02d" % number)
+	var monster_cards: Array = codex_groups.get("codex/monster", [])
+	_check(monster_cards.size() == expected_monster_ids.size(), "codex_monster_count")
+	var monster_ids: Array[String] = []
+	for card: Dictionary in monster_cards:
+		monster_ids.append(String(card.get("id", "")))
+	monster_ids.sort()
+	expected_monster_ids.sort()
+	_check(monster_ids == expected_monster_ids, "codex_monster_ids")
 	_check((codex_groups.get("collection_appearance/display_content", []) as Array).size() == 3, "collection_set_count")
 	var gacha_model: Dictionary = long_term_model_script.build_from_snapshot(&"gacha", {"meta_progress_summary": after})
 	_check(not bool(gacha_model.get("m7_real_module", true)), "gacha_should_remain_locked")
@@ -264,6 +274,9 @@ func _adapter(path: String, profile_id: String) -> MetaProgressAdapter:
 	var adapter := MetaProgressAdapterScript.new()
 	adapter.set_active_profile_path(path, profile_id)
 	adapter.clear()
+	adapter.data["tutorial_completed"] = true
+	adapter.data["unlocked_map_ids"] = ["tutorial_5x5", "classic_7x7_simple", "classic_10x10_standard"]
+	adapter.save()
 	adapter.load_or_create_default()
 	return adapter
 

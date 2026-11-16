@@ -39,10 +39,12 @@ static func build_from_snapshot(snapshot: Dictionary) -> HUDViewModel:
 	var inventory_items: Array = snapshot.get("inventory_items", [])
 	var equipped_items: Array = snapshot.get("equipped_items", [])
 	model.run_label = "探索中"
-	model.status_text = "生命：%s/%s | 强度：%s\n背包：%s/%s | 装备：%s | 地面：%s\n位置：(%d,%d) | %s\n雷险：%s | 搜索：%s" % [
+	model.status_text = "生命：%s/%s | 强度：%s\n共享：%s/%s | 战利品：%s/%s | 装备：%s | 地面：%s\n位置：(%d,%d) | %s\n雷险：%s | 搜索：%s" % [
 		snapshot.get("hp", 0),
 		snapshot.get("max_hp", 0),
 		snapshot.get("power", 0),
+		snapshot.get("equipment_used", 0),
+		snapshot.get("equipment_capacity", 100),
 		snapshot.get("backpack_used", 0),
 		snapshot.get("backpack_capacity", 0),
 		equipped_items.size(),

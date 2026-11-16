@@ -40,7 +40,7 @@ func _check_catalog_to_ledger_to_view() -> void:
 		_check(not String(descriptor.get("display_text", "")).contains("tier_"), "raw rarity leaked after ledger for %s" % source.get("item_id", ""))
 		counts[actual] = int(counts.get(actual, 0)) + 1
 	_check(source_items == source_copy, "ledger/view round trip mutated the formal catalog")
-	_check(counts == {&"tier_1": 7, &"tier_2": 10, &"tier_3": 12, &"tier_4": 6, &"tier_5": 4, &"tier_6": 4}, "ledger rarity distribution drifted: %s" % counts)
+	_check(counts == {&"tier_1": 10, &"tier_2": 21, &"tier_3": 16, &"tier_4": 7, &"tier_5": 5, &"tier_6": 4}, "ledger rarity distribution drifted: %s" % counts)
 
 
 func _check_legacy_aliases() -> void:
@@ -206,7 +206,7 @@ func _check(condition: bool, message: String) -> void:
 
 func _finish() -> void:
 	if failures.is_empty():
-		print("I2_ITEM_RARITY_AUTHORITY_ROUNDTRIP=PASS formal_items=43 canonical=tier_1..tier_6 aliases=good,uncommon settlement=preserved unique_gate=normalized presentation=read_only flee_candidates=t1_only")
+		print("I2_ITEM_RARITY_AUTHORITY_ROUNDTRIP=PASS formal_items=63 canonical=tier_1..tier_6 aliases=good,uncommon settlement=preserved unique_gate=normalized presentation=read_only flee_candidates=t1_only")
 		quit(0)
 		return
 	for failure in failures:

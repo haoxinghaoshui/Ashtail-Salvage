@@ -54,6 +54,14 @@ func configure_meta_adapter(adapter: MetaProgressAdapter) -> Dictionary:
 	}
 
 
+func configure_checkpoint_service(service: RefCounted, adapter: MetaProgressAdapter, ruleset_id: String = "z2", content_version: String = "z2") -> Dictionary:
+	if service == null or not service.has_method("configure") or adapter == null:
+		return _blocked("checkpoint_service_missing")
+	if adapter.active_profile_id != active_profile_id or adapter.active_meta_progress_path != meta_progress_path():
+		return _blocked("checkpoint_profile_mismatch")
+	return service.configure(adapter, ruleset_id, content_version)
+
+
 func switch_profile(profile_id: String, active_run: bool = false) -> Dictionary:
 	if active_run:
 		return SaveImportStagingScript.blocked_mid_run_result("switch_profile")

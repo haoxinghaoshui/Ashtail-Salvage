@@ -70,6 +70,7 @@ static func build_from_run_map_snapshot(snapshot: Dictionary) -> MiniMapViewMode
 			"asset_id": &"",
 			"theme_key": _theme_for_known_state(StringName(cell.get("known_state", &"unknown"))),
 			"room_type": cell.get("room_type", &"Unknown"),
+			"confirmed_mine": bool(cell.get("confirmed_mine", false)),
 			"known_state": cell.get("known_state", &"unknown"),
 			"visibility": cell.get("visibility", &"unknown"),
 			"flagged": bool(cell.get("flagged", false)),
@@ -92,6 +93,7 @@ static func build_from_run_map_snapshot(snapshot: Dictionary) -> MiniMapViewMode
 			"known_state": marker.get("known_state", &"unknown"),
 			"visibility": marker.get("visibility", &"unknown"),
 			"room_type": marker.get("room_type", &"Unknown"),
+			"confirmed_mine": bool(marker.get("confirmed_mine", false)),
 			"adjacent_mines": int(marker.get("adjacent_mines", -1)),
 			"flagged": bool(marker.get("flagged", false)),
 			"scanned": bool(marker.get("scanned", false)),
@@ -124,10 +126,10 @@ static func build_cell_view_model(raw_marker: Dictionary, player_pos: Vector2i =
 	var explicitly_revealed := bool(marker.get("revealed", false)) or bool(marker.get("explored", false)) or known_state in [&"explored", &"cleared"]
 	var publicly_scanned := bool(marker.get("scanned", false)) or known_state == &"scanned"
 	var room_type := StringName(marker.get("room_type", &"Unknown"))
-	# A visible exit is the one public room-type exception for an otherwise
-	# unknown cell. Every other unrevealed type is reduced to Unknown here even
-	# if a malformed fixture accidentally forwards an internal value.
-	if not explicitly_revealed and room_type != &"Exit":
+	# Visible exits and confirmed mine positions are public before exploration.
+	if bool(marker.get("confirmed_mine", false)):
+		room_type = &"Mine"
+	elif not explicitly_revealed and room_type != &"Exit":
 		room_type = &"Unknown"
 	var adjacent := int(marker.get("adjacent_mines", -1))
 	if known_state == &"unknown" or (not publicly_scanned and not explicitly_revealed) or adjacent < 0 or adjacent > 8:
@@ -180,7 +182,7 @@ static func _action_for_cell(is_current: bool, flagged: bool, revealed: bool, ex
 	if flagged:
 		return {"id": &"toggle_flag", "label": "取消标记", "enabled": true, "reason": ""}
 	if not revealed:
-		if scanned:
+		if scanned and room_type != &"Mine":
 			return {"id": &"inspect", "label": "需探索", "enabled": false, "reason": "scanned_not_explored"}
 		return {"id": &"toggle_flag", "label": "标记雷险", "enabled": true, "reason": ""}
 	if explored and bool(return_eligibility.get("eligible", return_eligibility.get("fast_return", false))):

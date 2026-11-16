@@ -3,6 +3,7 @@ class_name M7TalentCatalog
 
 const CATALOG_VERSION := 1
 const TALENT_COST := 1
+const TALENT_POINT_LEVELS := [2, 4, 6, 9]
 
 const TALENT_CARRY_RIGGING := "talent_carry_rigging"
 const TALENT_SALVAGE_CLAUSE := "talent_salvage_clause"
@@ -22,8 +23,8 @@ static func definitions() -> Array[Dictionary]:
 			"负重整备",
 			[],
 			&"backpack_capacity",
-			1,
-			"背包负重上限 +1"
+			10,
+			"背包负重上限 +10"
 		),
 		_talent(
 			TALENT_SALVAGE_CLAUSE,
@@ -33,8 +34,8 @@ static func definitions() -> Array[Dictionary]:
 			"失败抢救",
 			[TALENT_CARRY_RIGGING],
 			&"salvage_capacity",
-			1,
-			"失败结算可抢救重量上限 +1"
+			10,
+			"失败结算可抢救重量上限 +10"
 		),
 		_talent(
 			TALENT_SHOCK_TRAINING,
@@ -91,25 +92,21 @@ static func definition(talent_id: String) -> Dictionary:
 
 
 static func point_budget_for_level(profile_level: int) -> int:
-	return maxi(0, profile_level - 1)
+	var points := 0
+	for level in TALENT_POINT_LEVELS:
+		if profile_level >= level:
+			points += 1
+	return points
 
 
-static func sync_progress(data: Dictionary, legacy_budget_missing: bool = false) -> Dictionary:
+static func sync_progress(data: Dictionary) -> Dictionary:
 	var flags := _unique_strings(data.get("talent_flags", []))
 	var points := maxi(0, int(data.get("talent_points", 0)))
 	var target_budget := point_budget_for_level(maxi(1, int(data.get("profile_level", 1))))
-	var spent_cost := _spent_cost(flags)
-	var granted := maxi(0, int(data.get("talent_budget_granted", 0)))
-	if legacy_budget_missing:
-		var accounted_budget := spent_cost + points
-		if accounted_budget < target_budget:
-			points += target_budget - accounted_budget
-		granted = maxi(target_budget, accounted_budget)
-	elif target_budget > granted:
+	var granted := maxi(int(data.get("talent_budget_granted", 0)), _spent_cost(flags) + points)
+	if target_budget > granted:
 		points += target_budget - granted
 		granted = target_budget
-	else:
-		granted = maxi(granted, spent_cost + points)
 	data["talent_flags"] = flags
 	data["talent_points"] = points
 	data["talent_budget_granted"] = granted
@@ -119,7 +116,7 @@ static func sync_progress(data: Dictionary, legacy_budget_missing: bool = false)
 
 static func projection(meta: Dictionary) -> Array[Dictionary]:
 	var normalized := meta.duplicate(true)
-	sync_progress(normalized, not normalized.has("talent_budget_granted"))
+	sync_progress(normalized)
 	var flags := _unique_strings(normalized.get("talent_flags", []))
 	var points := maxi(0, int(normalized.get("talent_points", 0)))
 	var result: Array[Dictionary] = []
@@ -180,7 +177,7 @@ static func active_effects(meta: Dictionary) -> Array[Dictionary]:
 
 static func summary(meta: Dictionary) -> Dictionary:
 	var normalized := meta.duplicate(true)
-	sync_progress(normalized, not normalized.has("talent_budget_granted"))
+	sync_progress(normalized)
 	var flags := _unique_strings(normalized.get("talent_flags", []))
 	var known_unlocked := 0
 	for raw_definition in definitions():
@@ -193,7 +190,7 @@ static func summary(meta: Dictionary) -> Dictionary:
 	return {
 		"catalog_version": CATALOG_VERSION,
 		"profile_level": maxi(1, int(normalized.get("profile_level", 1))),
-		"budget_total": point_budget_for_level(maxi(1, int(normalized.get("profile_level", 1)))),
+		"budget_total": maxi(0, int(normalized.get("talent_budget_granted", 0))),
 		"budget_granted": maxi(0, int(normalized.get("talent_budget_granted", 0))),
 		"points_available": maxi(0, int(normalized.get("talent_points", 0))),
 		"known_unlocked_count": known_unlocked,

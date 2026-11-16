@@ -57,23 +57,20 @@ func _run() -> void:
 func _check_production_encounter_composition() -> void:
 	var runtime = InRunRuntimeScript.new()
 	var observed_types: Array[StringName] = []
-	for seed in range(12):
+	for seed in range(512):
 		var encounter: Array = runtime.call("_encounter_types", seed)
 		_require(encounter.size() == 1, "production encounter did not keep one mother enemy for seed %d" % seed)
 		if encounter.size() != 1:
 			continue
 		var monster_type := StringName(encounter[0])
 		_require(
-			monster_type in [
-				MonsterCatalogScript.TYPE_SLIME,
-				MonsterCatalogScript.TYPE_BAT,
-				MonsterCatalogScript.TYPE_DRONE,
-			],
+			monster_type != MonsterCatalogScript.TYPE_SLIMELING
+			and not MonsterCatalogScript.definition(monster_type).is_empty(),
 			"production encounter selected an unsupported mother enemy for seed %d" % seed
 		)
 		if not observed_types.has(monster_type):
 			observed_types.append(monster_type)
-	_require(observed_types.size() == 3, "production encounter seed mapping no longer reaches all three mother-enemy types")
+	_require(observed_types.size() == 17, "production encounter seed mapping does not reach all three existing and fourteen Z1 mother-enemy types")
 
 
 func _check_enemy_power_contract() -> void:
@@ -109,8 +106,8 @@ func _check_enemy_power_contract() -> void:
 		})
 		var enemy: Dictionary = simulation.enemies[0]
 		_require(
-			int(enemy.get("max_hp", 0)) == int(definition.get("max_hp", 0)) + 12,
-			"%s HP did not add the authoritative enemy power" % String(monster_type)
+			int(enemy.get("max_hp", 0)) == int(definition.get("max_hp", 0)) + 12 * 2,
+			"%s HP did not add twice the authoritative enemy power" % String(monster_type)
 		)
 		_require(
 			int(enemy.get("damage", 0)) == MonsterCatalogScript.damage_for_power(12, monster_type),
@@ -130,7 +127,7 @@ func _check_enemy_power_contract() -> void:
 		"explicit multi-enemy fixture without profiles changed its legacy HP contract"
 	)
 
-	var mother_profile := MonsterCatalogScript.runtime_profile(&"slime", 20, "滞留工偶")
+	var mother_profile := MonsterCatalogScript.runtime_profile(&"slime", 14, "滞留工偶")
 	var split = CombatSimulationScript.new()
 	split.start({
 		"seed": 903,
@@ -146,9 +143,9 @@ func _check_enemy_power_contract() -> void:
 	_require(living_children.size() == 2, "profiled slime did not create exactly two child enemies")
 	for child in living_children:
 		_require(
-			int(child.get("enemy_power", -1)) == 9
-			and int(child.get("max_hp", 0)) == 18
-			and int(child.get("damage", 0)) == MonsterCatalogScript.damage_for_power(9, &"slimeling"),
+			int(child.get("enemy_power", -1)) == 6
+			and int(child.get("max_hp", 0)) == 30
+			and int(child.get("damage", 0)) == MonsterCatalogScript.damage_for_power(6, &"slimeling"),
 			"slimeling did not inherit the mother's 0.45 power profile"
 		)
 

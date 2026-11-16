@@ -116,6 +116,29 @@ func get_cell_info(pos: Vector2i) -> Dictionary:
 	return known_rooms[_key(pos)].duplicate(true)
 
 
+func learn_event_intel(pos: Vector2i, knowledge: Dictionary) -> void:
+	if not _has_cell(pos):
+		return
+	var key := _key(pos)
+	var cell: Dictionary = known_rooms[key]
+	cell["scanned"] = true
+	if not bool(cell.get("revealed", false)):
+		cell["known_state"] = &"scanned"
+		cell["public_state"] = &"scanned"
+		cell["visibility"] = &"partial"
+	if knowledge.has("adjacent_mines"):
+		cell["adjacent_mines"] = clampi(int(knowledge["adjacent_mines"]), 0, 8)
+	if bool(knowledge.get("known_mine", false)):
+		cell["confirmed_mine"] = true
+		cell["mine"] = true
+		cell["room_type"] = &"Mine"
+	if knowledge.has("mine_triggered"):
+		cell["mine_triggered"] = bool(knowledge["mine_triggered"])
+	known_rooms[key] = cell
+	scan_layer[key] = {"schema_kind": &"ScanLayer", "pos": pos, "scanned": true, "scan_hint": &"event_intel", "reliability": 1.0, "read_only": true, "display_only": true, "preview": false}
+	info_reliability_layer[key] = _reliability_cell(pos, &"event_intel", 1.0)
+
+
 func scan_cell(pos: Vector2i, truth_map: TruthMap = null, scan_hint: StringName = &"limited", reliability: float = 0.65) -> Dictionary:
 	if not _has_cell(pos):
 		return {}
@@ -141,6 +164,16 @@ func scan_cell(pos: Vector2i, truth_map: TruthMap = null, scan_hint: StringName 
 		"preview": true,
 	}
 	info_reliability_layer[_key(pos)] = _reliability_cell(pos, &"scan", reliability)
+	return get_cell_info(pos)
+
+
+func scan_adjacent_mines(pos: Vector2i, count: int) -> Dictionary:
+	if not _has_cell(pos):
+		return {}
+	scan_cell(pos, null, &"adjacent_mines", 1.0)
+	var cell: Dictionary = known_rooms[_key(pos)]
+	cell["adjacent_mines"] = maxi(0, count)
+	known_rooms[_key(pos)] = cell
 	return get_cell_info(pos)
 
 
@@ -230,7 +263,8 @@ func get_public_room_detail(pos: Vector2i, truth_map: TruthMap = null, player_po
 		"is_current": pos == player_pos,
 		"known_state": known_state,
 		"visibility": cell.get("visibility", &"unknown"),
-		"room_type": cell.get("room_type", &"Unknown") if bool(cell.get("revealed", false)) or bool(cell.get("visible_exit", false)) else &"Unknown",
+		"room_type": cell.get("room_type", &"Unknown") if bool(cell.get("revealed", false)) or bool(cell.get("visible_exit", false)) or bool(cell.get("confirmed_mine", false)) else &"Unknown",
+		"confirmed_mine": bool(cell.get("confirmed_mine", false)),
 		"adjacent_mines": cell.get("adjacent_mines", -1),
 		"flagged": bool(cell.get("flagged", false)),
 		"scanned": bool(cell.get("scanned", false)),

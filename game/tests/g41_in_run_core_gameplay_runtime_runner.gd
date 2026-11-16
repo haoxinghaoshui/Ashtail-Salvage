@@ -135,7 +135,7 @@ func _check_reduced_motion_contract() -> void:
 
 func _check_item_visual_catalog() -> void:
 	var all_items: Array[Dictionary] = ItemCatalogScript.all_items()
-	_check(all_items.size() == 43, "M3 item visual validation expected 43 catalog items")
+	_check(all_items.size() == 63, "M3 item visual validation expected 63 catalog items")
 	for item in all_items:
 		var item_id := String(item.get("item_id", ""))
 		_check(ItemVisualCatalogScript.has_explicit_mapping(item_id), "ART24 item visual catalog omitted %s" % item_id)
@@ -219,7 +219,7 @@ func _check_cone_and_split() -> void:
 		"seed": 91,
 		"player_pos": Vector2(0.52, 0.50),
 		"player_facing": Vector2.LEFT,
-		"player_power": 40,
+		"player_power": 100,
 		"monster_types": [&"slime"],
 	})
 	away.queue_player_attack()
@@ -231,7 +231,7 @@ func _check_cone_and_split() -> void:
 		"seed": 91,
 		"player_pos": Vector2(0.52, 0.50),
 		"player_facing": Vector2.RIGHT,
-		"player_power": 40,
+		"player_power": 100,
 		"monster_types": [&"slime"],
 	})
 	toward.queue_player_attack()

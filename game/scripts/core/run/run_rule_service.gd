@@ -9,6 +9,7 @@ const EncounterResolverScript := preload("res://scripts/core/run/encounter/encou
 const RuleEffectModifierSchemaScript := preload("res://scripts/core/rules/rule_effect_modifier_schema.gd")
 const ContentDeliverySchemaScript := preload("res://scripts/core/content/content_delivery_schema.gd")
 const RunEffectApplierScript := preload("res://scripts/core/run/run_effect_applier.gd")
+const Z1SupplyRules := preload("res://scripts/core/run/z1_supply_rule_service.gd")
 
 
 static func make_rule_result(ok: bool, status: StringName, actor_id: StringName = DEFAULT_ACTOR_ID, reason: String = "", effects: Array = [], messages: Array[String] = [], snapshot_delta: Dictionary = {}, settlement_log_entry: Dictionary = {}, rule_request_id: String = "", produced_events: Array = [], produced_transactions: Array = []) -> Dictionary:
@@ -74,12 +75,21 @@ static func apply_search_reward(context: RunContext, pos: Vector2i, adjacent_min
 	var black_coin: int = RunRuleContent.default_search_black_coin(context, pos, adjacent_mines, is_chest)
 	var modifier_black_coin_delta: int = _numeric_modifier_delta(context, &"search_reward", "black_coin")
 	black_coin = maxi(0, black_coin + modifier_black_coin_delta + context.search_reward_bonus)
-	var item_defs: Array[Dictionary] = RunRuleContent.default_search_items(pos, adjacent_mines, is_chest, black_coin)
+	var item_defs: Array[Dictionary] = RunRuleContent.default_search_items(pos, adjacent_mines, is_chest, black_coin, context)
+	var coil_used := not is_chest and bool(context.z1_event_flags.get("coil_pending", false))
+	if coil_used:
+		var extra_items := RunRuleContent.default_search_items(pos, adjacent_mines, false, black_coin + 7919, context)
+		if not extra_items.is_empty():
+			var extra_item: Dictionary = extra_items[0].duplicate(true)
+			extra_item.erase("instance_id")
+			item_defs.append(extra_item)
 	var effects: Array = [
 		_effect_for_request(request, 1, RunAssetEffectHandler.EFFECT_ADD_CURRENCY, "search", pos, {"currency_id": RunAssetLedger.CURRENCY_BLACK, "amount": black_coin}),
 		_effect_for_request(request, 2, RunAssetEffectHandler.EFFECT_ADD_REWARD_ITEMS, "search", pos, {"item_defs": item_defs, "preferred_location": RunAssetLedger.LOCATION_ROOM_FLOOR, "room_pos": pos}),
 	]
 	var applied: Dictionary = RunAssetEffectHandler.apply_effects(context, effects)
+	if coil_used and bool(applied.get("ok", false)):
+		context.z1_event_flags["coil_pending"] = false
 	var item_result: Dictionary = _effect_result(applied, RunAssetEffectHandler.EFFECT_ADD_REWARD_ITEMS)
 	var combined_items: Array = _combine_item_results(item_result)
 	var log_entry: Dictionary = {"type": &"rule_result", "rule_result": &"search_reward", "black_coin": black_coin, "items": combined_items.size()}
@@ -103,7 +113,7 @@ static func apply_combat_reward(context: RunContext, pos: Vector2i, reward_gold:
 		return make_rule_result(false, &"combat_reward", DEFAULT_ACTOR_ID, "no_active_asset_ledger", [], ["No active asset ledger."])
 	var request: Dictionary = _make_rule_request(context, &"combat_reward", "combat", {"pos": pos, "reward_gold": reward_gold})
 	var item_defs: Array[Dictionary] = []
-	var monster_drop := RunRuleContent.monster_trophy(pos, reward_gold)
+	var monster_drop := RunRuleContent.monster_trophy(pos, reward_gold, context)
 	if not monster_drop.is_empty():
 		item_defs.append(monster_drop)
 	var effects: Array = [
@@ -220,6 +230,64 @@ static func apply_event_rule_result(context: RunContext, event_type: StringName,
 		"effect_results": result["effect_results"],
 	}
 	return _finalize_rule(context, request, result, combined_applied)
+
+
+static func apply_material_event_rule_result(context: RunContext, event_type: StringName, rule_result: Dictionary, instance_id: String, base_cost: int, fail_authority = null) -> Dictionary:
+	if context == null or context.asset_ledger == null or event_type not in [&"trap", &"altar"]:
+		return make_rule_result(false, &"event", DEFAULT_ACTOR_ID, "invalid_material_event")
+	if event_type == &"trap" and context.power >= base_cost:
+		return {"ok": false, "completed": false, "reason": "material_not_needed", "blocked_reason": "material_not_needed", "message": "当前战力已达解除门槛。"}
+	var ledger := context.asset_ledger
+	# Material delivery and its event reward belong to one player command. Keep
+	# its checkpoint until the event effects and rule pipeline accept the result.
+	var items_before := ledger.item_instances.duplicate(true)
+	var floor_before := ledger.room_floor_items.duplicate(true)
+	var currencies_before := ledger.currency_balances.duplicate(true)
+	var status_before := ledger.status_effects.duplicate(true)
+	var instance_index_before := ledger.next_instance_index
+	var settlement_start := ledger.settlement_log.size()
+	var transactions_start := context.transaction_log.size() if context.transaction_log != null else 0
+	var events_start := context.run_event_log.size() if context.run_event_log != null else 0
+	var hp_before := context.hp
+	var delivery: Dictionary
+	if event_type == &"trap":
+		delivery = Z1SupplyRules.use_reset_spring(context, instance_id, base_cost)
+	else:
+		delivery = Z1SupplyRules.use_valve_core(context, instance_id, base_cost)
+	if not bool(delivery.get("ok", false)):
+		var reason := String(delivery.get("reason", "material_delivery_blocked"))
+		return {"ok": false, "completed": false, "reason": reason, "blocked_reason": reason, "message": "物资无法交付。"}
+	var rule := rule_result.duplicate(true)
+	rule["material_item"] = delivery.get("item", {})
+	if event_type == &"altar":
+		var hp_cost := int(delivery["hp_cost"])
+		rule["hp_delta"] = -hp_cost
+		rule["hp_cost_reduction"] = delivery["hp_cost_reduction"]
+		rule["message"] = RunTextCatalog.altar_stage_result(int(rule["altar_stage"]), hp_cost, int(rule["black_coin_delta"]), bool(rule["completed"]))
+	else:
+		rule["threshold"] = delivery["threshold"]
+		rule["threshold_reduction"] = delivery["threshold_reduction"]
+	var result := apply_event_rule_result(context, event_type, rule, fail_authority)
+	if not bool(result.get("ok", false)):
+		ledger.item_instances = items_before
+		ledger.room_floor_items = floor_before
+		ledger.currency_balances = currencies_before
+		ledger.status_effects = status_before
+		ledger.next_instance_index = instance_index_before
+		ledger.settlement_log.resize(settlement_start)
+		context.hp = hp_before
+		if context.transaction_log != null:
+			context.transaction_log.entries.resize(transactions_start)
+		if context.run_event_log != null:
+			context.run_event_log.events.resize(events_start)
+		ledger.sync_compat_fields(context)
+		var reason := String(result.get("reason", "material_event_blocked"))
+		return {"ok": false, "completed": false, "reason": reason, "blocked_reason": reason, "message": "处理未完成，已保留交付物资。"}
+	if context.transaction_log != null:
+		result["produced_transactions"] = context.transaction_log.get_entries_since(transactions_start)
+	if context.run_event_log != null:
+		result["produced_events"] = context.run_event_log.get_events_since(events_start)
+	return result
 
 
 static func execute_trader_sell_best(context: RunContext, confirm_high_value: bool = false) -> Dictionary:
@@ -377,6 +445,8 @@ static func drop_inventory_item(context: RunContext, instance_id: String = "") -
 static func use_consumable(context: RunContext, instance_id: String = "") -> Dictionary:
 	if context == null or context.asset_ledger == null:
 		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, "no_active_asset_ledger", [], ["No active asset ledger."])
+	if not context.run_active or context.failed or context.extracted or context.abandoned:
+		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, "no_active_run")
 	var target_id: String = instance_id
 	if target_id == "":
 		for item in context.asset_ledger.get_items_by_location(RunAssetLedger.LOCATION_INVENTORY):
@@ -390,6 +460,9 @@ static func use_consumable(context: RunContext, instance_id: String = "") -> Dic
 		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, "item_not_in_inventory", [], ["Item is not in backpack."])
 	if not bool(item_before.get("can_consume", false)):
 		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, "item_not_consumable", [], ["Item is not consumable."])
+	var consumption_block := Z1SupplyRules.consumption_block(context, item_before)
+	if not consumption_block.is_empty():
+		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, consumption_block)
 	var request: Dictionary = _make_rule_request(context, &"use_consumable", "consumable", {"instance_id": target_id, "item": item_before})
 	var effects: Array = [_effect_for_request(request, 1, RunAssetEffectHandler.EFFECT_CONSUME_INVENTORY_ITEM, "consumable", context.get_current_pos(), {"instance_id": target_id})]
 	var applied: Dictionary = RunAssetEffectHandler.apply_effects(context, effects)
@@ -549,7 +622,7 @@ static func _apply_consumable_effect(context: RunContext, item: Dictionary, run_
 	var effect_kind := String(item.get("effect_kind", ""))
 	var amount := maxi(0, int(item.get("effect_amount", 0)))
 	match effect_kind:
-		"heal":
+		"heal", "heal_below_half":
 			run_effects.append(RunEffectApplierScript.effect_hp_delta(amount, "consumable_heal"))
 			return RunEffectApplierScript.apply_effects(context, run_effects)
 		"pressure_reduce":
@@ -563,8 +636,13 @@ static func _apply_consumable_effect(context: RunContext, item: Dictionary, run_
 			var revealed := _reveal_nearby_for_consumable(context)
 			context.record_event(&"consumable_scan", String(context.active_command.get("command_id", "")), DEFAULT_ACTOR_ID, "consumable", {"revealed": revealed, "item_id": item.get("item_id", "")})
 			return {"ok": true, "status": &"scan_applied", "revealed": revealed, "effect_results": []}
-		"mine_immunity":
+		"scan_two_away":
+			return Z1SupplyRules.apply_range_powder(context)
+		"mine_immunity", "mine_immunity_pressure":
 			context.mine_immunity += maxi(1, amount)
+			if effect_kind == "mine_immunity_pressure":
+				run_effects.append(RunEffectApplierScript.effect_protocol_pressure_delta(maxi(0, int(item.get("pressure_amount", 0))), "consumable_hard_shell"))
+				RunEffectApplierScript.apply_effects(context, run_effects)
 			context.record_event(&"consumable_mine_immunity", String(context.active_command.get("command_id", "")), DEFAULT_ACTOR_ID, "consumable", {"mine_immunity": context.mine_immunity, "item_id": item.get("item_id", "")})
 			return {"ok": true, "status": &"mine_immunity_applied", "mine_immunity": context.mine_immunity, "effect_results": []}
 		"salvage_capacity":
@@ -602,7 +680,7 @@ static func _consumable_message(item: Dictionary, effect_result: Dictionary) -> 
 	var name := String(item.get("display_name", item.get("item_id", "Consumable")))
 	var effect_kind := String(item.get("effect_kind", ""))
 	match effect_kind:
-		"heal":
+		"heal", "heal_below_half":
 			return "Used %s: HP restored." % name
 		"pressure_reduce":
 			return "Used %s: protocol pressure reduced." % name
@@ -610,7 +688,9 @@ static func _consumable_message(item: Dictionary, effect_result: Dictionary) -> 
 			return "Used %s: HP restored and protocol pressure reduced." % name
 		"scan":
 			return "Used %s: nearby rooms scanned." % name
-		"mine_immunity":
+		"scan_two_away":
+			return "使用%s，已揭示两格外的房间，邻雷数为%d。" % [name, int(effect_result.get("adjacent_mines", 0))]
+		"mine_immunity", "mine_immunity_pressure":
 			return "Used %s: mine immunity charge ready." % name
 		"salvage_capacity":
 			return "Used %s: failure salvage capacity increased." % name

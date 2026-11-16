@@ -166,6 +166,7 @@ func _check_meta_transaction_production_chain(run_scene: Node, app_shell: Contro
 	adapter.data["task_states"] = task_states
 	_check(adapter.save(), "Production LongTerm transaction seed save failed")
 	controller.bind_meta_progress_adapter(adapter)
+	_check(bool(run_scene.call("set_ui_scale_factor", 1.5)), "Could not scale up before the production claim")
 	app_shell.call("apply_snapshot", run_scene.call("_shell_snapshot"))
 	long_term.call("_apply_module_immediately", &"task_archive")
 	long_term.call("show_secondary", &"task")
@@ -191,6 +192,9 @@ func _check_meta_transaction_production_chain(run_scene: Node, app_shell: Contro
 	_check(int(after.get("gold", -1)) == int(before.get("gold", 0)) + int(reward.get("gold", 0)), "Production claim did not grant the exact task gold once")
 	_check((after.get("claimed_reward_ids", []) as Array).has("task:%s" % task_id), "Production claim did not persist its claimed identity")
 	_check((long_term.get("content_record_state_label") as Label).text.contains("奖励已领取"), "Production snapshot refresh overwrote claim feedback")
+	var facts := long_term.get("content_record_facts_label") as Label
+	_check(facts.text.contains("+%d 资历经验" % int(reward.get("exp", 0))), "Production claim did not show the committed experience gain")
+	_check(bool(facts.get_meta("runtime_text_fit", {}).get("fits", false)), "Production claim feedback overflowed at 150%")
 	_check(bool(delivery.get("accepted", false)) and str(delivery.get("request_id", "")) == str(result.get("request_id", "")), "Production claim delivery trace lost the matching result")
 	_check(int(delivery_snapshot.get("current_snapshot_revision", -1)) == revision_before + 1, "Production claim did not refresh one authoritative snapshot")
 	_check(int(delivery.get("snapshot_revision", -1)) == int(delivery_snapshot.get("current_snapshot_revision", -2)) and int(delivery.get("page_snapshot_revision", -1)) == int(delivery_snapshot.get("current_snapshot_revision", -2)), "Production claim result was delivered before its authoritative snapshot")

@@ -8,6 +8,7 @@ const CodexLiteModelScript := preload("res://scripts/ui/codex_lite/codex_lite_mo
 const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
 const M7TalentCatalogScript := preload("res://scripts/core/progression/m7_talent_catalog.gd")
 const ResultPresentationModelScript := preload("res://scripts/ui/result/result_presentation_model.gd")
+const ItemRarityDescriptorScript := preload("res://scripts/presentation/item_rarity_descriptor.gd")
 
 
 static func build(selected_module_id: StringName = &"task_archive", source: StringName = &"long_term_shell") -> Dictionary:
@@ -175,11 +176,7 @@ static func _profile_runtime_panel(meta_summary: Dictionary = {}, latest_result:
 	var history_records := _array(meta_summary.get("history_records", []))
 	var titles := _array(meta_summary.get("titles", []))
 	var current_title := str(titles.back()) if not titles.is_empty() else "回收员"
-	var next_level_exp := -1
-	for definition in M7ContentCatalogScript.profile_levels():
-		if int(definition.get("level", 1)) > level:
-			next_level_exp = int(definition.get("exp", 0))
-			break
+	var next_level_exp := M7ContentCatalogScript.profile_exp_for_level(level + 1)
 	return {
 		"title": "角色档案",
 		"profile_level": level,
@@ -393,7 +390,7 @@ static func _talent_cards(meta: Dictionary) -> Array[Dictionary]:
 			prerequisite_names.append(str(names_by_id.get(prerequisite_id, prerequisite_id)))
 		var unlocked := bool(node.get("unlocked", false))
 		var available := bool(node.get("available", false))
-		var state := "已生效" if unlocked else ("可解锁" if available else "暂不可用")
+		var state := "已解锁" if unlocked else ("可解锁" if available else "未解锁")
 		var prerequisite_text := "无" if prerequisite_names.is_empty() else "、".join(prerequisite_names)
 		var card := {
 			"id": talent_id,
@@ -504,7 +501,7 @@ static func _talent_tree_contract(cards_value: Variant, meta: Dictionary) -> Dic
 		"branch_count": branch_ids.size(),
 		"root_ids": root_ids,
 		"points_available": int(talent_summary.get("points_available", meta.get("talent_points", 0))),
-		"budget_total": int(talent_summary.get("budget_total", maxi(0, int(meta.get("profile_level", 1)) - 1))),
+		"budget_total": int(talent_summary.get("budget_total", M7TalentCatalogScript.point_budget_for_level(int(meta.get("profile_level", 1))))),
 	}
 
 
@@ -520,15 +517,35 @@ static func _codex_group_cards(meta: Dictionary, group_id: StringName) -> Array[
 			unknown_title = "未发现怪物样本"
 		elif group_id == &"collectible":
 			unknown_title = "未发现藏品"
-		cards.append({
+		var subject := M7ContentCatalogScript.codex_subject(entry_id) if known else {}
+		var title := unknown_title
+		if known:
+			title = String(subject["display_name"]) if subject.has("display_name") else _codex_entry_title(entry_id)
+		var facts: Array[String] = ["发现状态：%s" % ("已永久登记" if known else "尚未登记")]
+		if known and entry_id.begins_with("item:"):
+			var item := M7ContentCatalogScript.item_definition(entry_id.trim_prefix("item:"))
+			var quality := ItemRarityDescriptorScript.describe_item(item)
+			facts.append("品质 %s" % quality["label"])
+			var level := int(item.get("collectible_level", 0))
+			if level > 0:
+				facts.append("收藏等级 %d" % level)
+		var description := "在探索、回收或研究中首次接触后登记。"
+		if known:
+			description = "该条目已永久登记。"
+			if entry_id.begins_with("item:"):
+				description += "出售或消耗对应物品不会抹除记录。"
+		var card := {
 			"id": entry_id,
-			"title": _codex_entry_title(entry_id) if known else unknown_title,
+			"title": title,
 			"state": "已发现" if known else "未发现",
-			"description": "该条目已永久登记，出售或消耗对应物品不会抹除记录。" if known else "在探索、回收或研究中首次接触后登记。",
-			"facts": ["发现状态：%s" % ("已永久登记" if known else "尚未登记")],
+			"description": description,
+			"facts": facts,
 			"known": known,
 			"sort_order": 0 if known else 1,
-		})
+		}
+		if subject.has("asset_id"):
+			card["art25_asset_id"] = subject["asset_id"]
+		cards.append(card)
 	cards.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.get("sort_order", 1)) < int(b.get("sort_order", 1)))
 	return cards
 
@@ -628,13 +645,11 @@ static func _qualification_cards(meta: Dictionary) -> Array[Dictionary]:
 	var level := maxi(1, int(meta.get("profile_level", 1)))
 	var exp_value := maxi(0, int(meta.get("profile_exp", 0)))
 	var current_title := "回收员"
-	var next_threshold := -1
+	var next_threshold := M7ContentCatalogScript.profile_exp_for_level(level + 1)
 	for definition in M7ContentCatalogScript.profile_levels():
 		var definition_level := int(definition.get("level", 1))
 		if definition_level <= level:
 			current_title = str(definition.get("title", current_title))
-		elif next_threshold < 0:
-			next_threshold = int(definition.get("exp", 0))
 	return [{
 		"id": "profile_current_qualification",
 		"title": "Lv.%d · %s" % [level, current_title],

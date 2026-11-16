@@ -712,6 +712,10 @@ func _teleport_and_focus(run_scene, room_type: StringName, local_pos: Vector2) -
 	if room_view == null or player == null:
 		_fail("production room/player view missing for %s capture" % String(room_type))
 		return false
+	if room_type == &"Event":
+		var snapshot: Dictionary = room_view.build_read_only_snapshot()
+		var room: Dictionary = snapshot.get("world_projection", {}).get("event_room", {})
+		local_pos = Vector2(room.get("interaction_pos", local_pos))
 	player.set_local_position(local_pos)
 	room_view.advance(0.0, player.get_local_position(), {})
 	return await _await_layout_stable(run_scene, "%s proximity focus" % String(room_type))
@@ -775,7 +779,7 @@ func _configure_full_merchant(run_scene) -> bool:
 	var event_options = run_scene.get("event_options_box") as Control
 	var modal_buttons: Array[Button] = []
 	if event_options != null:
-		for child in event_options.get_children():
+		for child in event_options.find_children("*", "Button", true, false):
 			if child is Button:
 				modal_buttons.append(child as Button)
 	if modal_buttons.size() != 5:
@@ -797,7 +801,7 @@ func _merchant_layout_is_safe(run_scene) -> bool:
 	var option_box := run_scene.get("event_options_box") as Control
 	var buttons: Array[Button] = []
 	if option_box != null:
-		for child in option_box.get_children():
+		for child in option_box.find_children("*", "Button", true, false):
 			if child is Button:
 				buttons.append(child as Button)
 	if panel == null or action_bar == null or stable_panel == null or stable_grid == null or option_box == null or buttons.size() != 5:

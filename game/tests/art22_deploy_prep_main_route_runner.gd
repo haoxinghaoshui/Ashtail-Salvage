@@ -99,7 +99,7 @@ func _run() -> void:
 		"Actual Deploy route does not expose the tutorial map plus all three standard map scales"
 	)
 	var map_view := deploy_page.get("map_split_view") as Control
-	_check(map_view != null and int((map_view.call("projection_snapshot") as Dictionary).get("difficulty_count", 0)) == 2, "Actual default scale does not expose its two difficulties")
+	_check(map_view != null and int((map_view.call("projection_snapshot") as Dictionary).get("difficulty_count", 0)) == 1, "Actual default tutorial scale must expose one difficulty")
 	if map_view != null:
 		var scale_13 := (map_view.get("scale_buttons") as Dictionary).get(&"13x13") as Button
 		_check(scale_13 != null, "Actual route is missing the 13x13 scale")

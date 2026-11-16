@@ -18,6 +18,11 @@ static func project(config: Dictionary) -> Dictionary:
 	var selected_definition := M7ContentCatalogScript.map_definition_exact(selected_map_id)
 	var selected_scale := scale_for_map(selected_map_id)
 	var selected_scale_id := StringName(selected_scale.get("scale_id", &""))
+	var meta: Dictionary = config.get("meta_progress_summary", {})
+	var lock_reasons := {}
+	for raw_map in _array_copy(meta.get("map_catalog", [])):
+		if raw_map is Dictionary:
+			lock_reasons[str(raw_map.get("id", ""))] = str(raw_map.get("lock_reason", ""))
 	var known_unlocked_count := 0
 	for raw_map_id in unlocked_map_ids:
 		if not M7ContentCatalogScript.map_definition_exact(str(raw_map_id)).is_empty():
@@ -39,6 +44,7 @@ static func project(config: Dictionary) -> Dictionary:
 			var is_selected := map_id == selected_map_id
 			if is_unlocked:
 				unlocked_count += 1
+			map_projection["lock_reason"] = "" if is_unlocked else str(lock_reasons.get(map_id, ""))
 			var reason_code := &"ok"
 			if active_run_locked:
 				reason_code = &"active_run_locked"
@@ -129,7 +135,9 @@ static func project_map(map_id: String, unlocked_map_ids: Array = []) -> Diction
 		"visible_exit_count": int(definition.get("visible_exit_count", 0)),
 		"hidden_exit_count": int(definition.get("hidden_exit_count", 0)),
 		"visible_exit_position_known": bool(definition.get("visible_exit_position_known", false)),
-		"success_exp": int(definition.get("success_exp", 0)),
+		"experience_percent": int(definition.get("experience_percent", 0)),
+		"experience_cap": int(definition.get("experience_cap", 0)),
+		"min_profile_level": int(definition.get("min_profile_level", 0)),
 		"mode": StringName(definition.get("mode", &"standard")),
 		"map_mode": StringName(definition.get("map_mode", &"classic_minesweeper")),
 		"tutorial_map": bool(definition.get("tutorial_map", false)),

@@ -49,7 +49,7 @@ func _run() -> void:
 					panel.call("_toggle_salvage_item", "art24-result-probe-item-%d" % index, true)
 			await _frames(1)
 			var focus_targets: Array[Button] = []
-			for candidate in [panel.return_deploy_button, panel.return_main_button, panel.retry_save_button, panel.discard_unsaved_button]:
+			for candidate in [panel.return_deploy_button, panel.get_node_or_null("ResultActions/ResultCareerFollowUpButton"), panel.return_main_button, panel.retry_save_button, panel.discard_unsaved_button]:
 				if candidate != null and candidate.is_visible_in_tree() and not candidate.disabled:
 					focus_targets.append(candidate)
 			for focus_target in focus_targets:
@@ -146,6 +146,22 @@ func _assert_state(panel: ResultPanel, state_id: StringName, viewport_size: Vect
 	var metrics := panel.get_node("ResultMetricsRow") as Control
 	var actions := panel.get_node("ResultActions") as Control
 	var action_art := panel.get_node("ResultActionStripArt") as Control
+	var career_action := actions.get_node_or_null("ResultCareerFollowUpButton") as Button
+	if result_state == &"success":
+		if career_action == null or not career_action.is_visible_in_tree() or career_action.disabled:
+			failures.append("%s first return shortcut is missing" % state_id)
+		else:
+			_assert_inside(career_action, actions.get_global_rect(), state_id, failures)
+		var map_status := panel.get_node_or_null("ResultCareerMapStatus") as Label
+		if panel.persistence_label.get_visible_line_count() != 1 or not panel.persistence_label.text.contains("+14"):
+			failures.append("%s earned XP does not fit its visible line" % state_id)
+		if map_status == null or not map_status.is_visible_in_tree() or map_status.get_visible_line_count() != 1 or not map_status.text.contains("7×7 普通"):
+			failures.append("%s next map does not fit its visible line" % state_id)
+		else:
+			_assert_vertical_order(panel.persistence_label, map_status, state_id, failures)
+			_assert_vertical_order(map_status, actions, state_id, failures)
+	elif career_action != null and career_action.is_visible_in_tree():
+		failures.append("%s career shortcut exposed without a qualifying commit" % state_id)
 	if metrics.visible == pending or actions.visible == pending or action_art.visible:
 		failures.append("%s result/salvage visibility hierarchy is inverted" % state_id)
 	if pending:
@@ -228,10 +244,13 @@ func _assert_state(panel: ResultPanel, state_id: StringName, viewport_size: Vect
 				failures.append("%s empty final retained an empty item well" % state_id)
 		else:
 			var item_marker := panel.find_child("ResultItemRarityMarker", true, false) as ColorRect
+			var item_icon := panel.find_child("ResultItemIcon", true, false) as TextureRect
 			var level_label := panel.find_child("ResultItemCollectibleLevel", true, false) as Label
 			var descriptor: Dictionary = ItemRarityDescriptorScript.describe(&"tier_3")
 			if item_marker == null or not item_marker.color.is_equal_approx(Color(descriptor.get("color"))) or item_marker.mouse_filter != Control.MOUSE_FILTER_IGNORE:
 				failures.append("%s result item rarity marker drifted or intercepted input" % state_id)
+			if item_icon == null or item_icon.texture == null or item_icon.texture_filter != CanvasItem.TEXTURE_FILTER_NEAREST:
+				failures.append("%s result item art was unresolved or lost pixel filtering" % state_id)
 			if level_label == null or level_label.text != "收藏等级 3":
 				failures.append("%s result item omitted its collectible level" % state_id)
 		_assert_vertical_order(summary, metrics, state_id, failures)
@@ -315,6 +334,15 @@ func _snapshot_for(state_id: StringName) -> Dictionary:
 		"rarity": &"tier_3",
 		"collectible_level": 3,
 	}
+	var career_commit := {
+		"status": &"committed",
+		"m7_progression_delta": {"exp_gained": 14, "profile_level_before": 1, "profile_level_after": 1},
+		"summary": {
+			"profile_exp": 14,
+			"achievement_states": {"achievement_first_return": {"status": "claimable"}},
+			"map_catalog": [{"display_name": "7×7 普通", "unlocked": false, "lock_reason": "达到 Lv.3", "min_profile_level": 3}],
+		},
+	}
 	match state_id:
 		&"success":
 			var warehouse_items: Array[Dictionary] = []
@@ -328,7 +356,7 @@ func _snapshot_for(state_id: StringName) -> Dictionary:
 				"settlement": {"outcome": "success", "black_coin_converted": 36, "gold_coin_gained": 36, "warehouse_items": warehouse_items, "salvaged_items": [], "lost_item_count": 0, "cleared_consumable_count": 1, "finalized": true},
 				"event_log": technical_events,
 				"transaction_log": technical_transactions,
-				"meta_progress_commit": {"status": &"committed"},
+				"meta_progress_commit": career_commit,
 			}
 		&"success_empty":
 			return {
@@ -336,7 +364,7 @@ func _snapshot_for(state_id: StringName) -> Dictionary:
 				"settlement": {"outcome": "success", "black_coin_converted": 0, "gold_coin_gained": 0, "warehouse_items": [], "room_floor_lost_items": [], "cleared_consumables": [], "salvaged_items": [], "lost_items": [], "finalized": true},
 				"event_log": technical_events,
 				"transaction_log": technical_transactions,
-				"meta_progress_commit": {"status": &"committed"},
+				"meta_progress_commit": career_commit,
 			}
 		&"failure_pending", &"failure_selected", &"failure_capacity_blocked":
 			var pool: Array[Dictionary] = []

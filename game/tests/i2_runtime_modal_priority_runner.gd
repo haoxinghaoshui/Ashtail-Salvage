@@ -488,7 +488,8 @@ func _assert_event_modal_priority(run_scene: Node, bus: Variant, stack: Variant,
 	context.set("current_pos", event_pos)
 	context.get("intel_map").reveal_cell(event_pos, context.get("truth_map"))
 	bus.get("room_resolver").enter_room(context)
-	player.call("set_local_position", WorldProjectionScript.EVENT_LOCAL_POS)
+	var event_room: Dictionary = WorldProjectionScript.build(context.call("get_status_snapshot")).get("event_room", {})
+	player.call("set_local_position", event_room.get("interaction_pos", WorldProjectionScript.EVENT_LOCAL_POS))
 	run_scene.call("_apply_full_view_models")
 	base_focus.grab_focus()
 	await process_frame
@@ -805,9 +806,13 @@ func _assert_rejected_inventory_action_focus(
 	await process_frame
 	var domain_before := _run_domain_state_signature(run_scene)
 	var sequence_before := int(bus.get("command_sequence"))
+	var requests: Array[Dictionary] = []
+	var observe_request := func(_name: StringName, request: Dictionary) -> void: requests.append(request)
+	bus.command_requested.connect(observe_request)
 	inventory_panel.emit_signal(request_signal, requested_instance_id)
+	bus.command_requested.disconnect(observe_request)
 	await _frames(5)
-	_require(int(bus.get("command_sequence")) == sequence_before + 1, "rejected inventory %s did not enter CommandBus exactly once" % context_label)
+	_require(requests.size() == 1 and int(bus.get("command_sequence")) == sequence_before, "rejected inventory %s must publish one request and roll back its command sequence" % context_label)
 	var result: Dictionary = run_scene.get("last_command_result")
 	_require(not bool(result.get("ok", true)), "inventory %s rejection unexpectedly succeeded" % context_label)
 	_require(StringName(result.get("command_name", &"")) == expected_command, "inventory %s rejection used the wrong production command" % context_label)
@@ -842,11 +847,15 @@ func _assert_rejected_flag_focus(run_scene: Node, bus: Variant, map_panel: Contr
 	# Remove that authority only for the synchronous submission, then restore the
 	# exact object before yielding so no frame can observe the fixture gap.
 	context.set("intel_map", null)
+	var requests: Array[Dictionary] = []
+	var observe_request := func(_name: StringName, request: Dictionary) -> void: requests.append(request)
+	bus.command_requested.connect(observe_request)
 	map_panel.emit_signal("cell_action_requested", rejected_marker)
+	bus.command_requested.disconnect(observe_request)
 	context.set("intel_map", intel_map)
 	await _frames(5)
 	_require(context.get("intel_map") == intel_map, "rejected flag fixture did not restore IntelMap authority")
-	_require(int(bus.get("command_sequence")) == sequence_before + 1, "rejected flag did not enter CommandBus exactly once")
+	_require(requests.size() == 1 and int(bus.get("command_sequence")) == sequence_before, "rejected flag must publish one request and roll back its command sequence")
 	var result: Dictionary = run_scene.get("last_command_result")
 	_require(not bool(result.get("ok", true)), "flag not-ready rejection unexpectedly succeeded")
 	_require(StringName(result.get("command_name", &"")) == &"toggle_flag_cell", "flag rejection used the wrong production command")

@@ -47,6 +47,8 @@ static func build(snapshot: Dictionary, minimap_view_model: MiniMapViewModel, la
 		"backpack_items": RunUIViewModel.aggregate_item_projection(_array_from(snapshot, "inventory_items")),
 		"backpack_used": snapshot.get("backpack_used", 0),
 		"backpack_capacity": snapshot.get("backpack_capacity", 0),
+		"equipment_used": snapshot.get("equipment_used", 0),
+		"equipment_capacity": snapshot.get("equipment_capacity", 100),
 		"resource_summary": _resource_summary(snapshot),
 		"mine_risk": mine_risk_descriptor(adjacent_mines),
 		# Command results are transient presentation events. Rehydrating the last
@@ -546,7 +548,7 @@ static func _action_buttons(snapshot: Dictionary, search_data: Dictionary, event
 		_action(&"map", "扫描图", run_active, "打开大地图扫描视图。"),
 		_action(&"combat", "攻击", run_active and room_type == &"Monster", "当前房间存在可攻击目标时可用。"),
 		_action(&"extract", "撤离", run_active and (room_type == &"Exit" or phase == &"confirm_extract" or combat_flee_available), "靠近可通行的门后使用 %s 或点击此处，确认逃离战斗。" % extract_hint if combat_flee_available else "在撤离点请求或确认撤离；也可使用 %s 通过搜索/交互进入确认。" % interact_hint),
-		_action(&"pause", "暂停", run_active, "打开暂停和设置入口。"),
+		_action(&"pause", "菜单", run_active, "打开菜单和设置入口。"),
 	]
 	return _context_order_actions(actions)
 
@@ -865,7 +867,9 @@ static func _search_summary(search_data: Dictionary, search_state: String) -> St
 static func _backpack_summary(snapshot: Dictionary) -> String:
 	var inventory_items: Array = _array_from(snapshot, "inventory_items")
 	var equipped_items: Array = _array_from(snapshot, "equipped_items")
-	return "作业包：%s/%s | 背包物 %s | 穿戴 %s" % [
+	return "共享：%s/%s | 战利品：%s/%s | 背包物 %s | 穿戴 %s" % [
+		snapshot.get("equipment_used", 0),
+		snapshot.get("equipment_capacity", 100),
 		snapshot.get("backpack_used", 0),
 		snapshot.get("backpack_capacity", 0),
 		inventory_items.size(),
@@ -949,7 +953,7 @@ static func _scanner_detail(minimap_view_model: MiniMapViewModel, run_map_snapsh
 
 
 static func _action_hint(actions: Array[Dictionary]) -> String:
-	var fallback_hint := "移动 %s/%s/%s/%s；交互 %s；攻击 %s；地图 %s；标记 %s；暂停 %s。" % [
+	var fallback_hint := "移动 %s/%s/%s/%s；交互 %s；攻击 %s；地图 %s；标记 %s；菜单 %s。" % [
 		SemanticActionHintScript.current_display_label(&"move_up"),
 		SemanticActionHintScript.current_display_label(&"move_left"),
 		SemanticActionHintScript.current_display_label(&"move_down"),

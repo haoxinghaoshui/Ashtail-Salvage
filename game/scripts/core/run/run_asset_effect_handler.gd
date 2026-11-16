@@ -57,8 +57,13 @@ static func apply_effect(context: RunContext, effect: Dictionary) -> Dictionary:
 		EFFECT_SPEND_CURRENCY:
 			result = _with_effect_type(context.asset_ledger.spend_currency(StringName(payload.get("currency_id", &"")), int(payload.get("amount", 0)), source), effect_type)
 		EFFECT_ADD_REWARD_ITEMS:
-			var item_result: Dictionary = context.asset_ledger.add_reward_items(_array_from_variant(payload.get("item_defs", [])), StringName(payload.get("preferred_location", RunAssetLedger.LOCATION_INVENTORY)), payload.get("room_pos", context.get_current_pos()), source)
-			item_result["ok"] = true
+			var action_id := ""
+			for candidate in [effect.get("action_id", ""), context.active_command.get("action_id", ""), effect.get("command_id", ""), context.active_command.get("command_id", "")]:
+				if not String(candidate).is_empty():
+					action_id = String(candidate)
+					break
+			var origin := {"origin_run_id": String(context.run_id), "origin_action_id": action_id}
+			var item_result: Dictionary = context.asset_ledger.add_reward_items(_array_from_variant(payload.get("item_defs", [])), StringName(payload.get("preferred_location", RunAssetLedger.LOCATION_INVENTORY)), payload.get("room_pos", context.get_current_pos()), source, origin)
 			item_result["effect_type"] = effect_type
 			result = item_result
 		EFFECT_ADD_STATUS_EFFECT:
@@ -142,6 +147,7 @@ static func _asset_summary(context: RunContext) -> Dictionary:
 		"black_coin": context.asset_ledger.get_currency(RunAssetLedger.CURRENCY_BLACK),
 		"gold_coin": context.asset_ledger.get_currency(RunAssetLedger.CURRENCY_GOLD),
 		"backpack_used": context.asset_ledger.get_backpack_used(),
+		"equipment_used": context.asset_ledger.get_equipment_used(),
 		"inventory_count": context.asset_ledger.get_items_by_location(RunAssetLedger.LOCATION_INVENTORY).size(),
 		"equipped_count": context.asset_ledger.get_items_by_location(RunAssetLedger.LOCATION_EQUIPPED).size(),
 		"room_floor_item_count": context.asset_ledger.get_room_floor_items(context.get_current_pos()).size(),
@@ -168,6 +174,8 @@ static func _currency_delta_for_effect(effect_type: StringName, payload: Diction
 
 static func _item_moves_for_effect(effect_type: StringName, result: Dictionary) -> Array:
 	var moves: Array = []
+	if not bool(result.get("ok", true)):
+		return moves
 	match effect_type:
 		EFFECT_ADD_REWARD_ITEMS:
 			for location_key in ["inventory_items", "equipped_items", "ground_items"]:

@@ -52,7 +52,7 @@ func _test_projection_and_draft() -> void:
 	var purchase := _row_by_id(model, &"m7_shop_con_ration")
 	_expect(StringName(purchase.get("quantity_mode", &"")) == &"purchase", "shop card uses the wrong quantity meaning")
 	_expect(int(purchase.get("purchase_quantity", 0)) == 3, "purchase stepper draft did not persist")
-	_expect(int(purchase.get("total_price", 0)) == 36, "purchase draft total is wrong")
+	_expect(int(purchase.get("total_price", 0)) == 18, "purchase draft total is wrong")
 	var action_result := DeployConfigScript.apply_card_action(purchase_config, DeployTabModelScript.TAB_CLAIM, &"m7_shop_con_ration")
 	_expect(int((action_result.get("meta_action", {}) as Dictionary).get("quantity", 0)) == 3, "purchase confirmation lost its quantity")
 

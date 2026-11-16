@@ -8,6 +8,17 @@ const RunStateMachineScript := preload("res://scripts/core/run/run_state_machine
 const RunBalanceCatalogScript := preload("res://scripts/core/run/run_balance_catalog.gd")
 const RunEffectApplierScript := preload("res://scripts/core/run/run_effect_applier.gd")
 const RunTextCatalogScript := preload("res://scripts/core/run/run_text_catalog.gd")
+const Z1EventRuntimeScript := preload("res://scripts/core/run/z1_event_runtime.gd")
+const StateSnapshotScript := preload("res://scripts/core/run/run_state_snapshot.gd")
+
+
+class EntryFailure extends RefCounted:
+	var reason: String = ""
+
+	func fail_run(next_reason: String) -> Dictionary:
+		if reason.is_empty():
+			reason = next_reason
+		return {"ok": true, "deferred": true, "reason": reason}
 
 var runtime_controller
 
@@ -25,6 +36,13 @@ func enter_room(context: RunContext) -> Dictionary:
 		return {"ok": false, "message": "No active run."}
 
 	var pos := context.get_current_pos()
+	var before := StateSnapshotScript.capture_context(context)
+	var entry_failure := EntryFailure.new()
+	var difficulty := StringName(context.run_start_config.get("difficulty", context.run_start_config.get("selected_difficulty", &"standard")))
+	if context.mode == &"tutorial":
+		difficulty = &"tutorial"
+	var entry_protocol := context.protocol_level
+	Z1EventRuntimeScript.record_entry(context, pos)
 	if context.reveal_on_move:
 		context.intel_map.reveal_cell(pos, context.truth_map)
 	context.truth_map.mark_explored(pos)
@@ -41,18 +59,29 @@ func enter_room(context: RunContext) -> Dictionary:
 	_record_room_event(context, RunEventLog.EVENT_ROOM_ENTERED, {"position": pos, "room_type": context.current_room_type, "encounter_type": context.encounter_type})
 
 	var first_explore := not context.explored_cells.has(context.cell_key(pos))
+	var exploration_cost := ProtocolService.exploration_cost(difficulty, entry_protocol, first_explore)
 	if first_explore:
-		RunEffectApplierScript.apply_effects(context, [
-			RunEffectApplierScript.effect_room_mark_explored(pos),
-			RunEffectApplierScript.effect_protocol_pressure_delta(RunBalanceCatalogScript.EXPLORE_PRESSURE_DELTA, "room_explore"),
-		], runtime_controller)
+		var entry_effects: Array = [RunEffectApplierScript.effect_room_mark_explored(pos)]
+		if exploration_cost > 0:
+			entry_effects.append(RunEffectApplierScript.effect(RunEffectApplierScript.EFFECT_HP_DELTA, "room_exploration", {"amount": -exploration_cost, "damage_type": "exploration", "reason": "room_exploration"}))
+		entry_effects.append(RunEffectApplierScript.effect_protocol_pressure_delta(RunBalanceCatalogScript.EXPLORE_PRESSURE_DELTA, "room_explore"))
+		var applied := RunEffectApplierScript.apply_effects(context, entry_effects, entry_failure)
+		if not bool(applied.ok):
+			StateSnapshotScript.install_context(context, before)
+			return applied
 
 	if context.current_room_type == &"Mine":
-		var mine_result := _enter_mine(context, pos)
+		var mine_result := _enter_mine(context, pos, entry_failure)
+		if not bool(mine_result.ok):
+			StateSnapshotScript.install_context(context, before)
+			return mine_result
 		var mine_entry: Dictionary = mine_result.get("room_entry_result", {})
 		mine_entry["first_explore"] = first_explore
+		mine_entry["exploration_cost"] = exploration_cost
 		mine_result["room_entry_result"] = mine_entry
 		_maybe_trigger_tutorial(context, pos)
+		_finish_entry(context, entry_failure)
+		mine_entry["fatal"] = context.failed or context.hp <= 0 or not entry_failure.reason.is_empty()
 		return mine_result
 
 	if context.current_room_type == &"Exit":
@@ -61,7 +90,7 @@ func enter_room(context: RunContext) -> Dictionary:
 	elif context.current_room_type == &"Monster" and not context.truth_map.is_cleared(pos):
 		context.enemy_state = CombatState.build_enemy_state(context, pos, context.current_adjacent_mines)
 		context.last_message = RunTextCatalogScript.monster_available()
-	elif context.current_room_type == &"Event" and not context.interacted_cells.has(context.cell_key(pos)):
+	elif context.current_room_type == &"Event" and (not context.interacted_cells.has(context.cell_key(pos)) or EventService.get_event_type(context, pos) == &"z1_event_e25"):
 		context.event_state = EventService.get_event_state(context, pos)
 		context.last_message = RunTextCatalogScript.event_available(context.event_state.get("event_type", &"event"))
 	elif context.current_room_type == &"Chest" and not context.searched_cells.has(context.cell_key(pos)):
@@ -69,6 +98,7 @@ func enter_room(context: RunContext) -> Dictionary:
 	else:
 		context.last_message = RunTextCatalogScript.entered_room(context.current_room_type, context.current_adjacent_mines)
 	_maybe_trigger_tutorial(context, pos)
+	_finish_entry(context, entry_failure)
 	return {
 		"ok": true,
 		"message": context.last_message,
@@ -76,6 +106,7 @@ func enter_room(context: RunContext) -> Dictionary:
 			"room_type": context.current_room_type,
 			"position": pos,
 			"first_explore": first_explore,
+			"exploration_cost": exploration_cost,
 		},
 	}
 
@@ -125,10 +156,7 @@ func interact_current_room(context: RunContext) -> Dictionary:
 			return search_current_room(context)
 		&"Event":
 			var result := EventService.execute_default(context, pos, runtime_controller)
-			if bool(result.get("completed", false)):
-				context.truth_map.mark_cleared(pos)
-				context.intel_map.refresh_revealed_cell(pos, context.truth_map)
-			return result
+			return _finish_event_result(context, pos, result)
 		&"Monster":
 			context.last_message = "Monster requires fight command."
 		&"Exit":
@@ -140,7 +168,7 @@ func interact_current_room(context: RunContext) -> Dictionary:
 	return {"ok": true, "message": context.last_message}
 
 
-func select_event_option(context: RunContext, option_id: StringName) -> Dictionary:
+func select_event_option(context: RunContext, option_id: StringName, payload: Dictionary = {}) -> Dictionary:
 	if context == null or not context.run_active:
 		return {"ok": false, "reason": "run_not_active", "blocked_reason": "run_not_active", "message": "Run is not active."}
 	var pos := context.get_current_pos()
@@ -148,13 +176,22 @@ func select_event_option(context: RunContext, option_id: StringName) -> Dictiona
 		context.last_message = "No event option is available here."
 		return {"ok": false, "reason": "event_option_unavailable", "blocked_reason": "event_option_unavailable", "message": context.last_message}
 	var event_type := EventService.get_event_type(context, pos)
-	var result := EventService.execute_option(context, pos, option_id, runtime_controller)
+	var result := EventService.execute_option(context, pos, option_id, runtime_controller, payload)
 	_record_room_event(context, RunEventLog.EVENT_EVENT_OPTION_SELECTED, {"position": pos, "event_type": event_type, "option_id": option_id, "result": result.duplicate(true)})
+	return _finish_event_result(context, pos, result)
+
+
+func _finish_event_result(context: RunContext, pos: Vector2i, result: Dictionary) -> Dictionary:
 	if bool(result.get("completed", false)):
 		context.truth_map.mark_cleared(pos)
 		context.intel_map.refresh_revealed_cell(pos, context.truth_map)
-	if context.failed:
-		return result
+	if bool(result.get("ok", false)) and result.has("shortcut_target"):
+		context.player_pos = result["shortcut_target"]
+		context.current_pos = context.player_pos
+		RunInventory.record_move(context)
+		var entered := enter_room(context)
+		result["room_entry_result"] = entered.get("room_entry_result", {})
+		result["position"] = context.get_current_pos()
 	return result
 
 
@@ -183,30 +220,46 @@ func fight_current_enemy(context: RunContext) -> Dictionary:
 func apply_runtime_combat_damage(context: RunContext, payload: Dictionary) -> Dictionary:
 	if context == null or not context.run_active:
 		return {"ok": false, "reason": "run_not_active", "blocked_reason": "run_not_active"}
-	if context.current_room_type != &"Monster" or context.truth_map == null or context.truth_map.is_cleared(context.get_current_pos()):
+	var cage_active := context.current_room_type == &"Event" and bool(EventService.cage_state(context, context.get_current_pos()).get("active", false))
+	if (context.current_room_type != &"Monster" and not cage_active) or context.truth_map == null or context.truth_map.is_cleared(context.get_current_pos()):
 		return {"ok": false, "reason": "runtime_combat_unavailable", "blocked_reason": "runtime_combat_unavailable"}
 	var damage := maxi(0, int(payload.get("damage", 0)))
-	if damage <= 0:
+	var pressure_delta := maxi(0, int(payload.get("pressure_delta", 0)))
+	if damage <= 0 and pressure_delta <= 0:
 		return {"ok": true, "status": &"runtime_combat_damage_ignored", "damage": 0, "hp": context.hp}
-	var applied := RunEffectApplierScript.apply_effects(context, [
-		RunEffectApplierScript.effect_hp_delta(-damage, "runtime_combat_%s" % String(payload.get("damage_kind", &"damage"))),
-	], runtime_controller)
-	context.run_stats["combat_damage"] = int(context.run_stats.get("combat_damage", 0)) + damage
+	var pressure_before := context.pressure
+	var effects: Array = []
+	if pressure_delta > 0:
+		effects.append(RunEffectApplierScript.effect_protocol_pressure_delta(pressure_delta, "combat"))
+	if damage > 0:
+		effects.append(RunEffectApplierScript.effect_hp_delta(-damage, "runtime_combat_%s" % String(payload.get("damage_kind", &"damage"))))
+	var deferred_failure := EntryFailure.new()
+	var applied := RunEffectApplierScript.apply_effects(context, effects, deferred_failure)
+	if not bool(applied.ok):
+		return applied
+	var actual_damage := 0
+	for fact in applied.get("facts", []):
+		actual_damage += int(fact.get("actual_hp_loss", 0))
+	context.run_stats["combat_damage"] = int(context.run_stats.get("combat_damage", 0)) + actual_damage
 	context.enemy_state["runtime_combat_tick"] = int(payload.get("combat_tick", 0))
-	context.last_message = "Combat hit: -%d HP." % damage
+	context.last_message = "Combat hit: -%d HP." % actual_damage
 	_record_room_event(context, &"runtime_combat_damage", {
 		"position": context.get_current_pos(),
-		"damage": damage,
+		"damage": actual_damage,
+		"nominal_damage": damage,
 		"damage_kind": payload.get("damage_kind", &"damage"),
 		"source_id": payload.get("source_id", ""),
 		"combat_tick": payload.get("combat_tick", 0),
+		"pressure_delta": context.pressure - pressure_before,
 	})
+	_finish_entry(context, deferred_failure)
 	return {
 		"ok": bool(applied.get("ok", false)),
 		"status": &"runtime_combat_damage_applied",
-		"damage": damage,
+		"damage": actual_damage,
 		"hp": context.hp,
 		"failed": context.failed,
+		"pressure_delta": context.pressure - pressure_before,
 		"effect_results": applied.get("effect_results", []),
 	}
 
@@ -215,6 +268,8 @@ func resolve_runtime_combat(context: RunContext, payload: Dictionary) -> Diction
 	if context == null or not context.run_active:
 		return {"ok": false, "reason": "run_not_active", "blocked_reason": "run_not_active"}
 	var pos := context.get_current_pos()
+	if context.current_room_type == &"Event" and not EventService.cage_state(context, pos).is_empty():
+		return _resolve_cage_combat(context, pos, payload)
 	if context.current_room_type != &"Monster" or context.truth_map == null:
 		return {"ok": false, "reason": "runtime_combat_unavailable", "blocked_reason": "runtime_combat_unavailable"}
 	if context.truth_map.is_cleared(pos):
@@ -264,12 +319,35 @@ func resolve_runtime_combat(context: RunContext, payload: Dictionary) -> Diction
 	}
 
 
+func _resolve_cage_combat(context: RunContext, pos: Vector2i, payload: Dictionary) -> Dictionary:
+	if context.truth_map.is_cleared(pos):
+		return {"ok": true, "status": &"runtime_combat_already_resolved", "reward_committed": false}
+	var combat_snapshot: Dictionary = payload.get("combat_snapshot", {})
+	if not bool(combat_snapshot.get("cleared", false)):
+		return {"ok": false, "reason": "combat_not_cleared", "blocked_reason": "combat_not_cleared"}
+	var result := EventService.resolve_cage(context, pos, true)
+	if not bool(result.get("ok", false)):
+		return result
+	context.enemy_state["combat_snapshot"] = combat_snapshot.duplicate(true)
+	context.enemy_state["reward_committed"] = true
+	var cage := EventService.cage_state(context, pos)
+	_record_room_event(context, RunEventLog.EVENT_COMBAT_RESOLVED, {
+		"position": pos, "runtime": true, "cage": true,
+		"combat_tick": payload.get("combat_tick", 0), "combat_seed": payload.get("combat_seed", 0),
+		"monster_types": [String(cage.get("monster_type", "slime"))], "reward": result.duplicate(true),
+	})
+	return {"ok": true, "status": &"cage_combat_resolved", "reward_committed": true, "power_gain": int(result.get("power_delta", 0)), "reward": result, "ground_items": []}
+
+
 func resolve_runtime_combat_defeat(context: RunContext, payload: Dictionary) -> Dictionary:
 	if context == null:
 		return {"ok": false, "reason": "run_not_active"}
 	if context.failed:
 		return {"ok": true, "status": &"runtime_combat_defeat_already_resolved"}
-	context.hp = 0
+	if context.hp > 0:
+		var applied := RunEffectApplierScript.apply_damage_packet(context, {"amount": context.hp, "damage_type": "dot", "survivals": [], "source_id": "runtime_combat_defeat"})
+		if not bool(applied.ok):
+			return applied
 	var result := _fail_run(context, "runtime_combat_defeat")
 	result["combat_tick"] = int(payload.get("combat_tick", 0))
 	return result
@@ -279,6 +357,8 @@ func flee_runtime_combat(context: RunContext, _payload: Dictionary = {}) -> Dict
 	if context == null or not context.run_active:
 		return {"ok": false, "reason": "run_not_active", "blocked_reason": "run_not_active"}
 	var pos := context.get_current_pos()
+	if context.current_room_type == &"Event" and bool(EventService.cage_state(context, pos).get("active", false)):
+		return {"ok": false, "reason": "cage_locked", "blocked_reason": "cage_locked", "message": "围笼战斗结束前无法离开。"}
 	if context.current_room_type != &"Monster" or context.truth_map == null or context.truth_map.is_cleared(pos):
 		return {"ok": false, "reason": "runtime_combat_unavailable", "blocked_reason": "runtime_combat_unavailable"}
 	var result := RunRuleService.apply_combat_flee(context, pos)
@@ -303,21 +383,27 @@ func can_extract(context: RunContext) -> bool:
 	return context.current_room_type == &"Exit" and context.truth_map.get_exit_id(context.get_current_pos()) != &""
 
 
-func _enter_mine(context: RunContext, pos: Vector2i) -> Dictionary:
+func _enter_mine(context: RunContext, pos: Vector2i, entry_failure: EntryFailure) -> Dictionary:
 	var key := context.cell_key(pos)
-	var first_trigger := not context.entered_cells.has(key)
+	var remote_mines: Dictionary = context.z1_event_flags.get("remote_mines", {})
+	var first_trigger := not context.entered_cells.has(key) and not bool(remote_mines.get(key, false))
 	var hp_before := context.hp
 	var pressure_before := context.pressure
 	if first_trigger:
 		context.entered_cells[key] = true
-		RunEffectApplierScript.apply_effects(context, [RunEffectApplierScript.effect_mine_mark_triggered(pos)], runtime_controller)
-		var damage := CombatState.take_mine_hit(context, runtime_controller)
-		RunEffectApplierScript.apply_effects(context, [RunEffectApplierScript.effect_protocol_pressure_delta(RunBalanceCatalogScript.MINE_PRESSURE_DELTA, "mine_triggered")], runtime_controller)
+		RunEffectApplierScript.apply_effects(context, [RunEffectApplierScript.effect_mine_mark_triggered(pos)], entry_failure)
+		var mine_hit := CombatState.apply_mine_hit(context, entry_failure)
+		if not bool(mine_hit.ok):
+			return mine_hit
+		var damage := int(mine_hit.facts.actual_hp_loss)
+		var applied := RunEffectApplierScript.apply_effects(context, [RunEffectApplierScript.effect_protocol_pressure_delta(RunBalanceCatalogScript.MINE_PRESSURE_DELTA, "mine_triggered")], entry_failure)
+		if not bool(applied.ok):
+			return applied
 		context.run_stats["mine_hits"] = int(context.run_stats.get("mine_hits", 0)) + 1
 		context.intel_map.refresh_revealed_cell(pos, context.truth_map)
 		context.last_message = RunTextCatalogScript.mine_triggered(damage, RunBalanceCatalogScript.MINE_PRESSURE_DELTA)
 		if context.mine_hits_are_fatal and not context.failed:
-			_fail_run(context, "fatal_mine")
+			entry_failure.fail_run("fatal_mine")
 	else:
 		context.last_message = RunTextCatalogScript.mine_reentered()
 	return {
@@ -333,6 +419,11 @@ func _enter_mine(context: RunContext, pos: Vector2i) -> Dictionary:
 			"fatal": context.failed,
 		},
 	}
+
+
+func _finish_entry(context: RunContext, deferred_failure: EntryFailure) -> void:
+	if context.run_active and not context.failed and (context.hp <= 0 or not deferred_failure.reason.is_empty()):
+		_fail_run(context, deferred_failure.reason if not deferred_failure.reason.is_empty() else "hp_depleted")
 
 
 func _maybe_trigger_tutorial(context: RunContext, pos: Vector2i) -> void:

@@ -4,10 +4,12 @@ class_name M7ProgressionService
 const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
 const M7TalentCatalogScript := preload("res://scripts/core/progression/m7_talent_catalog.gd")
 const PlayerAppearanceConfigScript := preload("res://scripts/core/content/player_appearance_config.gd")
+const CAREER_PROGRESSION_VERSION := 2
 
 
 static func default_meta_fields() -> Dictionary:
 	return {
+		"career_progression_version": CAREER_PROGRESSION_VERSION,
 		"unlocked_map_ids": M7ContentCatalogScript.DEFAULT_UNLOCKED_MAPS.duplicate(),
 		"tutorial_completed": false,
 		"map_success_counts": {},
@@ -39,7 +41,14 @@ static func normalize_meta(data: Dictionary) -> Dictionary:
 	for key in defaults.keys():
 		if not result.has(key):
 			result[key] = defaults[key].duplicate(true) if defaults[key] is Array or defaults[key] is Dictionary else defaults[key]
-	result["unlocked_map_ids"] = _unique_strings(_array(result.get("unlocked_map_ids", [])), M7ContentCatalogScript.DEFAULT_UNLOCKED_MAPS)
+	var progression_version := int(data.get("career_progression_version", 0))
+	var starter_maps := M7ContentCatalogScript.DEFAULT_UNLOCKED_MAPS
+	if progression_version < 1:
+		starter_maps = M7ContentCatalogScript.LEGACY_I5_DEFAULT_UNLOCKED_MAPS
+	elif progression_version == 1:
+		starter_maps = ["tutorial_5x5", "classic_7x7_simple"]
+	result["unlocked_map_ids"] = _unique_strings(_array(result.get("unlocked_map_ids", [])), starter_maps)
+	result["career_progression_version"] = maxi(progression_version, CAREER_PROGRESSION_VERSION)
 	result["tutorial_completed"] = bool(result.get("tutorial_completed", false))
 	result["map_success_counts"] = _dictionary(result.get("map_success_counts", {}))
 	result["commission_history"] = _array(result.get("commission_history", []))
@@ -57,14 +66,20 @@ static func normalize_meta(data: Dictionary) -> Dictionary:
 		(result["event_completion_counts"] as Dictionary)[event_id] = maxi(0, int((result["event_completion_counts"] as Dictionary).get(event_id, 0)))
 	result["transaction_sequence"] = maxi(0, int(result.get("transaction_sequence", 0)))
 	result["profile_exp"] = maxi(0, int(result.get("profile_exp", 0)))
-	result["profile_level"] = M7ContentCatalogScript.profile_level_for_exp(int(result["profile_exp"]))
-	M7TalentCatalogScript.sync_progress(result, not result.has("talent_budget_granted"))
 	_refresh_profile_awards(result)
+	M7TalentCatalogScript.sync_progress(result)
+	refresh_map_unlocks(result)
 	_refresh_red_dots(result)
 	return result
 
 
 static func apply_settlement(data: Dictionary, result_snapshot: Dictionary) -> Dictionary:
+	var run_result := _dictionary(result_snapshot.get("RunResult", result_snapshot.get("run_result", {})))
+	if not run_result.is_empty():
+		result_snapshot = result_snapshot.duplicate()
+		for key in ["run_start_config", "run_stats", "run_events", "unique_rooms_explored"]:
+			if run_result.has(key):
+				result_snapshot[key] = run_result[key]
 	var run_start := _dictionary(result_snapshot.get("run_start_config", {}))
 	if str(result_snapshot.get("mode", "")) == "tutorial" or str(run_start.get("map_config_id", "")) == "tutorial_5x5":
 		return {"skipped": true, "reason": "tutorial_completion_owned_by_meta_adapter"}
@@ -79,9 +94,10 @@ static func apply_settlement(data: Dictionary, result_snapshot: Dictionary) -> D
 	var is_success := outcome in ["Extracted", "Training Complete"] or settlement_outcome == "success"
 	var is_failure := outcome == "Failed" or settlement_outcome == "failure"
 	var is_abandon := outcome == "Abandoned" or settlement_outcome == "abandon"
-	var run_stats := _dictionary(result_snapshot.get("run_stats", {}))
+	var run_stats := _dictionary(result_snapshot.get("run_stats", result_snapshot.get("stats", {})))
 	var events := _array(result_snapshot.get("run_events", result_snapshot.get("event_log", [])))
-	var recovered_items := _recovered_items(result_snapshot, settlement, is_success, is_failure)
+	var recovered_items := _recovered_items(result_snapshot, settlement, is_success, is_failure, is_abandon)
+	var talent_points_before := int(data.get("talent_points", 0))
 	var delta := {
 		"result_id": result_id,
 		"map_id": map_id,
@@ -89,6 +105,7 @@ static func apply_settlement(data: Dictionary, result_snapshot: Dictionary) -> D
 		"commission_completed": false,
 		"gold_gained": 0,
 		"exp_gained": 0,
+		"profile_level_before": int(data.get("profile_level", 1)),
 		"new_codex_ids": [],
 		"new_collection_ids": [],
 		"new_unlock_ids": [],
@@ -101,15 +118,8 @@ static func apply_settlement(data: Dictionary, result_snapshot: Dictionary) -> D
 	_record_recovered_discoveries(data, recovered_items, delta)
 	_update_event_counts(data, run_stats)
 
-	var base_exp := 0
-	if is_success:
-		base_exp = int(M7ContentCatalogScript.map_definition(map_id).get("success_exp", 30))
-	elif is_failure:
-		base_exp = 10
-	_add_exp(data, base_exp)
-	delta["exp_gained"] = int(delta["exp_gained"]) + base_exp
-
 	var commission_completed := is_success and _commission_completed(commission_id, result_snapshot, settlement, recovered_items, run_stats, events)
+	var commission_exp := 0
 	delta["commission_completed"] = commission_completed
 	if is_success:
 		_increment_map_success(data, map_id)
@@ -117,8 +127,13 @@ static func apply_settlement(data: Dictionary, result_snapshot: Dictionary) -> D
 		var reward := _dictionary(M7ContentCatalogScript.commission_definition(commission_id).get("reward", {}))
 		var reward_id := "commission:%s:%s" % [result_id, commission_id]
 		if _grant_automatic_reward(data, reward_id, reward):
-			delta["gold_gained"] = int(delta["gold_gained"]) + int(reward.get("gold", 0))
-			delta["exp_gained"] = int(delta["exp_gained"]) + int(reward.get("exp", 0))
+			delta["gold_gained"] = int(reward.get("gold", 0))
+			commission_exp = int(reward.get("exp", 0))
+	var outcome_percent := 100 if is_success else (60 if is_failure else 0)
+	var experience := _exploration_experience(result_snapshot, run_stats, map_id, commission_exp, outcome_percent)
+	delta["experience_breakdown"] = experience
+	delta["exp_gained"] = int(experience["experience"])
+	_add_exp(data, int(delta["exp_gained"]))
 	(data["commission_history"] as Array).append({
 		"result_id": result_id,
 		"map_id": map_id,
@@ -135,8 +150,10 @@ static func apply_settlement(data: Dictionary, result_snapshot: Dictionary) -> D
 			delta["task_became_claimable"] = task_id
 	_update_achievements(data, result_snapshot, run_stats, events, is_success, delta)
 	_update_collection_sets(data)
-	_update_map_unlocks(data, map_id, is_success, delta)
 	_refresh_profile_awards(data)
+	delta["profile_level_after"] = int(data.get("profile_level", 1))
+	delta["talent_points_gained"] = int(data.get("talent_points", 0)) - talent_points_before
+	delta["new_unlock_ids"] = refresh_map_unlocks(data)
 	if result_id != "":
 		_append_unique(data["unread_history_ids"] as Array, result_id)
 	_refresh_red_dots(data)
@@ -165,8 +182,9 @@ static func claim_goal_reward(data: Dictionary, goal_kind: String, goal_id: Stri
 	if goal_kind == "task":
 		_activate_next_task(data, goal_id)
 	_refresh_profile_awards(data)
+	var new_unlock_ids := refresh_map_unlocks(data)
 	_refresh_red_dots(data)
-	return {"ok": true, "status": "claimed", "goal_id": goal_id, "reward": reward.duplicate(true)}
+	return {"ok": true, "status": "claimed", "goal_id": goal_id, "reward": reward.duplicate(true), "new_unlock_ids": new_unlock_ids}
 
 
 static func next_instance_id(data: Dictionary, source: String, item_id: String) -> String:
@@ -391,23 +409,39 @@ static func _update_collection_sets(data: Dictionary) -> void:
 			_append_unique(data["unread_collection_set_ids"] as Array, set_id)
 
 
-static func _update_map_unlocks(data: Dictionary, map_id: String, is_success: bool, delta: Dictionary) -> void:
+static func refresh_map_unlocks(data: Dictionary) -> Array[String]:
 	var unlocked: Array = data.get("unlocked_map_ids", [])
-	if is_success and map_id == "classic_10x10_standard":
-		_unlock(unlocked, "classic_10x10_hard", delta)
-	if _array(data.get("research_completed_ids", [])).has("research_extraction_signal"):
-		_unlock(unlocked, "classic_13x13_normal", delta)
-	if is_success and map_id == "classic_13x13_normal":
-		_unlock(unlocked, "classic_13x13_hard", delta)
-	var critical_state := _dictionary((_dictionary(data.get("achievement_states", {}))).get("achievement_critical_return", {}))
-	if is_success and map_id == "classic_13x13_hard" and bool(critical_state.get("achieved", false)):
-		_unlock(unlocked, "classic_13x13_hell", delta)
+	var new_unlocks: Array[String] = []
+	for definition in M7ContentCatalogScript.map_definitions():
+		var map_id := str(definition["id"])
+		if not unlocked.has(map_id) and map_unlock_blockers(data, definition).is_empty():
+			unlocked.append(map_id)
+			new_unlocks.append(map_id)
+	data["unlocked_map_ids"] = unlocked
+	return new_unlocks
 
 
-static func _unlock(unlocked: Array, map_id: String, delta: Dictionary) -> void:
-	if not unlocked.has(map_id):
-		unlocked.append(map_id)
-		(delta["new_unlock_ids"] as Array).append(map_id)
+static func map_unlock_blockers(data: Dictionary, definition: Dictionary) -> PackedStringArray:
+	var blockers := PackedStringArray()
+	if bool(definition.get("required_tutorial", false)) and not bool(data.get("tutorial_completed", false)):
+		blockers.append("完成新手教程")
+	var level := int(definition.get("min_profile_level", 1))
+	if int(data.get("profile_level", 1)) < level:
+		blockers.append("达到 Lv.%d" % level)
+	var clear_id := str(definition.get("required_clear_id", ""))
+	if not clear_id.is_empty() and int(_dictionary(data.get("map_success_counts", {})).get(clear_id, 0)) < 1:
+		var map_name := str(M7ContentCatalogScript.map_definition_exact(clear_id).get("display_name", clear_id))
+		blockers.append("%s 成功撤离" % map_name)
+	var research_id := str(definition.get("required_research_id", ""))
+	if not research_id.is_empty() and not _array(data.get("research_completed_ids", [])).has(research_id):
+		var research_name := str(M7ContentCatalogScript.research_definition(research_id).get("display_name", research_id))
+		blockers.append("完成「%s」研究" % research_name)
+	var achievement_id := str(definition.get("required_achievement_id", ""))
+	var achievement := _dictionary(_dictionary(data.get("achievement_states", {})).get(achievement_id, {}))
+	if not achievement_id.is_empty() and not bool(achievement.get("achieved", false)):
+		var achievement_definition := _find_definition(M7ContentCatalogScript.achievement_definitions(), achievement_id)
+		blockers.append("达成「%s」" % str(achievement_definition.get("display_name", achievement_id)))
+	return blockers
 
 
 static func _increment_map_success(data: Dictionary, map_id: String) -> void:
@@ -448,7 +482,9 @@ static func _grant_automatic_reward(data: Dictionary, reward_id: String, reward:
 	if granted.has(reward_id):
 		return false
 	granted.append(reward_id)
-	_grant_reward_payload(data, reward, "m7_commission")
+	var asset_reward := reward.duplicate()
+	asset_reward.erase("exp")
+	_grant_reward_payload(data, asset_reward, "m7_commission")
 	return true
 
 
@@ -462,7 +498,31 @@ static func _grant_reward_payload(data: Dictionary, reward: Dictionary, source: 
 static func _add_exp(data: Dictionary, amount: int) -> void:
 	data["profile_exp"] = maxi(0, int(data.get("profile_exp", 0)) + maxi(0, amount))
 	data["profile_level"] = M7ContentCatalogScript.profile_level_for_exp(int(data["profile_exp"]))
-	M7TalentCatalogScript.sync_progress(data, not data.has("talent_budget_granted"))
+	M7TalentCatalogScript.sync_progress(data)
+
+
+static func _exploration_experience(result: Dictionary, run_stats: Dictionary, map_id: String, commission_exp: int, outcome_percent: int) -> Dictionary:
+	var room_exp := clampi(int(result.get("unique_rooms_explored", 0)) - 1, 0, 45)
+	var chest_exp := 4 * clampi(int(run_stats.get("chest_rooms", 0)), 0, 5)
+	var combat_exp := 5 * clampi(int(run_stats.get("monsters_defeated", 0)), 0, 5)
+	var event_exp := 5 * clampi(int(run_stats.get("events_completed", 0)), 0, 5)
+	var score := room_exp + chest_exp + combat_exp + event_exp + commission_exp
+	var definition := M7ContentCatalogScript.map_definition(map_id)
+	var difficulty_percent := int(definition.get("experience_percent", 100))
+	var cap := int(definition.get("experience_cap", 0))
+	var scaled := mini(score * difficulty_percent, cap * 100)
+	return {
+		"room_exp": room_exp,
+		"chest_exp": chest_exp,
+		"combat_exp": combat_exp,
+		"event_exp": event_exp,
+		"commission_exp": commission_exp,
+		"score": score,
+		"difficulty_percent": difficulty_percent,
+		"outcome_percent": outcome_percent,
+		"cap": cap,
+		"experience": int(scaled * outcome_percent / 10000.0),
+	}
 
 
 static func _refresh_profile_awards(data: Dictionary) -> void:
@@ -524,7 +584,7 @@ static func _claimable_count(states: Dictionary) -> int:
 	return count
 
 
-static func _recovered_items(result_snapshot: Dictionary, settlement: Dictionary, is_success: bool, is_failure: bool) -> Array:
+static func _recovered_items(result_snapshot: Dictionary, settlement: Dictionary, is_success: bool, is_failure: bool, is_abandon: bool) -> Array:
 	if is_success:
 		return _array(settlement.get("warehouse_lite", result_snapshot.get("warehouse_lite", [])))
 	if is_failure:
@@ -532,6 +592,8 @@ static func _recovered_items(result_snapshot: Dictionary, settlement: Dictionary
 		if salvaged.is_empty():
 			salvaged = _array(_dictionary(result_snapshot.get("failure_salvage", {})).get("salvaged_items", []))
 		return salvaged
+	if is_abandon:
+		return _array(_dictionary(settlement.get("event_item_delivery", {})).get("delivered", []))
 	return []
 
 

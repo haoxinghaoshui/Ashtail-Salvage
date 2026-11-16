@@ -6,6 +6,17 @@ const RunRuntimeControllerScript := preload("res://scripts/core/run/run_runtime_
 const RunSceneResultControllerScript := preload("res://scripts/core/run/run_scene_result_controller.gd")
 const ResultPresentationModelScript := preload("res://scripts/ui/result/result_presentation_model.gd")
 
+class TerminalWriteFailure extends SaveAdapter:
+	var target_path := ""
+	var target_run_id := ""
+	var blocked := true
+
+	func save_json(data: Dictionary, path: String = M1_META_PROGRESS_PATH, normalize_meta_progress: bool = true) -> bool:
+		if blocked and path == target_path and data.get("run_receipts", {}).has(target_run_id):
+			last_error = "i2_terminal_meta_write_failure"
+			return false
+		return super.save_json(data, path, normalize_meta_progress)
+
 var failures: Array[String] = []
 var blocker_path := "user://i2_terminal_commit_recovery/not_a_directory"
 var blocked_save_path := blocker_path + "/meta_progress.json"
@@ -26,11 +37,12 @@ func _run() -> void:
 	_validate_run_id_compatibility()
 	var recovery_fixture := _validate_failed_commit_and_retry()
 	await _validate_result_panel_guards(recovery_fixture)
+	_validate_legacy_discard(recovery_fixture)
 	_cleanup()
-	await _validate_production_run_scene_guards(recovery_fixture)
+	await _validate_production_run_scene_guards()
 	_cleanup()
 	if failures.is_empty():
-		print("I2_TERMINAL_COMMIT_RECOVERY=PASS nonce=128bit legacy_ids=compatible save_failure=rollback retry=same_snapshot result_body=frozen_across_retry duplicate=idempotent result_signals=unchanged exits=guarded discard=core_confirmed_unlock")
+		print("I2_TERMINAL_COMMIT_RECOVERY=PASS nonce=128bit legacy_ids=compatible save_failure=rollback retry=same_snapshot result_body=frozen_across_retry duplicate=idempotent result_signals=unchanged exits=guarded discard=legacy_only durable_terminal=retry_required restart=settled")
 		quit(0)
 		return
 	for failure in failures:
@@ -49,6 +61,7 @@ func _validate_run_id_compatibility() -> void:
 		var pieces := run_id.split("_")
 		var nonce := String(pieces[pieces.size() - 1]) if not pieces.is_empty() else ""
 		_require(nonce.length() == 32 and _is_lower_hex(nonce), "run id nonce is not 128-bit hex: %s" % run_id)
+		_release_runtime(controller)
 
 	var legacy_id := "demo_1234_1:Abandoned:0"
 	var legacy_adapter = MetaProgressAdapterScript.new()
@@ -124,6 +137,7 @@ func _validate_failed_commit_and_retry() -> Dictionary:
 	_require(str(duplicate.get("status", "")) == "duplicate_ignored", "second retry was not idempotent")
 	_require(result_signal_count == 1, "duplicate retry re-emitted terminal result signal")
 	_require(adapter.data == committed_data, "duplicate retry changed meta data")
+	_release_runtime(controller)
 	return {
 		"snapshot": terminal_snapshot,
 		"summary": adapter.get_summary(),
@@ -196,116 +210,157 @@ func _validate_result_panel_guards(fixture: Dictionary) -> void:
 	await process_frame
 
 
-func _validate_production_run_scene_guards(fixture: Dictionary) -> void:
+func _validate_legacy_discard(fixture: Dictionary) -> void:
 	if fixture.is_empty():
 		return
-	var blocker := FileAccess.open(blocker_path, FileAccess.WRITE)
-	_require(blocker != null, "could not recreate production save blocker")
-	if blocker == null:
-		return
-	blocker.store_string("this file intentionally blocks the production result retry save parent")
-	blocker.close()
+	var adapter = MetaProgressAdapterScript.new()
+	adapter.set_active_profile_path(blocked_save_path, "i2_terminal_legacy_discard")
+	var runtime = RunRuntimeControllerScript.new()
+	runtime.bind_meta_progress_adapter(adapter)
+	runtime.context.result_snapshot = fixture.snapshot.duplicate(true)
+	runtime.last_meta_commit = {"ok": false, "status": &"save_failed", "committed": false}
+	var before: Dictionary = adapter.data.duplicate(true)
+	_require(runtime.checkpoint_service == null, "legacy discard fixture unexpectedly acquired durable authority")
+	_require(str(runtime.discard_unsaved_terminal_commit(false).get("status", "")) == "discard_confirmation_required", "legacy discard did not require explicit confirmation")
+	var discarded: Dictionary = runtime.discard_unsaved_terminal_commit(true)
+	_require(bool(discarded.get("ok", false)) and str(discarded.get("status", "")) == "discarded_unsaved", "confirmed legacy discard did not unlock")
+	_require(adapter.data == before, "legacy discard wrote meta progress")
+	_require(str(runtime.retry_terminal_commit().get("status", "")) == "terminal_commit_discarded", "legacy discard allowed a later save retry")
+	_release_runtime(runtime)
 
+
+func _validate_production_run_scene_guards() -> void:
 	var packed := load("res://scenes/main/main.tscn") as PackedScene
 	_require(packed != null, "production Main scene could not be loaded for result recovery")
 	if packed == null:
 		return
 	var main := packed.instantiate()
 	root.add_child(main)
+	var run_scene = main.get_node("RunScene")
+	run_scene.set_process(false)
 	await process_frame
-	await process_frame
-	var run_scene := main.get_node_or_null("RunScene")
-	_require(run_scene != null, "production RunScene is missing for result recovery")
-	if run_scene == null:
-		main.queue_free()
-		return
-	var runtime_controller = run_scene.get("runtime_controller")
-	var run_context = run_scene.get("run_context")
-	var command_bus = run_scene.get("command_bus")
-	var panel = run_scene.get("result_panel")
-	_require(runtime_controller != null and run_context != null and command_bus != null and panel != null, "production result recovery authority was not initialized")
-	if runtime_controller == null or run_context == null or command_bus == null or panel == null:
-		main.queue_free()
-		return
-
-	var isolated_adapter = MetaProgressAdapterScript.new()
-	isolated_adapter.set_active_profile_path(blocked_save_path, "i2_terminal_commit_recovery_production")
-	runtime_controller.bind_meta_progress_adapter(isolated_adapter)
-	var terminal_snapshot: Dictionary = (fixture.get("snapshot", {}) as Dictionary).duplicate(true)
-	run_context.result_snapshot = terminal_snapshot.duplicate(true)
-	runtime_controller.last_meta_commit = {"ok": false, "status": &"save_failed", "committed": false}
-	command_bus.command_requested.connect(_on_production_command_requested)
-	command_bus.result_available.connect(_on_production_result_available)
+	var runtime = run_scene.runtime_controller
+	var adapter = run_scene.meta_progress_adapter
+	var manager = run_scene.save_manager
+	# Retain the scene's adapter identity, then explicitly bind all persistence
+	# authorities to a new Z2 profile before admission. Never transplant a result.
+	_require(bool(manager.switch_profile("i2_terminal_%d" % Time.get_ticks_usec()).get("ok", false)), "production profile selection failed")
+	_require(bool(manager.configure_meta_adapter(adapter).get("ok", false)), "production meta profile binding failed")
+	_require(bool(adapter.initialize_z2_profile(RunRuntimeControllerScript.Z2_CONTENT_VERSION).get("ok", false)), "production Z2 profile initialization failed")
+	_require(bool(runtime.initialize_z2_session(manager).get("ok", false)), "production checkpoint service initialization failed")
+	_require(runtime.checkpoint_service.meta_adapter == adapter and runtime.meta_progress_adapter == adapter, "production persistence authorities use different adapters")
+	_require(runtime.checkpoint_service.checkpoint_path == manager.meta_progress_path().get_base_dir().path_join("run_checkpoint.json"), "production checkpoint path does not match the selected profile")
+	var bus = run_scene.command_bus
+	var panel = run_scene.result_panel
+	bus.command_requested.connect(_on_production_command_requested)
+	bus.result_available.connect(_on_production_result_available)
+	_require(bool(bus.dispatch(&"start_demo_run").get("ok", false)), "production durable run admission failed")
+	_require(bool(runtime.checkpoint_service.load_checkpoint().get("can_simulate", false)), "production run was not admitted durably")
+	# Give the real terminal result a visible item section for the frozen-body guard.
+	runtime.context.asset_ledger.create_item_instance({
+		"instance_id": "production_terminal_item", "item_id": "production_terminal_item",
+		"display_name": "终局恢复样本", "item_type": &"collectible", "rarity": &"tier_4",
+		"weight": 2, "base_value": 30, "can_store": true,
+	}, RunAssetLedger.LOCATION_INVENTORY)
+	var failure_adapter := TerminalWriteFailure.new()
+	failure_adapter.target_path = adapter.active_meta_progress_path
+	failure_adapter.target_run_id = str(runtime.context.run_id)
+	adapter.save_adapter = failure_adapter
+	var before_meta: Dictionary = adapter.data.duplicate(true)
+	var before_disk := FileAccess.get_file_as_string(adapter.active_meta_progress_path)
 	_require(bool(run_scene.call("_show_run_screen")), "production RunScene could not enter the run surface")
-	var run_screen: StringName = StringName(run_scene.get("screen_state"))
-	run_scene.call("_on_result_available", terminal_snapshot)
+	var terminal: Dictionary = bus.dispatch(&"abandon_run", {"confirmed": true, "source": "i2_terminal_fixture"})
+	_require(bool(terminal.get("ok", false)), "production terminal checkpoint failed before meta settlement")
+	var terminal_snapshot: Dictionary = runtime.context.result_snapshot.duplicate(true)
+	var run_id := str(runtime.context.run_id)
+	var checkpoint_path: String = runtime.checkpoint_service.checkpoint_path
+	_require(FileAccess.file_exists(checkpoint_path), "failed terminal lost its durable checkpoint")
+	var terminal_disk := FileAccess.get_file_as_string(checkpoint_path)
+	_require(str(runtime.last_meta_commit.get("status", "")) == "save_failed" and bool(runtime.last_meta_commit.get("durable_checkpoint", false)), "production terminal did not fail specifically at durable meta settlement")
+	_require(runtime.persistence_error.is_empty(), "terminal-only failure blocked checkpoint authority")
+	_require(adapter.data == before_meta and FileAccess.get_file_as_string(adapter.active_meta_progress_path) == before_disk, "failed terminal did not roll back meta memory and disk")
+	var reopened_adapter = MetaProgressAdapterScript.new()
+	manager.configure_meta_adapter(reopened_adapter)
+	reopened_adapter.save_adapter = failure_adapter
+	var reopened_runtime = RunRuntimeControllerScript.new()
+	reopened_runtime.bind_meta_progress_adapter(reopened_adapter)
+	_require(bool(reopened_runtime.initialize_z2_session(manager).get("ok", false)), "pending terminal could not be restored from disk")
+	_require(reopened_runtime.context.result_snapshot == terminal_snapshot and not reopened_runtime.context.run_active, "interruption lost or resumed the pending terminal as active gameplay")
+	_require(str(reopened_runtime.last_meta_commit.get("status", "")) == "save_failed" and bool(reopened_runtime.last_meta_commit.get("durable_checkpoint", false)), "pending terminal restart bypassed the settlement failure")
+	var restored_admission: Dictionary = reopened_adapter.data.get("admission", {})
+	_require(str(restored_admission.get("run_id", "")) == run_id and str(restored_admission.get("phase", "")) == "active" and restored_admission.get("initial_snapshot_hash") == before_meta.admission.initial_snapshot_hash and reopened_adapter.data.get("run_receipts", {}).is_empty(), "pending terminal restart consumed or replaced the admission")
+	_require(FileAccess.get_file_as_string(adapter.active_meta_progress_path) == before_disk and FileAccess.get_file_as_string(checkpoint_path) == terminal_disk, "pending terminal restart changed durable storage")
+	_release_runtime(reopened_runtime)
 	await create_timer(0.20).timeout
+	_require(production_result_signal_count == 1, "real terminal did not emit exactly one result")
 	_require(bool(run_scene.call("_runtime_modal_is_top", &"result")), "production result modal was not registered as stack top")
-	_require(not panel.normal_exit_allowed(), "production result panel allowed exit after save failure")
+	_require(not panel.normal_exit_allowed() and panel.retry_save_allowed(), "durable unsaved result did not expose only retry")
+	_require(not panel.discard_unsaved_allowed() and not panel.discard_unsaved_button.visible and panel.discard_unsaved_button.disabled, "durable result exposed discard")
 	var frozen_result_body := _capture_result_body(panel)
-	_require_result_body_unchanged(panel, frozen_result_body, "initial save failure")
+	_require_result_body_unchanged(panel, frozen_result_body, "initial durable save failure")
 
-	# All ordinary routes, including the stack cancel used by Esc, must remain
-	# locked while the authoritative settlement has not been persisted.
-	run_scene.call("_return_from_result_to_main")
-	run_scene.call("_return_from_result_to_deploy")
+	for method in ["_return_from_result_to_main", "_return_from_result_to_deploy", "_close_top_runtime_modal"]:
+		run_scene.call(method)
 	run_scene.call("_cancel_result_modal", &"input_cancel")
-	run_scene.call("_close_top_runtime_modal")
-	_require(StringName(run_scene.get("screen_state")) == run_screen, "unsaved production result changed screen through an ordinary exit")
-	_require(bool(run_scene.call("_runtime_modal_is_top", &"result")), "unsaved production result escaped through return or Esc")
+	panel.call("_request_discard_unsaved_result")
+	panel.call("_request_discard_unsaved_result")
+	_require(production_discard_command_count == 0, "durable panel forwarded a forbidden discard")
+	var rejected: Dictionary = bus.dispatch(&"discard_unsaved_terminal_commit", {"confirmed": true})
+	_require(not bool(rejected.get("ok", true)) and str(rejected.get("reason", "")) == "durable_terminal_retry_required", "core accepted durable terminal discard")
+	_require(adapter.data == before_meta and FileAccess.get_file_as_string(checkpoint_path) == terminal_disk, "forbidden discard changed admission or checkpoint")
+	_require(StringName(run_scene.screen_state) == &"run" and bool(run_scene.call("_runtime_modal_is_top", &"result")), "unsaved production result escaped through return, Esc or discard")
 
-	run_scene.call("_retry_terminal_commit_from_result")
+	panel.retry_save_button.pressed.emit()
 	await process_frame
 	_require(production_retry_command_count == 1, "production retry did not dispatch exactly one retry command")
-	_require(production_result_signal_count == 0, "failed production retry re-emitted result_available")
+	_require(production_result_signal_count == 1, "failed production retry re-emitted result_available")
+	_require(str(runtime.last_meta_commit.get("status", "")) == "save_failed" and runtime.persistence_error.is_empty(), "blocked retry failed outside terminal meta persistence")
 	_require(not panel.normal_exit_allowed() and bool(run_scene.call("_runtime_modal_is_top", &"result")), "failed production retry unlocked or dismissed the result")
 	_require(root.gui_get_focus_owner() == panel.retry_save_button, "failed production retry did not restore focus to retry")
-	_require_result_body_unchanged(panel, frozen_result_body, "blocked retry")
-	_require(DirAccess.remove_absolute(ProjectSettings.globalize_path(blocker_path)) == OK, "could not release production save blocker")
-	run_scene.call("_retry_terminal_commit_from_result")
+	_require(adapter.data == before_meta and FileAccess.get_file_as_string(adapter.active_meta_progress_path) == before_disk and FileAccess.get_file_as_string(checkpoint_path) == terminal_disk, "blocked retry changed durable meta or terminal snapshot")
+	_require_result_body_unchanged(panel, frozen_result_body, "blocked durable retry")
+	failure_adapter.blocked = false
+	panel.retry_save_button.pressed.emit()
 	await process_frame
 	_require(production_retry_command_count == 2, "successful production retry did not dispatch exactly one additional command")
-	_require(production_result_signal_count == 0, "successful production retry re-emitted result_available")
-	_require(panel.normal_exit_allowed(), "successful production retry did not restore normal exits")
+	_require(production_result_signal_count == 1, "successful production retry re-emitted result_available")
+	_require(panel.normal_exit_allowed() and runtime.persistence_error.is_empty(), "successful production retry did not restore normal exits")
 	_require(root.gui_get_focus_owner() == panel.return_deploy_button, "successful production retry did not move focus to the primary exit")
-	_require_result_body_unchanged(panel, frozen_result_body, "committed retry")
+	_require(runtime.context.result_snapshot == terminal_snapshot, "production retry replaced the immutable terminal snapshot")
+	_require(adapter.data.get("run_receipts", {}).has(run_id) and adapter.data.get("admission", {}).is_empty(), "successful retry did not settle admission exactly once")
+	_require(not FileAccess.file_exists(checkpoint_path) and not FileAccess.file_exists(checkpoint_path + ".bak"), "settlement left a resumable terminal checkpoint")
+	_require_result_body_unchanged(panel, frozen_result_body, "committed durable retry")
+	var committed_data: Dictionary = adapter.data.duplicate(true)
+	var committed_disk := FileAccess.get_file_as_string(adapter.active_meta_progress_path)
+	var duplicate: Dictionary = bus.dispatch(&"retry_terminal_commit")
+	_require(bool(duplicate.get("ok", false)) and runtime.persistence_error.is_empty(), "production duplicate retry rejected the saved receipt")
+	_require(adapter.data == committed_data and FileAccess.get_file_as_string(adapter.active_meta_progress_path) == committed_disk, "production duplicate retry wrote progress twice")
+	_require(production_result_signal_count == 1, "duplicate production retry re-emitted result_available")
 	run_scene.call("_return_from_result_to_deploy")
-	_require(StringName(run_scene.get("screen_state")) == &"deploy_shell" and not bool(run_scene.call("_runtime_modal_is_top", &"result")), "saved production result did not return through Deploy authority")
-
-	# Re-open a distinct explicitly unsaved presentation and exercise the wired
-	# two-step escape hatch. Only the second confirmation may cross the core
-	# discard authority and release the result route.
-	var discard_snapshot := terminal_snapshot.duplicate(true)
-	discard_snapshot["result_id"] = "%s:discard" % String(terminal_snapshot.get("result_id", "terminal"))
-	run_context.result_snapshot = discard_snapshot.duplicate(true)
-	runtime_controller.last_meta_commit = {"ok": false, "status": &"save_failed", "committed": false}
-	run_scene.set("screen_state", &"run")
-	run_scene.call("_on_result_available", discard_snapshot)
-	await process_frame
-	_require(StringName(run_scene.get("screen_state")) == &"run", "unsaved result setup did not begin from the production run route")
-	panel.call("_request_discard_unsaved_result")
-	_require(bool(run_scene.call("_runtime_modal_is_top", &"result")), "first production discard confirmation escaped the result")
-	_require(StringName(run_scene.get("screen_state")) == &"run", "first production discard confirmation changed route")
-	_require(production_discard_command_count == 0, "first production discard confirmation reached core authority")
-	panel.call("_request_discard_unsaved_result")
-	_require(not bool(run_scene.call("_runtime_modal_is_top", &"result")), "second production discard confirmation did not release the result")
-	_require(StringName(run_scene.get("screen_state")) == &"deploy_shell", "production discard did not return to Deploy")
-	_require(production_discard_command_count == 1, "production discard did not submit exactly one core command")
-	_require(production_retry_command_count == 2, "production discard submitted an unexpected save retry")
-	_require(production_result_signal_count == 0, "production discard re-emitted result_available")
-	_require(
-		StringName(runtime_controller.last_meta_commit.get("status", &"")) == &"discarded_unsaved"
-		and bool(runtime_controller.last_meta_commit.get("discarded", false)),
-		"production discard did not leave the explicit unsaved-discard authority state"
-	)
-
-	if command_bus.command_requested.is_connected(_on_production_command_requested):
-		command_bus.command_requested.disconnect(_on_production_command_requested)
-	if command_bus.result_available.is_connected(_on_production_result_available):
-		command_bus.result_available.disconnect(_on_production_result_available)
+	_require(StringName(run_scene.screen_state) == &"deploy_shell" and not bool(run_scene.call("_runtime_modal_is_top", &"result")), "saved production result did not return through Deploy authority")
 	main.queue_free()
-	for _unused in range(10):
-		await process_frame
+	_release_runtime(runtime)
+	await process_frame
+
+	# A new production scene reloads the profile from disk; settled runs cannot return.
+	var reopened := packed.instantiate()
+	root.add_child(reopened)
+	var restored = reopened.get_node("RunScene")
+	restored.set_process(false)
+	await process_frame
+	_require(not restored.run_context.run_active and restored.run_context.result_snapshot.is_empty(), "settled terminal reappeared after scene restart")
+	_require(restored.meta_progress_adapter.data.get("run_receipts", {}).has(run_id), "restart lost the committed run receipt")
+	_require(restored.runtime_controller.persistence_error.is_empty(), "restart blocked after successful terminal retry")
+	_release_runtime(restored.runtime_controller)
+	reopened.queue_free()
+	await process_frame
+
+
+func _release_runtime(runtime) -> void:
+	runtime.in_run_runtime.bind(null)
+	runtime.command_bus.bind_runtime_controller(null)
+
+
 
 
 func _on_production_command_requested(command_name: StringName, _payload: Dictionary) -> void:

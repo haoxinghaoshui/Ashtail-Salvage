@@ -57,6 +57,8 @@ func make_rule_context(context: RunContext, request: Dictionary) -> Dictionary:
 
 
 func register_modifier(spec: Dictionary) -> Dictionary:
+	if StringName(spec.get("operation", &"")) not in [&"add_black_coin", &"add_int", &"add_numeric"]:
+		return {"ok": false, "reason": "unknown_modifier_operation"}
 	var next_spec: Dictionary = spec.duplicate(true)
 	if not next_spec.has("sequence") or int(next_spec.get("sequence", 0)) <= 0:
 		next_spec["sequence"] = next_modifier_sequence

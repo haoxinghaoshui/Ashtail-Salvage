@@ -67,8 +67,8 @@ const TALENT_IDS := [
 ]
 
 const EXPECTED_RUN_FIELDS := {
-	"backpack_capacity": 11,
-	"failure_salvage_capacity": 5,
+	"backpack_capacity": 110,
+	"failure_salvage_capacity": 50,
 	"mine_dmg_reduce": 5,
 	"protocol_pressure_reduce": 2,
 	"search_reward_bonus": 1,
@@ -134,8 +134,9 @@ func _test_schema4_migration_and_level_budgets() -> void:
 	var migrated := _dictionary(loaded.get("data", {}))
 	var migrated_flags: Array = migrated.get("talent_flags", [])
 	_expect(int(migrated.get("schema_version", 0)) == 5, "Schema-4 save did not migrate to schema 5")
-	_expect(int(migrated.get("profile_level", 0)) == 4, "Schema-4 migration changed the authoritative profile level")
-	_expect(int(migrated.get("talent_budget_granted", -1)) == 3, "Schema-4 migration did not grant the level-4 budget")
+	_expect(int(migrated.get("profile_exp", -1)) == 450, "Schema-4 migration changed the stored experience")
+	_expect(int(migrated.get("profile_level", 0)) == 8, "Schema-4 migration did not recalculate the level from stored experience")
+	_expect(int(migrated.get("talent_budget_granted", -1)) == 3, "Schema-4 migration did not grant the level-8 budget")
 	_expect(int(migrated.get("talent_points", -1)) == 2, "Schema-4 migration did not preserve one point and top up the missing budget")
 	_expect(migrated_flags.has(M7TalentCatalogScript.TALENT_CARRY_RIGGING), "Schema-4 migration lost an existing known talent flag")
 	_expect(migrated_flags.has("legacy_unknown_talent"), "Schema-4 migration lost an unknown legacy talent flag")
@@ -146,7 +147,7 @@ func _test_schema4_migration_and_level_budgets() -> void:
 		"talent_points": 5,
 		"talent_flags": [],
 	}
-	M7TalentCatalogScript.sync_progress(excess_points, true)
+	M7TalentCatalogScript.sync_progress(excess_points)
 	_expect(int(excess_points.get("talent_points", -1)) == 5, "Legacy migration reduced already-unspent talent points")
 	_expect(int(excess_points.get("talent_budget_granted", -1)) == 5, "Legacy migration did not account for preserved excess points")
 
@@ -154,14 +155,15 @@ func _test_schema4_migration_and_level_budgets() -> void:
 	progression["talent_points"] = 0
 	progression["talent_flags"] = []
 	progression["talent_budget_granted"] = 0
-	var level_experience := [0, 100, 250, 450, 700]
+	var level_experience := [0, 30, 70, 120, 180]
+	var level_budgets := [0, 1, 1, 2, 2]
 	for index in range(level_experience.size()):
 		progression["profile_exp"] = int(level_experience[index])
 		progression = M7ProgressionServiceScript.normalize_meta(progression)
 		var expected_level := index + 1
-		var expected_budget := expected_level - 1
+		var expected_budget := int(level_budgets[index])
 		_expect(int(progression.get("profile_level", 0)) == expected_level, "Profile level did not follow the level threshold: %d" % expected_level)
-		_expect(int(progression.get("talent_points", -1)) == expected_budget, "Level %d did not grant exactly one cumulative point per level after level 1" % expected_level)
+		_expect(int(progression.get("talent_points", -1)) == expected_budget, "Level %d did not grant the expected cumulative milestone points" % expected_level)
 		_expect(int(progression.get("talent_budget_granted", -1)) == expected_budget, "Level %d budget accounting is not exact" % expected_level)
 
 
@@ -172,16 +174,16 @@ func _test_catalog_contract() -> void:
 			"tier": 1,
 			"prerequisite_ids": [],
 			"effect_kind": &"backpack_capacity",
-			"effect_amount": 1,
-			"effect_label": "背包负重上限 +1",
+			"effect_amount": 10,
+			"effect_label": "背包负重上限 +10",
 		},
 		M7TalentCatalogScript.TALENT_SALVAGE_CLAUSE: {
 			"branch_id": &"preparation",
 			"tier": 2,
 			"prerequisite_ids": [M7TalentCatalogScript.TALENT_CARRY_RIGGING],
 			"effect_kind": &"salvage_capacity",
-			"effect_amount": 1,
-			"effect_label": "失败结算可抢救重量上限 +1",
+			"effect_amount": 10,
+			"effect_label": "失败结算可抢救重量上限 +10",
 		},
 		M7TalentCatalogScript.TALENT_SHOCK_TRAINING: {
 			"branch_id": &"safety",
@@ -244,7 +246,7 @@ func _test_catalog_contract() -> void:
 		_expect(int(branch_counts.get(branch_id, 0)) == 2, "Talent branch is not exactly two tiers: %s" % str(branch_id))
 
 	var projected_meta := {
-		"profile_level": 5,
+		"profile_level": 9,
 		"talent_points": 4,
 		"talent_budget_granted": 4,
 		"talent_flags": [],
@@ -260,7 +262,7 @@ func _test_catalog_contract() -> void:
 
 
 func _test_envelope_idempotency_and_conflict() -> void:
-	var fixture := _meta_fixture(700)
+	var fixture := _meta_fixture(9)
 	var adapter := fixture.get("adapter") as MetaProgressAdapter
 	var memory := fixture.get("save_adapter") as MemorySaveAdapter
 	var controller := _controller(adapter)
@@ -301,7 +303,7 @@ func _test_envelope_idempotency_and_conflict() -> void:
 
 
 func _test_save_failure_full_rollback() -> void:
-	var fixture := _meta_fixture(250)
+	var fixture := _meta_fixture(4)
 	var adapter := fixture.get("adapter") as MetaProgressAdapter
 	var memory := fixture.get("save_adapter") as MemorySaveAdapter
 	var controller := _controller(adapter)
@@ -371,18 +373,19 @@ func _test_run_start_fields_and_deploy_recalculation() -> void:
 
 func _test_six_runtime_consumers() -> void:
 	var baseline_meta := SaveAdapterScript.new().default_meta_progress()
-	baseline_meta["profile_exp"] = 700
-	baseline_meta["profile_level"] = 5
+	baseline_meta["profile_level"] = 9
+	baseline_meta["profile_exp"] = M7ContentCatalogScript.profile_exp_for_level(9)
 	baseline_meta["talent_flags"] = []
 	baseline_meta["talent_points"] = 4
 	baseline_meta["talent_budget_granted"] = 4
 	var baseline := _runtime_context(baseline_meta, 103, 424242)
 	var talented := _runtime_context(_all_talents_meta(), 107, 424242)
 
-	var baseline_fit := baseline.asset_ledger.can_fit_item({"weight": 11})
-	var talented_fit := talented.asset_ledger.can_fit_item({"weight": 11})
+	var baseline_fit := baseline.asset_ledger.can_fit_item({"weight": 110})
+	var talented_fit := talented.asset_ledger.can_fit_item({"weight": 110})
 	_expect(not bool(baseline_fit.get("ok", true)) and bool(talented_fit.get("ok", false)), "Backpack talent is not consumed by RunAssetLedger capacity checks")
-	_expect(int((talented.asset_ledger.build_failure_preview() as Dictionary).get("salvage_capacity", 0)) == 5, "Salvage talent is not consumed by failure settlement preview")
+	_expect(not bool(talented.asset_ledger.can_fit_item({"weight": 111}).get("ok", true)), "Backpack talent allowed weight beyond its capacity")
+	_expect(int((talented.asset_ledger.build_failure_preview() as Dictionary).get("salvage_capacity", 0)) == 50, "Salvage talent is not consumed by failure settlement preview")
 
 	var baseline_mine_damage := CombatStateScript.take_mine_hit(baseline)
 	var talented_mine_damage := CombatStateScript.take_mine_hit(talented)
@@ -411,7 +414,7 @@ func _test_six_runtime_consumers() -> void:
 
 
 func _test_new_run_snapshot_isolation() -> void:
-	var fixture := _meta_fixture(100)
+	var fixture := _meta_fixture(2)
 	var adapter := fixture.get("adapter") as MetaProgressAdapter
 	var controller := _controller(adapter)
 	var before_start := DeployConfigScript.build_run_start_config(_classic_deploy_config(adapter.get_summary(), 83))
@@ -441,8 +444,8 @@ func _test_tutorial_zero_pollution() -> void:
 	all_talent_start["map_config_id"] = TutorialMapCatalogScript.MAP_ID
 	var tutorial_runtime := TutorialMapCatalogScript.runtime_config(all_talent_start)
 	var tutorial_expected := {
-		"backpack_capacity": 10,
-		"failure_salvage_capacity": 4,
+		"backpack_capacity": 100,
+		"failure_salvage_capacity": 40,
 		"mine_dmg_reduce": 0,
 		"protocol_pressure_reduce": 0,
 		"search_reward_bonus": 0,
@@ -455,7 +458,7 @@ func _test_tutorial_zero_pollution() -> void:
 	_expect((sanitized_start.get("talent_interface", []) as Array).is_empty(), "Tutorial run-start retained the formal talent interface")
 	_expect(not bool(tutorial_runtime.get("apply_meta_progress", true)), "Tutorial runtime still applies formal meta progression")
 
-	var fixture := _meta_fixture(700)
+	var fixture := _meta_fixture(9)
 	var adapter := fixture.get("adapter") as MetaProgressAdapter
 	var memory := fixture.get("save_adapter") as MemorySaveAdapter
 	adapter.data["talent_flags"] = TALENT_IDS.duplicate()
@@ -473,13 +476,15 @@ func _test_tutorial_zero_pollution() -> void:
 	})
 	_expect(bool(commit.get("ok", false)) and str(commit.get("status", "")) == "tutorial_completed", "Tutorial completion marker did not commit")
 	var after := adapter.data.duplicate(true)
+	_expect((after.get("unlocked_map_ids", []) as Array).has("classic_7x7_simple"), "Tutorial completion must unlock the first map")
+	after["unlocked_map_ids"] = before["unlocked_map_ids"]
 	after["tutorial_completed"] = false
 	_expect(after == before, "Tutorial settlement polluted talent points, flags, experience, economy, or formal records")
 	_expect(memory.save_calls == 1, "Tutorial completion marker was not saved exactly once")
 
 
 func _test_long_term_talent_workspace() -> void:
-	var fixture := _meta_fixture(700)
+	var fixture := _meta_fixture(9)
 	var adapter := fixture.get("adapter") as MetaProgressAdapter
 	var summary := adapter.get_summary()
 	var modules := LongTermTabModelScript.build_modules()
@@ -527,7 +532,7 @@ func _test_long_term_talent_workspace() -> void:
 	_expect(int(workspace.get("record_count", 0)) == 6, "LongTerm talent workspace did not receive all six cards")
 
 
-func _meta_fixture(profile_exp: int) -> Dictionary:
+func _meta_fixture(profile_level: int) -> Dictionary:
 	var memory := MemorySaveAdapter.new()
 	var adapter := MetaProgressAdapterScript.new()
 	adapter.save_adapter = memory
@@ -535,8 +540,7 @@ func _meta_fixture(profile_exp: int) -> Dictionary:
 	adapter.write_block_reason = ""
 	adapter.last_error = ""
 	var data := memory.default_meta_progress()
-	data["profile_exp"] = profile_exp
-	data["profile_level"] = M7ContentCatalogScript.profile_level_for_exp(profile_exp)
+	data["profile_exp"] = M7ContentCatalogScript.profile_exp_for_level(profile_level)
 	data["talent_points"] = 0
 	data["talent_flags"] = []
 	data["talent_budget_granted"] = 0
@@ -548,8 +552,8 @@ func _meta_fixture(profile_exp: int) -> Dictionary:
 
 func _all_talents_meta() -> Dictionary:
 	var meta := SaveAdapterScript.new().default_meta_progress()
-	meta["profile_level"] = 5
-	meta["profile_exp"] = 700
+	meta["profile_level"] = 9
+	meta["profile_exp"] = M7ContentCatalogScript.profile_exp_for_level(9)
 	meta["talent_points"] = 0
 	meta["talent_flags"] = TALENT_IDS.duplicate()
 	meta["talent_budget_granted"] = 6
@@ -559,7 +563,10 @@ func _all_talents_meta() -> Dictionary:
 
 
 func _classic_deploy_config(meta: Dictionary, sequence: int) -> Dictionary:
-	var config := DeployConfigScript.default_config(sequence, meta)
+	# Keep the standard-map simulation fixture independent of the career gates.
+	var profile := meta.duplicate(true)
+	(profile["unlocked_map_ids"] as Array).append("classic_10x10_standard")
+	var config := DeployConfigScript.default_config(sequence, profile)
 	var selected := DeployConfigScript.select_map(config, "classic_10x10_standard")
 	_expect(bool(selected.get("ok", false)), "Classic map could not be selected for the talent fixture")
 	return _dictionary(selected.get("config", config))

@@ -58,12 +58,15 @@ func _test_meta_transactions_and_progression() -> void:
 	adapter.set_active_profile_path(save_path, "m7_runtime_test")
 	adapter.clear()
 	adapter.data["gold"] = 500
+	# Meet the level gates so each map still has to wait for its research or clear.
+	adapter.data["profile_exp"] = M7ContentCatalogScript.profile_exp_for_level(28)
+	adapter.data["map_success_counts"] = {"classic_7x7_simple": 1, "classic_7x7_normal": 1, "classic_10x10_easy": 1}
 	_check(adapter.save(), "seed_save_failed")
 
 	var purchase := adapter.purchase_item("con_ration")
 	_check(bool(purchase.get("ok", false)), "purchase_failed")
 	var purchased_item: Dictionary = purchase.get("item", {})
-	_check(int(adapter.get_summary().get("gold", -1)) == 488, "purchase_gold_wrong")
+	_check(int(adapter.get_summary().get("gold", -1)) == 494, "purchase_gold_wrong")
 	_check(str(purchased_item.get("instance_id", "")) != "", "purchase_instance_missing")
 
 	var collectible := M7ContentCatalogScript.item_definition("col_01")
@@ -83,9 +86,11 @@ func _test_meta_transactions_and_progression() -> void:
 	adapter.save()
 	_check(bool(adapter.complete_research("research_anomaly_structure").get("ok", false)), "research_1_failed")
 	_check(bool(adapter.complete_research("research_protocol_formula").get("ok", false)), "research_2_failed")
+	_check(not (adapter.get_summary().get("unlocked_map_ids", []) as Array).has("classic_13x13_hard"), "hard_map_unlocked_before_research")
 	_check(bool(adapter.complete_research("research_extraction_signal").get("ok", false)), "research_3_failed")
-	_check((adapter.get_summary().get("unlocked_map_ids", []) as Array).has("classic_13x13_normal"), "research_map_unlock_missing")
+	_check(not (adapter.get_summary().get("unlocked_map_ids", []) as Array).has("classic_13x13_hard"), "hard_map_unlocked_before_normal_13_clear")
 
+	_check(not (adapter.get_summary().get("unlocked_map_ids", []) as Array).has("classic_10x10_hard"), "hard_10_unlocked_before_standard_clear")
 	var result := _success_result("m7_result_standard", "classic_10x10_standard", "commission_recover_supply", 3, 1)
 	var commit := adapter.apply_settlement(result)
 	_check(bool(commit.get("ok", false)) and str(commit.get("status", "")) == "committed", "standard_commit_failed")
@@ -98,8 +103,14 @@ func _test_meta_transactions_and_progression() -> void:
 	_check(bool(claim.get("ok", false)) and str(claim.get("status", "")) == "claimed", "achievement_claim_failed")
 	_check(str(adapter.claim_goal_reward("achievement", "achievement_critical_return").get("status", "")) == "duplicate_ignored", "achievement_claim_not_idempotent")
 
+	var hard_commit := adapter.apply_settlement(_success_result("m7_result_10_hard", "classic_10x10_hard", "commission_open_crates", 4, 3))
+	_check(bool(hard_commit.get("ok", false)) and str(hard_commit.get("status", "")) == "committed", "hard_10_commit_failed")
+	_check((adapter.get_summary().get("unlocked_map_ids", []) as Array).has("classic_13x13_normal"), "research_map_unlock_missing")
+
+	_check(not (adapter.get_summary().get("unlocked_map_ids", []) as Array).has("classic_13x13_hard"), "hard_13_unlocked_before_normal_clear")
 	adapter.apply_settlement(_success_result("m7_result_13_normal", "classic_13x13_normal", "commission_open_crates", 4, 3))
 	_check((adapter.get_summary().get("unlocked_map_ids", []) as Array).has("classic_13x13_hard"), "hard_13_unlock_missing")
+	_check(not (adapter.get_summary().get("unlocked_map_ids", []) as Array).has("classic_13x13_hell"), "hell_13_unlocked_before_hard_clear")
 	adapter.apply_settlement(_success_result("m7_result_13_hard", "classic_13x13_hard", "commission_open_crates", 4, 3))
 	_check((adapter.get_summary().get("unlocked_map_ids", []) as Array).has("classic_13x13_hell"), "hell_13_unlock_missing")
 

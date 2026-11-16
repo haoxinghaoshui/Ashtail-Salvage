@@ -1,6 +1,15 @@
 extends SceneTree
 
-const MetaProgressAdapterScript := preload("res://scripts/core/save/meta_progress_adapter.gd")
+class TerminalWriteFailure extends SaveAdapter:
+	var target_path := ""
+	var target_run_id := ""
+	var blocked := true
+
+	func save_json(data: Dictionary, path: String = M1_META_PROGRESS_PATH, normalize_meta_progress: bool = true) -> bool:
+		if blocked and path == target_path and data.get("run_receipts", {}).has(target_run_id):
+			last_error = "i3_terminal_meta_write_failure"
+			return false
+		return super.save_json(data, path, normalize_meta_progress)
 
 const PASS_MARKER := "I3_PRODUCTION_INPUT_JOURNEY=PASS"
 const FAIL_MARKER := "I3_PRODUCTION_INPUT_JOURNEY=FAIL"
@@ -10,6 +19,7 @@ const FRAME_STEP := 0.02
 
 var failures: Array[String] = []
 var evidence_rows: Array[Dictionary] = []
+var setup_exceptions: Array[String] = ["fixed seed", "isolated Z2 profile with matching scene/runtime/checkpoint authority"]
 var transition_measurements: Array[Dictionary] = []
 var evidence_contract := "I3 production main.tscn genuine-input success/save-retry journey"
 var evidence_dir := "user://tests/i3_production_input_journey"
@@ -17,7 +27,7 @@ var screenshot_count := 0
 var main: Node
 var run_scene: Node
 var journey_started_msec := 0
-var blocker_path := ""
+var terminal_write_failure: TerminalWriteFailure
 var require_screenshots := false
 var quit_scheduled := false
 
@@ -49,6 +59,9 @@ func _run() -> void:
 		return
 
 	await _configure_isolated_save_failure_fixture()
+	if terminal_write_failure == null:
+		_finish()
+		return
 	await _checkpoint("01_main_menu", "production entry ready")
 	_require(StringName(run_scene.get("screen_state")) == &"main_menu", "journey did not begin on the production main menu")
 	_require(_focus_name().begins_with("MainMenuEntry_deploy"), "main menu did not expose deploy as the default keyboard focus")
@@ -75,6 +88,11 @@ func _run() -> void:
 	var started := _status()
 	_require(int(run_scene.get("run_context").get("seed_value")) == FIXED_SEED, "fixed seed did not reach the authoritative run")
 	_require(Vector2i(started.get("position", Vector2i(-1, -1))) == Vector2i(2, 6), "seed-13 run did not start at the audited spawn")
+	var context: RunContext = run_scene.get("run_context")
+	context.z1_event_rooms[context.cell_key(Vector2i(3, 5))] = {"event_type": &"trader"}
+	setup_exceptions.append("legacy trader encounter at (3,5)")
+	terminal_write_failure.target_run_id = str(context.run_id)
+	_require(bool(run_scene.runtime_controller.checkpoint_service.load_checkpoint().get("can_simulate", false)), "input journey did not persist its admission")
 	await _checkpoint("03_run_spawn", "run admitted through deploy")
 
 	await _tap_key(KEY_M, "run.map_open")
@@ -214,13 +232,27 @@ func _run() -> void:
 	var result_snapshot: Dictionary = run_scene.get("run_context").get("result_snapshot")
 	_require(StringName(result_snapshot.get("outcome", &"")) == &"Extracted", "success journey did not settle as Extracted")
 	_require(result_panel.call("retry_save_allowed"), "isolated save blocker did not expose real save retry")
+	var runtime = run_scene.runtime_controller
+	var adapter = run_scene.meta_progress_adapter
+	var checkpoint_path: String = runtime.checkpoint_service.checkpoint_path
+	_require(str(runtime.last_meta_commit.get("status", "")) == "save_failed" and bool(runtime.last_meta_commit.get("durable_checkpoint", false)), "input journey did not fail specifically at terminal meta commit")
+	_require(runtime.persistence_error.is_empty() and FileAccess.file_exists(checkpoint_path), "terminal-only failure damaged admission/checkpoint persistence")
+	_require(not result_panel.call("discard_unsaved_allowed"), "durable terminal exposed unsaved discard")
+	var terminal_snapshot := result_snapshot.duplicate(true)
+	var before_retry: Dictionary = adapter.data.duplicate(true)
+	var before_meta_disk := FileAccess.get_file_as_string(adapter.active_meta_progress_path)
+	var before_checkpoint_disk := FileAccess.get_file_as_string(checkpoint_path)
 	await _checkpoint("17_result_save_failed", "successful extraction visible with save failure")
 	var retry_button := result_panel.get("retry_save_button") as Button
 	await _click_control(retry_button, "result.retry_while_blocked")
 	_require(result_panel.call("retry_save_allowed"), "blocked save retry incorrectly unlocked ordinary exits")
-	_require(DirAccess.remove_absolute(ProjectSettings.globalize_path(blocker_path)) == OK, "could not release the isolated save blocker")
+	_require(adapter.data == before_retry and FileAccess.get_file_as_string(adapter.active_meta_progress_path) == before_meta_disk and FileAccess.get_file_as_string(checkpoint_path) == before_checkpoint_disk, "blocked input retry mutated durable progress")
+	terminal_write_failure.blocked = false
 	await _click_control(retry_button, "result.retry_after_release")
 	_require(await _wait_until(func() -> bool: return bool(result_panel.call("normal_exit_allowed")), 4.0), "real retry input did not persist the same terminal snapshot")
+	_require(runtime.context.result_snapshot == terminal_snapshot and runtime.persistence_error.is_empty(), "successful input retry changed the result or retained a storage block")
+	_require(adapter.data.get("run_receipts", {}).has(str(context.run_id)) and adapter.data.get("admission", {}).is_empty(), "successful input retry did not settle durable admission")
+	_require(not FileAccess.file_exists(checkpoint_path) and not FileAccess.file_exists(checkpoint_path + ".bak"), "successful input retry left a resumable terminal")
 	await _checkpoint("18_result_saved", "same terminal snapshot persisted after retry")
 	var return_main := result_panel.get("return_main_button") as Button
 	_require(return_main != null and return_main.visible and not return_main.disabled, "saved result did not expose return-to-main")
@@ -231,18 +263,39 @@ func _run() -> void:
 
 
 func _configure_isolated_save_failure_fixture() -> void:
-	var fixture_root := "%s/save_retry" % evidence_dir
-	var blocked_save_path := "%s/meta_progress.json" % fixture_root
-	blocker_path = blocked_save_path
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(fixture_root))
-	if FileAccess.file_exists(blocker_path):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(blocker_path))
-	_require(DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(blocker_path)) == OK, "could not create isolated save blocker directory")
-	var adapter = MetaProgressAdapterScript.new()
-	adapter.set_active_profile_path(blocked_save_path, "i3_production_input_journey")
-	run_scene.get("runtime_controller").bind_meta_progress_adapter(adapter)
-	run_scene.set("meta_progress_adapter", adapter)
+	if not _configure_isolated_z2_profile("input_journey"):
+		return
+	terminal_write_failure = TerminalWriteFailure.new()
+	terminal_write_failure.target_path = run_scene.meta_progress_adapter.active_meta_progress_path
+	run_scene.meta_progress_adapter.save_adapter = terminal_write_failure
+	setup_exceptions.append("targeted terminal meta write failure; admission and run checkpoints use real storage")
 	await process_frame
+
+
+func _configure_isolated_z2_profile(label: String) -> bool:
+	# Keep the scene's existing adapter/manager identities for every consumer.
+	# Reinitialize checkpoint authority before any player input or admission.
+	var adapter = run_scene.meta_progress_adapter
+	var manager = run_scene.save_manager
+	var runtime = run_scene.runtime_controller
+	var profile_id := "i3_%s_%d" % [label, Time.get_ticks_usec()]
+	var selected: Dictionary = manager.switch_profile(profile_id)
+	var configured: Dictionary = manager.configure_meta_adapter(adapter)
+	var initialized: Dictionary = adapter.initialize_z2_profile(runtime.Z2_CONTENT_VERSION)
+	_require(bool(selected.get("ok", false)) and bool(configured.get("ok", false)) and bool(initialized.get("ok", false)), label + ": isolated Z2 profile initialization failed")
+	if not bool(initialized.get("ok", false)):
+		return false
+	adapter.data["tutorial_completed"] = true
+	adapter.data["unlocked_map_ids"] = ["tutorial_5x5", "classic_7x7_simple"]
+	_require(adapter.save(), label + ": post-tutorial fixture did not save")
+	setup_exceptions.append("%s: tutorial_completed=true; unlocked_map_ids=[tutorial_5x5,classic_7x7_simple]; profile=%s" % [label, profile_id])
+	var session: Dictionary = runtime.initialize_z2_session(manager)
+	_require(bool(session.get("ok", false)), label + ": checkpoint session initialization failed")
+	if not bool(session.get("ok", false)):
+		return false
+	_require(runtime.meta_progress_adapter == adapter and runtime.checkpoint_service.meta_adapter == adapter, label + ": persistence authorities use different adapters")
+	_require(runtime.checkpoint_service.checkpoint_path == manager.meta_progress_path().get_base_dir().path_join("run_checkpoint.json"), label + ": checkpoint path does not match selected profile")
+	return runtime.persistence_error.is_empty()
 
 
 func _enter_deploy_through_cave_transition(checkpoint_id: String) -> bool:
@@ -331,6 +384,10 @@ func _enter_deploy_through_cave_transition(checkpoint_id: String) -> bool:
 
 
 func _set_only_fixed_seed(deploy_page: Control) -> void:
+	var snapshot: Dictionary = deploy_page.get("current_snapshot").duplicate(true)
+	snapshot["meta_progress_summary"] = run_scene.get("runtime_controller").call("meta_progress_summary")
+	deploy_page.call("apply_snapshot", snapshot)
+	deploy_page.call("_on_map_requested", &"classic_7x7_simple")
 	var current_model: Dictionary = deploy_page.get("current_model")
 	var config: Dictionary = (current_model.get("config", {}) as Dictionary).duplicate(true)
 	config["seed_value"] = FIXED_SEED
@@ -664,7 +721,7 @@ func _first_interactable_position(kind: StringName) -> Vector2:
 func _first_enabled_button(parent: Control) -> Button:
 	if parent == null:
 		return null
-	for child in parent.get_children():
+	for child in parent.find_children("*", "Button", true, false):
 		if child is Button and (child as Button).visible and not (child as Button).disabled:
 			return child as Button
 	return null
@@ -754,8 +811,12 @@ func _evidence_snapshot(action: String, kind: String) -> Dictionary:
 		"terminal_reason_code": String(result_snapshot.get("terminal_reason_code", &"")),
 		"last_command_status": String(last_command.get("status", &"")),
 		"last_command_reason": String(last_command.get("reason", &"")),
+		"event_type": String((status.get("event_state", {}) as Dictionary).get("event_type", "")),
+		"event_completed": bool((status.get("event_state", {}) as Dictionary).get("completed", false)),
 		"backpack_used": int(status.get("backpack_used", 0)),
 		"backpack_capacity": int(status.get("backpack_capacity", 0)),
+		"persistence_error": run_scene.runtime_controller.persistence_error.duplicate(true) if run_scene != null else {},
+		"meta_commit_status": str(run_scene.runtime_controller.last_meta_commit.get("status", "")) if run_scene != null else "",
 	}
 
 
@@ -792,7 +853,7 @@ func _write_evidence() -> String:
 		"fixed_seed": FIXED_SEED,
 		"input_transport": "Input.parse_input_event",
 		"forbidden_shortcuts_used": false,
-		"direct_setup_exceptions": ["fixed seed", "isolated save adapter/path"],
+		"direct_setup_exceptions": setup_exceptions,
 		"duration_msec": Time.get_ticks_msec() - journey_started_msec,
 		"screenshot_count": screenshot_count,
 		"csv_evidence": csv_absolute_path,
@@ -846,8 +907,6 @@ func _require(condition: bool, message: String) -> void:
 
 
 func _finish() -> void:
-	if blocker_path != "" and (FileAccess.file_exists(blocker_path) or DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(blocker_path))):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(blocker_path))
 	if require_screenshots:
 		_require(screenshot_count >= 13, "dynamic journey emitted fewer than 13 screenshots")
 	var checkpoint_count := 0

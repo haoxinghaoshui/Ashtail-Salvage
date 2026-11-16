@@ -207,6 +207,9 @@ static func item_stack_key(item: Dictionary) -> String:
 	for transient_key in [
 		"instance_id",
 		"instance_ids",
+		"origin_run_id",
+		"origin_action_id",
+		"acquired_sequence",
 		"quantity",
 		"stack_count",
 		"count",
@@ -282,10 +285,20 @@ static func _rarity_label(rarity: String) -> String:
 
 static func _effect_kind_label(effect_kind: String) -> String:
 	match effect_kind:
-		"heal":
+		"heal", "heal_below_half":
 			return "恢复生命"
-		"pressure_down":
+		"pressure_down", "pressure_reduce":
 			return "降低压力"
+		"heal_pressure_reduce":
+			return "恢复生命并降低压力"
+		"salvage_capacity":
+			return "增加抢救容量"
+		"safe_yield":
+			return "锁定安全收益"
+		"scan", "scan_two_away":
+			return "探查房间"
+		"mine_immunity", "mine_immunity_pressure":
+			return "抵消下次触雷伤害"
 		"power_up":
 			return "提升战力"
 		_:

@@ -153,8 +153,8 @@ func _run() -> void:
 	var exit_body := shell.get("exit_confirm_body") as Label
 	_require(exit_body != null, "exit confirmation body is missing")
 	if exit_body != null:
-		_require(exit_body.text.contains("当前不保证重新启动后能够恢复本次探索"), "exit copy still implies cross-process recovery")
-		_require(not exit_body.text.contains("下次进入后应从出发探索页继续"), "legacy recovery promise remains in exit copy")
+		_require(exit_body.text.contains("保存成功后退出") and exit_body.text.contains("再次启动可继续探索"), "exit copy must require durable save and describe resume")
+		_require(exit_body.text.contains("计时不会推进") and exit_body.text.contains("不执行放弃或结算"), "exit copy must explain offline freeze without abandonment")
 
 	canvas.queue_free()
 	await process_frame

@@ -13,6 +13,7 @@ const Art25ContentAssetContractScript := preload("res://scripts/presentation/art
 const LongTermContentCardViewScript := preload("res://scripts/ui/long_term/long_term_content_card_view.gd")
 const CharacterPresentationCatalogScript := preload("res://scripts/presentation/character/character_presentation_catalog.gd")
 const MetaActionRequestIdScript := preload("res://scripts/core/progression/meta_action_request_id.gd")
+const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
 
 signal navigation_intent_requested(intent: Dictionary)
 signal meta_action_requested(action: Dictionary)
@@ -48,7 +49,7 @@ const PAGE_COPY := {
 	"codex/collectible": "按曾经成功回收的藏品登记，出售实体不会抹除发现。",
 	"codex/equipment": "记录已经接触的装备；本页不改变出勤配置。",
 	"codex/consumable": "记录已经接触的补给；本页不会消耗仓库物品。",
-	"codex/event": "归档已经完成的旅商、骰子局、祭坛和机关遭遇。",
+	"codex/event": "归档在探索中登记的事件。",
 	"codex/rule": "显示已公开或通过研究解读的真实游戏规则。",
 	"codex/lore": "保存世界背景与文本线索；未知条目维持未发现状态。",
 	"research/unlock_interface": "沿前置关系逐项研究；节点使用现有课题条件和完成效果。",
@@ -126,6 +127,7 @@ var meta_request_sequence := 0
 var profile_level_label: Label
 var profile_role_label: Label
 var profile_exp_value_label: Label
+var profile_exp_progress_label: Label
 var profile_stat_labels: Array[Label] = []
 var character_texture: TextureRect
 var character_frames: Array[Texture2D] = []
@@ -221,6 +223,9 @@ func apply_meta_action_result(envelope: Dictionary) -> bool:
 		_refresh_content()
 		if content_record_state_label != null:
 			content_record_state_label.text = _meta_result_player_message(envelope)
+			_apply_scaled_label_font(content_record_state_label)
+		if bool(envelope.get("ok", false)) and StringName(envelope.get("status", &"")) == &"claimed":
+			_show_claim_progress(envelope.get("result", {}))
 		return true
 	var request_id := str(envelope.get("request_id", ""))
 	var background_value: Variant = pending_background_meta_actions.get(request_id, {})
@@ -439,6 +444,7 @@ func open_notification(notification: Dictionary) -> Dictionary:
 	var card_found := card_id == "" or card_index >= 0
 	if card_index >= 0:
 		_select_long_term_card(card_index, true)
+		call_deferred("_reveal_notification_card", long_term_card_buttons[card_index])
 	elif not current_content_cards.is_empty():
 		_select_long_term_card(0, true)
 	if not card_found:
@@ -731,8 +737,9 @@ func _build_profile_column() -> void:
 	character_texture = _add_texture(self, "LongTermPlayerSprite", LongTermLayoutContractScript.PROFILE_CHARACTER, initial, true)
 	profile_role_label = _add_label(self, "LongTermProfileRole", LongTermLayoutContractScript.PROFILE_ROLE, "回收员", 18, Color(0.95, 0.83, 0.57), HORIZONTAL_ALIGNMENT_CENTER)
 	profile_level_label = _add_label(self, "LongTermProfileLevel", LongTermLayoutContractScript.PROFILE_LEVEL, "等级 --", 23, Color(0.97, 0.74, 0.30), HORIZONTAL_ALIGNMENT_CENTER, &"readable")
-	_add_label(self, "LongTermProfileExpLabel", LongTermLayoutContractScript.PROFILE_EXP_LABEL, "经验", 14, Color(0.78, 0.68, 0.51), HORIZONTAL_ALIGNMENT_LEFT, &"readable")
+	_add_label(self, "LongTermProfileExpLabel", LongTermLayoutContractScript.PROFILE_EXP_LABEL, "累计经验", 14, Color(0.78, 0.68, 0.51), HORIZONTAL_ALIGNMENT_LEFT, &"readable")
 	profile_exp_value_label = _add_label(self, "LongTermProfileExpValue", LongTermLayoutContractScript.PROFILE_EXP_VALUE, "0", 14, Color(0.88, 0.81, 0.66), HORIZONTAL_ALIGNMENT_RIGHT, &"readable")
+	profile_exp_progress_label = _add_label(self, "LongTermProfileExpProgress", LongTermLayoutContractScript.PROFILE_EXP_PROGRESS, "", 13, Color(0.48, 0.88, 0.81), HORIZONTAL_ALIGNMENT_RIGHT, &"readable")
 	profile_stat_labels.clear()
 	var stat_names := ["探索", "撤离率", "档案", "长期金币"]
 	for index in range(stat_names.size()):
@@ -812,9 +819,12 @@ func _switch_sequence_is_current(generation: int) -> bool:
 
 
 func _apply_module_immediately(module_id: StringName) -> void:
+	if switch_running:
+		lifecycle_generation += 1
 	if module_tween != null and module_tween.is_valid():
 		module_tween.kill()
 	_apply_module_content(module_id)
+	requested_module_id = displayed_module_id
 	module_group.modulate = Color.WHITE
 	module_group.scale = Vector2.ONE
 	transition_state = STATE_OPEN
@@ -1006,11 +1016,12 @@ func _refresh_profile() -> void:
 	profile_role_label.text = str(runtime.get("current_title", titles[titles.size() - 1] if not titles.is_empty() else "回收员"))
 	profile_exp_value_label.text = str(maxi(0, int(runtime.get("profile_exp", 0))))
 	var next_level_exp := int(runtime.get("next_level_exp", -1))
-	profile_exp_value_label.tooltip_text = (
-		"距离下一等级还需 %d 经验" % int(runtime.get("exp_to_next_level", 0))
+	profile_exp_progress_label.text = (
+		"距 Lv.%d 还差 %d XP" % [int(runtime.get("profile_level", 1)) + 1, int(runtime.get("exp_to_next_level", 0))]
 		if next_level_exp >= 0
-		else "已达到当前资历上限"
+		else "已达 Demo 上限"
 	)
+	profile_exp_value_label.tooltip_text = profile_exp_progress_label.text
 	var values := [
 		_format_number(int(runtime.get("run_count", 0))),
 		"%d%%" % int(runtime.get("extract_rate_percent", 0)),
@@ -1363,6 +1374,11 @@ func _restore_content_scroll(group_key: String, scroll_vertical: int) -> void:
 	set_meta("last_scroll_restore_value", content_list_scroll.scroll_vertical)
 
 
+func _reveal_notification_card(button: Button) -> void:
+	if is_instance_valid(button) and button.button_pressed and long_term_card_buttons.has(button):
+		content_list_scroll.ensure_control_visible(button)
+
+
 func _restore_navigation_focus(state: Dictionary) -> void:
 	if not page_active or not is_visible_in_tree():
 		return
@@ -1543,7 +1559,7 @@ func _meta_result_player_message(envelope: Dictionary) -> String:
 	var status := StringName(envelope.get("status", result.get("status", &"unknown")))
 	if bool(envelope.get("ok", result.get("ok", false))):
 		match status:
-			&"claimed": return "奖励已领取并存入基地档案。"
+			&"claimed": return "奖励已领取"
 			&"completed": return "研究完成，相关内容已经开放。"
 			&"talent_unlocked": return "天赋已解锁，将从之后确认出发的新一局生效。"
 			&"talent_already_unlocked": return "该天赋已经解锁，无需重复提交。"
@@ -1564,6 +1580,23 @@ func _meta_result_player_message(envelope: Dictionary) -> String:
 		&"request_id_conflict": return "操作校验未通过，本次变更未发生。"
 		&"meta_progress_adapter_missing": return "基地档案暂不可用。"
 	return "本次操作未完成，请稍后重试。"
+
+
+func _show_claim_progress(result: Dictionary) -> void:
+	if content_record_facts_label == null:
+		return
+	var feedback := PackedStringArray()
+	var reward: Dictionary = result.get("reward", {})
+	var experience := int(reward.get("exp", 0))
+	if experience > 0:
+		feedback.append("本次 +%d 资历经验" % experience)
+	for map_id in result.get("new_unlock_ids", []):
+		var map := M7ContentCatalogScript.map_definition_exact(str(map_id))
+		if not map.is_empty():
+			feedback.append("开放 %s" % str(map["display_name"]))
+	if not feedback.is_empty():
+		content_record_facts_label.text += "\n• " + " · ".join(feedback)
+		_apply_scaled_label_font(content_record_facts_label)
 
 
 func _add_content_page_button(node_name: String, rect: Rect2, text: String, page_delta: int) -> Button:
@@ -1630,6 +1663,9 @@ func _mark_current_module_viewed(module_id: StringName) -> void:
 
 func _grab_long_term_initial_focus() -> void:
 	if not page_active or not is_visible_in_tree():
+		return
+	var focus := get_viewport().gui_get_focus_owner()
+	if focus != null and is_ancestor_of(focus):
 		return
 	var selected := tab_buttons.get(selected_module_id, null) as Button
 	if selected != null:

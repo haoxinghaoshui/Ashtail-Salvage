@@ -4,6 +4,9 @@ class_name G41WorldObjectProjection
 const ItemVisualCatalog := preload("res://scripts/presentation/art24/art24_item_visual_catalog.gd")
 const AssetContract := preload("res://scripts/presentation/art24/art24_in_run_asset_contract.gd")
 const PresentationDescriptor := preload("res://scripts/gameplay/runtime/g41_world_object_presentation_descriptor.gd")
+const Z1Events := preload("res://scripts/core/content/z1_event_catalog.gd")
+const EventRoomCatalog := preload("res://scripts/presentation/z1/z1_event_room_catalog.gd")
+const EventRoomState := preload("res://scripts/presentation/z1/z1_event_room_state.gd")
 
 # Read-only projection from public run snapshots into stable room presentation
 # descriptors.  This layer never resolves interactions, moves ledger items, or
@@ -49,6 +52,7 @@ static func build(snapshot: Dictionary, combat_snapshot: Dictionary = {}) -> Dic
 	var room_pos: Vector2i = snapshot.get("position", snapshot.get("player_pos", Vector2i.ZERO))
 	var room_type := StringName(snapshot.get("current_room", &"Unknown"))
 	var room_key := "%d,%d" % [room_pos.x, room_pos.y]
+	var event_room := EventRoomCatalog.from_snapshot(snapshot)
 	var world_objects: Array[Dictionary] = []
 	var chest_contents: Array[Dictionary] = []
 	var room_floor_items := _dictionary_array(snapshot.get("room_floor_items", []))
@@ -59,29 +63,30 @@ static func build(snapshot: Dictionary, combat_snapshot: Dictionary = {}) -> Dic
 		# must not also become floor entities with a second interaction anchor.
 		chest_contents = room_floor_items
 	else:
-		var special_projection := _special_room_projection(snapshot, room_type, room_key)
+		var special_projection := _special_room_projection(snapshot, room_type, room_key, event_room)
 		if not special_projection.is_empty():
 			world_objects.append(special_projection)
 		for item in room_floor_items:
-			world_objects.append(_ground_loot_projection(item, room_type))
+			world_objects.append(_ground_loot_projection(item, room_type, event_room))
 
 	return {
 		"projection_contract": &"i3r.world_object_projection.v2",
 		"room_key": room_key,
 		"room_type": room_type,
+		"event_room": event_room,
 		"world_objects": world_objects,
 		"chest_contents": chest_contents,
-		"doors": _door_projections(snapshot, combat_snapshot, room_pos, room_key),
-		"occluders": _occluder_projections(room_type, room_key),
+		"doors": _door_projections(snapshot, combat_snapshot, room_pos, room_key, not event_room.is_empty()),
+		"occluders": _occluder_projections(room_type, room_key, not event_room.is_empty()),
 		"read_only": true,
 		"authority": &"public_snapshot_only",
 	}
 
 
-static func _special_room_projection(snapshot: Dictionary, room_type: StringName, room_key: String) -> Dictionary:
+static func _special_room_projection(snapshot: Dictionary, room_type: StringName, room_key: String, event_room: Dictionary) -> Dictionary:
 	match room_type:
 		&"Event":
-			return _event_projection(snapshot, room_key)
+			return _event_projection(snapshot, room_key, event_room)
 		&"Mine":
 			return _mine_projection(snapshot, room_key)
 		&"Exit":
@@ -89,24 +94,26 @@ static func _special_room_projection(snapshot: Dictionary, room_type: StringName
 	return {}
 
 
-static func _event_projection(snapshot: Dictionary, room_key: String) -> Dictionary:
+static func _event_projection(snapshot: Dictionary, room_key: String, event_room: Dictionary) -> Dictionary:
 	var event_state: Dictionary = snapshot.get("event_state", {})
 	var encounter_view: Dictionary = snapshot.get("encounter_view_model", {})
 	var encounter_state: Dictionary = encounter_view.get("state", {})
 	var event_type := StringName(event_state.get("event_type", encounter_view.get("encounter_type", &"trader")))
 	var completed := bool(event_state.get("completed", encounter_state.get("completed", StringName(encounter_state.get("state", &"available")) == &"completed")))
-	var title := _event_title(event_type)
-	return _descriptor({
+	var title := String(event_state.get("player_title", _event_title(event_type)))
+	var is_z1 := Z1Events.number(event_type) > 0
+	var projection := {
 		"projection_id": "event:%s" % room_key,
 		"interaction_kind": &"event",
 		"local_pos": EVENT_LOCAL_POS,
 		"ground_anchor_local": EVENT_BADGE_ANCHOR,
-		"display_size_local": Vector2.ONE * (48.0 / 560.0),
+		"display_size_local": Vector2.ONE * ((84.0 if is_z1 else 48.0) / 560.0),
+		"pivot_normalized": Vector2(0.5, 0.9) if is_z1 else Vector2(0.5, 0.5),
 		"interaction_radius": SPECIAL_INTERACTION_RADIUS,
 		"body_rect": _centered_rect(EVENT_BADGE_ANCHOR, Vector2(0.085, 0.085)),
 		"context_anchor_local": EVENT_BADGE_ANCHOR + Vector2(0.0, -0.09),
 		"visual_state": &"completed" if completed else &"available",
-		"visual_key": StringName("ui.art25.long_term.event.%s" % String(event_type)),
+		"visual_key": StringName("z1.event.e%02d" % Z1Events.number(event_type)) if is_z1 else StringName("ui.art25.long_term.event.%s" % String(event_type)),
 		"depth_key": &"world.interactable.event",
 		# A completed event remains inspectable, but display_only prevents a new
 		# event command or a second settlement.
@@ -115,12 +122,39 @@ static func _event_projection(snapshot: Dictionary, room_key: String) -> Diction
 		"payload": {
 			"room_key": room_key,
 			"event_type": event_type,
+			"event_icon_asset_id": StringName("z1.event.e%02d" % Z1Events.number(event_type)) if is_z1 else &"",
 			"completed": completed,
 			"display_only": completed,
 			"display_title": title,
-			"summary": "已经处理，不会重复结算。" if completed else "靠近后可查看处理方式。",
+			"summary": "已经处理，不会重复结算。" if completed else String(event_state.get("description", "靠近后可查看处理方式。")),
+			"last_result": event_state.get("last_result", {}),
 		},
-	})
+	}
+	if event_room.is_empty():
+		return _descriptor(projection)
+	var room_pos: Vector2i = snapshot.get("position", snapshot.get("player_pos", Vector2i.ZERO))
+	var state := EventRoomState.describe(event_type, event_state, room_pos)
+	var markers: Dictionary = state["markers"]
+	var use_open_art := bool(markers.get("cabinet_open", false)) or (event_type == &"z1_event_e24" and not bool(markers.get("cage_locked", false)))
+	var open_path := String(event_room.get("station_open_path", ""))
+	var opened := use_open_art and not open_path.is_empty()
+	var station_size := Vector2(event_room.get("station_open_size" if opened else "station_size", Vector2.ZERO))
+	var station_anchor := Vector2(event_room["station_anchor"])
+	var payload: Dictionary = projection["payload"]
+	payload["event_room_id"] = event_room["id"]
+	payload["station_texture_path"] = open_path if opened else event_room["station_path"]
+	payload["station_state"] = state["state_id"]
+	payload["station_markers"] = markers
+	payload["station_stock"] = state.get("stock", [])
+	projection["local_pos"] = event_room["interaction_pos"]
+	projection["ground_anchor_local"] = station_anchor
+	projection["display_size_local"] = station_size
+	projection["pivot_normalized"] = event_room.get("station_open_pivot" if opened else "station_pivot", Vector2(0.5, 1.0))
+	projection["context_anchor_local"] = station_anchor - Vector2(0.0, station_size.y + 0.016)
+	projection["body_rect"] = event_room["body_rect"]
+	projection["visual_key"] = StringName("z1.room.%s.station" % event_room["id"])
+	projection["enabled"] = not bool(markers.get("cage_locked", false))
+	return _descriptor(projection)
 
 
 static func _mine_projection(snapshot: Dictionary, room_key: String) -> Dictionary:
@@ -248,9 +282,9 @@ static func _chest_projection(snapshot: Dictionary, room_key: String) -> Diction
 	})
 
 
-static func _ground_loot_projection(item: Dictionary, room_type: StringName) -> Dictionary:
+static func _ground_loot_projection(item: Dictionary, room_type: StringName, event_room: Dictionary) -> Dictionary:
 	var instance_id := String(item.get("instance_id", "missing_instance"))
-	var local_pos := _loot_position_for(instance_id, room_type)
+	var local_pos := _loot_position_for(instance_id, room_type, event_room)
 	var item_id := String(item.get("item_id", item.get("definition_id", "回收物")))
 	return _descriptor({
 		"projection_id": instance_id,
@@ -268,11 +302,11 @@ static func _ground_loot_projection(item: Dictionary, room_type: StringName) -> 
 	})
 
 
-static func _door_projections(snapshot: Dictionary, combat_snapshot: Dictionary, room_pos: Vector2i, room_key: String) -> Array[Dictionary]:
+static func _door_projections(snapshot: Dictionary, combat_snapshot: Dictionary, room_pos: Vector2i, room_key: String, dedicated_event_room: bool) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var width := int(snapshot.get("width", 0))
 	var height := int(snapshot.get("height", 0))
-	var room_visual_token := _door_room_visual_token(StringName(snapshot.get("current_room", &"Normal")))
+	var room_visual_token := "normal" if dedicated_event_room else _door_room_visual_token(StringName(snapshot.get("current_room", &"Normal")))
 	var run_start_config: Dictionary = snapshot.get("run_start_config", {})
 	var requires_revealed := bool(snapshot.get("move_requires_revealed", run_start_config.get("move_requires_revealed", false)))
 	var combat_restricted := bool(combat_snapshot.get("door_locked", false))
@@ -338,7 +372,7 @@ static func room_floor_interior() -> Rect2:
 	return Rect2(top_left, bottom_right - top_left)
 
 
-static func room_solid_rects(room_type: StringName) -> Array[Rect2]:
+static func room_solid_rects(room_type: StringName, event_type: StringName = &"") -> Array[Rect2]:
 	var result: Array[Rect2] = []
 	match room_type:
 		&"Monster":
@@ -346,15 +380,20 @@ static func room_solid_rects(room_type: StringName) -> Array[Rect2]:
 		&"Normal", &"Spawn", &"Chest":
 			result.assign(NORMAL_PROP_RECTS)
 		&"Event":
-			result.assign(EVENT_PROP_RECTS)
+			var event_room := EventRoomCatalog.room(event_type)
+			if event_room.is_empty():
+				result.assign(EVENT_PROP_RECTS)
+			else:
+				result.append(Rect2(event_room["body_rect"]))
 	for wall: Rect2 in ROOM_WALL_RECTS:
 		result.append(wall)
 	return result
 
 
-static func _occluder_projections(room_type: StringName, room_key: String) -> Array[Dictionary]:
+static func _occluder_projections(room_type: StringName, room_key: String, dedicated_event_room: bool) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	var rects := room_solid_rects(room_type)
+	var rects: Array[Rect2] = []
+	rects.assign(ROOM_WALL_RECTS if dedicated_event_room else room_solid_rects(room_type))
 	for index in range(rects.size()):
 		var rect := rects[index]
 		var is_altar := room_type == &"Monster" and index == 0
@@ -371,7 +410,7 @@ static func _occluder_projections(room_type: StringName, room_key: String) -> Ar
 		"body_rect": rect,
 		"context_anchor_local": rect.position,
 		"visual_state": &"foreground",
-		"visual_key": StringName("visual.art24.room.%s" % _door_room_visual_token(room_type)),
+		"visual_key": EventRoomCatalog.SHELL_ASSET_ID if dedicated_event_room else StringName("visual.art24.room.%s" % _door_room_visual_token(room_type)),
 		"depth_key": &"world.foreground_occluder" if is_altar else &"world.room_body",
 		"enabled": false,
 		"prompt_text": "",
@@ -380,6 +419,7 @@ static func _occluder_projections(room_type: StringName, room_key: String) -> Ar
 			"depth_split_local_y": rect.end.y,
 			"masks_combat_geometry": is_altar,
 			"source": &"room_plate_crop",
+			"texture_path": EventRoomCatalog.SHELL_PATH if dedicated_event_room else "",
 		},
 		}))
 	return result
@@ -403,26 +443,40 @@ static func _public_cell_at(cells: Array, target: Vector2i) -> Dictionary:
 	return {}
 
 
-static func _loot_position_for(instance_id: String, room_type: StringName) -> Vector2:
+static func _loot_position_for(instance_id: String, room_type: StringName, event_room: Dictionary) -> Vector2:
 	var hash_value := absi(instance_id.hash())
 	var column := hash_value % 4
 	var row := (hash_value / 4) % 3
 	var column_x := 0.38 + float(column) * 0.085
 	var clear_rows: Array[Vector2] = []
 	var solids := room_solid_rects(room_type)
+	if not event_room.is_empty():
+		solids.assign(ROOM_WALL_RECTS)
+		solids.append(Rect2(event_room["body_rect"]))
+		var drop_anchor := Vector2(event_room["loot_anchor"])
+		var walkable_floor := room_floor_interior().grow(-G41RuntimeLayout.PLAYER_BODY_RADIUS)
+		for offset_y in [0.0, 0.067, -0.067]:
+			for offset_x in [0.0, -0.083, 0.083, -0.166, 0.166]:
+				var candidate := drop_anchor + Vector2(offset_x, offset_y)
+				if walkable_floor.has_point(candidate) and _is_clear_loot_position(candidate, solids):
+					clear_rows.append(candidate)
+		if not clear_rows.is_empty():
+			return clear_rows[hash_value % clear_rows.size()]
 	for row_y in [0.58, 0.655, 0.73, 0.80, 0.27]:
 		var candidate := Vector2(column_x, row_y)
-		var clear := true
-		for solid in solids:
-			if solid.grow(G41RuntimeLayout.PLAYER_BODY_RADIUS).has_point(candidate):
-				clear = false
-				break
-		if clear:
+		if _is_clear_loot_position(candidate, solids):
 			clear_rows.append(candidate)
 	# Every admitted room provides at least three reachable rows in these four
 	# columns. Preserve deterministic instance placement without dropping items
 	# onto a tabletop or inside the altar's player-clearance footprint.
 	return clear_rows[row % clear_rows.size()]
+
+
+static func _is_clear_loot_position(candidate: Vector2, solids: Array[Rect2]) -> bool:
+	for solid in solids:
+		if solid.grow(G41RuntimeLayout.PLAYER_BODY_RADIUS).has_point(candidate):
+			return false
+	return true
 
 
 static func _centered_rect(center: Vector2, size: Vector2) -> Rect2:
