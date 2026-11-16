@@ -9,6 +9,7 @@ const RunContentCatalogScript := preload("res://scripts/core/run/run_content_cat
 const RunTextCatalogScript := preload("res://scripts/core/run/run_text_catalog.gd")
 const Z1EventCatalogScript := preload("res://scripts/core/content/z1_event_catalog.gd")
 const Z1EventRuntimeScript := preload("res://scripts/core/run/z1_event_runtime.gd")
+const Z2Events := preload("res://scripts/core/run/z2_event_runtime.gd")
 
 const DICE_BET := RunBalanceCatalogScript.DICE_BET
 const RESET_SPRING_ID := "sp_reset_spring"
@@ -18,6 +19,9 @@ const VALVE_CORE_ID := "sp_depressurized_valve_core"
 static func get_event_type(context: RunContext, pos: Vector2i) -> StringName:
 	if context == null:
 		return &"trader"
+	if Z2Events.applies_to(context):
+		# The authoritative content pool assigns the event during atomic entry.
+		return Z2Events.stored_event_type(context, pos)
 	var event_hash := pos.x * 73 + pos.y * 137 + context.seed_value * 31
 	var stored: Dictionary = context.z1_event_rooms.get(context.cell_key(pos), {})
 	if stored.has("event_type"):
@@ -38,6 +42,8 @@ static func get_event_type(context: RunContext, pos: Vector2i) -> StringName:
 
 static func get_event_state(context: RunContext, pos: Vector2i) -> Dictionary:
 	var event_type := get_event_type(context, pos)
+	if Z2Events.applies_to(context):
+		return Z2Events.public_state(context, pos, str(event_type))
 	if context != null and Z1EventCatalogScript.number(event_type) > 0:
 		return Z1EventRuntimeScript.public_state(context, pos, event_type)
 	var completed := context != null and context.interacted_cells.has(context.cell_key(pos))
@@ -84,6 +90,8 @@ static func trap_threshold(context: RunContext, pos: Vector2i) -> int:
 
 
 static func get_event_options(context: RunContext, pos: Vector2i, event_type: StringName, completed: bool) -> Array[Dictionary]:
+	if Z2Events.applies_to(context):
+		return Z2Events.public_state(context, pos, str(event_type)).get("options", [])
 	if context != null and Z1EventCatalogScript.number(event_type) > 0:
 		return Z1EventRuntimeScript.options(context, pos, event_type)
 	if completed:
@@ -239,6 +247,14 @@ static func _material_options(context: RunContext, item_id: String, option_id: S
 
 static func execute_default(context: RunContext, pos: Vector2i, fail_authority = null) -> Dictionary:
 	var event_type := get_event_type(context, pos)
+	if Z2Events.applies_to(context):
+		var state := Z2Events.public_state(context, pos, str(event_type))
+		if not state.get("ok", false):
+			return state
+		if state.get("requires_prepare", false):
+			return execute_option(context, pos, &"prepare", fail_authority)
+		context.event_state = state
+		return {"ok": true, "event_type": event_type, "stage_completed": false, "stage_facts": [], "completed": state.get("completed", false), "message": "请选择服务。"}
 	if context != null and Z1EventCatalogScript.number(event_type) > 0:
 		for option in Z1EventRuntimeScript.options(context, pos, event_type):
 			if bool(option.get("enabled", false)) and StringName(option.get("id", &"leave")) != &"leave":
@@ -261,6 +277,8 @@ static func execute_option(context: RunContext, pos: Vector2i, option_id: String
 		return {"ok": false, "message": "No active run."}
 	var key := context.cell_key(pos)
 	var event_type := get_event_type(context, pos)
+	if Z2Events.applies_to(context):
+		return Z2Events.choose(context, pos, str(event_type), str(option_id), payload, Z2Events.hooks_for(fail_authority, context, pos, str(event_type)))
 	if Z1EventCatalogScript.number(event_type) > 0:
 		return Z1EventRuntimeScript.execute(context, pos, event_type, option_id, payload, fail_authority)
 	if context.interacted_cells.has(key):
@@ -363,6 +381,16 @@ static func _legacy_action_receipt(result: Dictionary, hp_delta: int, pressure_d
 	if result.has("pressure_delta") or pressure_delta != 0:
 		receipt["pressure_delta"] = pressure_delta
 	return receipt
+
+
+# Trusted room-entry hook; callers must already be inside their atomic candidate.
+# It deliberately has no UI command alias that could supply a new event identity.
+static func prepare_z2_event(context: RunContext, pos: Vector2i, event_id: String, authority = null, payload: Dictionary = {}) -> Dictionary:
+	return Z2Events.prepare_event(context, pos, event_id, payload, Z2Events.hooks_for(authority, context, pos, event_id))
+
+
+static func select_z2_event(context: RunContext, pos: Vector2i) -> Dictionary:
+	return Z2Events.select_event(context, pos)
 
 
 static func cage_state(context: RunContext, pos: Vector2i) -> Dictionary:

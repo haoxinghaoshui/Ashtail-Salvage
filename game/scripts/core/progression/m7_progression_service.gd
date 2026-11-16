@@ -5,6 +5,10 @@ const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_c
 const M7TalentCatalogScript := preload("res://scripts/core/progression/m7_talent_catalog.gd")
 const PlayerAppearanceConfigScript := preload("res://scripts/core/content/player_appearance_config.gd")
 const CAREER_PROGRESSION_VERSION := 2
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
+const Z2QuestCatalogScript := preload("res://scripts/core/progression/z2_quest_catalog.gd")
+const Z2QuestProgressionScript := preload("res://scripts/core/progression/z2_goals/goal_progression.gd")
+const Z2QuestFactsScript := preload("res://scripts/core/progression/z2_quest_facts.gd")
 
 
 static func default_meta_fields() -> Dictionary:
@@ -36,6 +40,13 @@ static func default_meta_fields() -> Dictionary:
 
 
 static func normalize_meta(data: Dictionary) -> Dictionary:
+	if Z2Rules.applies_to(data):
+		var current := data.duplicate(true)
+		sync_z2_quests(current)
+		M7TalentCatalogScript.sync_progress(current)
+		refresh_map_unlocks(current)
+		_refresh_red_dots(current)
+		return current
 	var result := data.duplicate(true)
 	var defaults := default_meta_fields()
 	for key in defaults.keys():
@@ -52,12 +63,12 @@ static func normalize_meta(data: Dictionary) -> Dictionary:
 	result["tutorial_completed"] = bool(result.get("tutorial_completed", false))
 	result["map_success_counts"] = _dictionary(result.get("map_success_counts", {}))
 	result["commission_history"] = _array(result.get("commission_history", []))
-	result["task_states"] = _normalize_goal_states(_dictionary(result.get("task_states", {})), M7ContentCatalogScript.task_definitions(), true)
-	for definition in M7ContentCatalogScript.optional_task_definitions():
+	result["task_states"] = _normalize_goal_states(_dictionary(result.get("task_states", {})), M7ContentCatalogScript.task_definitions(data), true)
+	for definition in M7ContentCatalogScript.optional_task_definitions(data):
 		var id := str(definition.get("id", ""))
 		if not (result["task_states"] as Dictionary).has(id):
 			(result["task_states"] as Dictionary)[id] = _goal_state("active")
-	result["achievement_states"] = _normalize_goal_states(_dictionary(result.get("achievement_states", {})), M7ContentCatalogScript.achievement_definitions(), false)
+	result["achievement_states"] = _normalize_goal_states(_dictionary(result.get("achievement_states", {})), M7ContentCatalogScript.achievement_definitions(data), false)
 	for key in ["research_completed_ids", "codex_discoveries", "unread_codex_ids", "collection_discoveries", "completed_collection_set_ids", "unread_collection_set_ids", "unread_history_ids", "purchased_instance_ids", "claimed_reward_ids", "granted_reward_ids", "titles", "badges"]:
 		result[key] = _unique_strings(_array(result.get(key, [])))
 	result["event_completion_counts"] = _dictionary(result.get("event_completion_counts", {}))
@@ -74,6 +85,8 @@ static func normalize_meta(data: Dictionary) -> Dictionary:
 
 
 static func apply_settlement(data: Dictionary, result_snapshot: Dictionary) -> Dictionary:
+	if Z2Rules.applies_to(data):
+		return _apply_z2_growth(data, result_snapshot)
 	var run_result := _dictionary(result_snapshot.get("RunResult", result_snapshot.get("run_result", {})))
 	if not run_result.is_empty():
 		result_snapshot = result_snapshot.duplicate()
@@ -160,8 +173,66 @@ static func apply_settlement(data: Dictionary, result_snapshot: Dictionary) -> D
 	return delta
 
 
-static func claim_goal_reward(data: Dictionary, goal_kind: String, goal_id: String) -> Dictionary:
-	var definitions := M7ContentCatalogScript.task_definitions() + M7ContentCatalogScript.optional_task_definitions() if goal_kind == "task" else M7ContentCatalogScript.achievement_definitions()
+static func _apply_z2_growth(data: Dictionary, snapshot: Dictionary) -> Dictionary:
+	var result := _dictionary(snapshot.get("RunResult", snapshot.get("run_result", snapshot)))
+	var start := _dictionary(result.get("run_start_config", {}))
+	var map_id := str(start.get("map_config_id", ""))
+	if map_id == "tutorial_5x5" or result.get("mode", "") == "tutorial":
+		return {"skipped": true, "reason": "tutorial_completion_owned_by_meta_adapter"}
+	var candidate := data.duplicate(true)
+	var previous_notices := _dictionary(data.get("z2_quest_notices", {})).duplicate(true)
+	sync_z2_quests(candidate)
+	var source := Z2QuestFactsScript.build(candidate, snapshot)
+	if not bool(source.get("ok", false)):
+		return {"ok": false, "skipped": true, "reason": str(source.get("status", "quest_facts_missing"))}
+	var quests := Z2QuestProgressionScript.apply_settlement(candidate, source.facts, str(source.result_id))
+	if not bool(quests.get("ok", false)):
+		return {"ok": false, "skipped": true, "reason": str(quests.get("status", "quest_reduction_failed"))}
+	if quests.status != "applied":
+		return {"ok": true, "status": quests.status, "result_id": str(source.result_id), "exp_gained": 0, "gold_gained": 0, "completions": []}
+	var ending := str(source.facts.ending)
+	var events := _array(result.get("run_events", source.facts.run_events))
+	var score := Z2Rules.score_events(events)
+	var growth := Z2Rules.settle_scores(map_id, int(score.experience), int(score.talent_points), ending)
+	if _dictionary(result.get("settlement", {})).has("z2_growth"):
+		growth = _dictionary(result.settlement.z2_growth)
+	if not growth.get("ok", false):
+		return {"ok": false, "skipped": true, "reason": "invalid_growth_source"}
+	data.merge(quests.meta, true)
+	data["z2_fact_sequence"] = int(source.facts.settlement_sequence)
+	_remember_quest_completions(data, quests.completions)
+	var before := int(data.get("profile_level", 0))
+	_add_exp(data, int(growth.experience))
+	data["talent_earned"] = int(data.talent_earned) + int(growth.talent_points)
+	M7TalentCatalogScript.sync_progress(data)
+	if ending == "success":
+		_increment_map_success(data, map_id)
+	var delta := {"ok": true, "result_id": str(source.result_id), "map_id": map_id,
+		"gold_gained": 0, "exp_gained": int(growth.experience), "talent_points_gained": int(growth.talent_points),
+		"profile_level_before": before, "profile_level_after": int(data.profile_level),
+		"experience_breakdown": growth, "new_codex_ids": [], "new_collection_ids": [],
+		"new_unlock_ids": refresh_map_unlocks(data), "new_achievement_ids": [], "task_became_claimable": "",
+		"quest_missing_fact_goal_ids": source.missing_fact_goal_ids.duplicate(), "completions": []}
+	for key in data.get("z2_quest_notices", {}):
+		if not previous_notices.has(key):
+			var notice: Dictionary = data.z2_quest_notices[key]
+			delta.completions.append(notice.duplicate(true))
+			if str(notice.goal_id).begins_with("A"):
+				delta.new_achievement_ids.append(notice.goal_id)
+			elif str(delta.task_became_claimable).is_empty():
+				delta.task_became_claimable = notice.goal_id
+	_record_runtime_discoveries(data, events, delta)
+	_record_recovered_discoveries(data, _recovered_items(snapshot, _dictionary(snapshot.get("settlement", {})), ending == "success", ending == "failure", ending == "abandon"), delta)
+	_append_unique(data["unread_history_ids"], str(source.result_id))
+	_refresh_profile_awards(data)
+	_refresh_red_dots(data)
+	return delta
+
+
+static func claim_goal_reward(data: Dictionary, goal_kind: String, goal_id: String, tier: int = 1) -> Dictionary:
+	if Z2Rules.applies_to(data):
+		return _claim_z2_goal_reward(data, goal_kind, goal_id, tier)
+	var definitions := M7ContentCatalogScript.task_definitions(data) + M7ContentCatalogScript.optional_task_definitions(data) if goal_kind == "task" else M7ContentCatalogScript.achievement_definitions(data)
 	var states_key := "task_states" if goal_kind == "task" else "achievement_states"
 	var states: Dictionary = data.get(states_key, {})
 	var state := _dictionary(states.get(goal_id, {}))
@@ -187,13 +258,94 @@ static func claim_goal_reward(data: Dictionary, goal_kind: String, goal_id: Stri
 	return {"ok": true, "status": "claimed", "goal_id": goal_id, "reward": reward.duplicate(true), "new_unlock_ids": new_unlock_ids}
 
 
+static func sync_z2_quests(data: Dictionary) -> void:
+	if not Z2Rules.applies_to(data):
+		return
+	var refreshed := Z2QuestProgressionScript.refresh_available(data, "activation:%d" % int(data.get("z2_fact_sequence", 0)))
+	data.merge(refreshed.meta, true)
+	_remember_quest_completions(data, refreshed.completions)
+	# These maps are views only, never inputs to the canonical detector.
+	data["task_states"] = {}
+	data["achievement_states"] = {}
+	for definition in Z2QuestCatalogScript.definitions():
+		var state := Z2QuestProgressionScript.goal_state(data, definition.id)
+		var steps: Array = definition.reward_steps
+		state["achieved"] = state.achieved_tiers.size() == steps.size()
+		state["claimed"] = state.claimed_tiers.size() == steps.size()
+		state["claimed_steps"] = []
+		state["tier"] = int(steps.back().tier)
+		state["newly_claimable_result_id"] = ""
+		var pending := false
+		for step: Dictionary in steps:
+			if state.claimed_tiers.has(int(step.tier)):
+				state.claimed_steps.append(int(step.target))
+			elif not pending:
+				state.tier = int(step.tier)
+				state.target = int(step.target)
+				pending = true
+		var key := "achievement_states" if definition.kind == "achievement" else "task_states"
+		data[key][definition.id] = state
+
+static func _remember_quest_completions(data: Dictionary, completions: Array) -> void:
+	var notices := _dictionary(data.get("z2_quest_notices", {}))
+	for notice: Dictionary in completions:
+		notices["%s:%d" % [str(notice.goal_id), int(notice.tier)]] = notice.duplicate(true)
+	data["z2_quest_notices"] = notices
+
+
+static func record_z2_lobby_fact(data: Dictionary, type: String, payload: Dictionary, receipt_id: String) -> Dictionary:
+	if not Z2Rules.applies_to(data) or receipt_id.is_empty() or type not in ["item_sold", "item_purchased", "talent_unlocked", "research_completed"]:
+		return {"ok": false, "status": "invalid_quest_lobby_fact"}
+	if not _dictionary(data.get("admission", {})).is_empty():
+		return {"ok": false, "status": "active_run_lobby_action_blocked"}
+	var receipts: Dictionary = data.get("z2_quest_lobby_receipts", {})
+	var fingerprint := JSON.stringify({"type": type, "payload": payload}, "", true).sha256_text()
+	if receipts.has(receipt_id):
+		return {"ok": receipts[receipt_id].fingerprint == fingerprint, "status": "duplicate_ignored" if receipts[receipt_id].fingerprint == fingerprint else "quest_lobby_receipt_conflict"}
+	var seq := int(data.get("z2_fact_sequence", 0)) + 1
+	var items: Array = _array(payload.get("items", [payload])).duplicate(true)
+	for item: Dictionary in items:
+		if item.get("item_type", "") == "collection":
+			item.item_type = "collectible"
+	var kind := str({"item_sold": "sell_collectible", "item_purchased": "purchase", "talent_unlocked": "unlock_talent", "research_completed": "complete_research"}[type])
+	var reduced := Z2QuestProgressionScript.apply_camp_action(data, {"sequence": seq, "kind": kind, "items": items})
+	if not reduced.ok or reduced.status != "applied":
+		return {"ok": false, "status": "quest_lobby_sequence_conflict"}
+	data.merge(reduced.meta, true)
+	data["z2_fact_sequence"] = seq
+	receipts[receipt_id] = {"sequence": seq, "fingerprint": fingerprint}
+	data["z2_quest_lobby_receipts"] = receipts
+	_remember_quest_completions(data, reduced.completions)
+	sync_z2_quests(data)
+	return {"ok": true, "status": "recorded", "sequence": seq, "completions": reduced.completions}
+
+
+static func _claim_z2_goal_reward(data: Dictionary, kind: String, id: String, tier: int) -> Dictionary:
+	if kind not in ["task", "achievement"] or (id.begins_with("A") != (kind == "achievement")):
+		return {"ok": false, "status": "invalid_goal_kind", "goal_id": id, "tier": tier}
+	var candidate := data.duplicate(true)
+	sync_z2_quests(candidate)
+	var evaluation := Z2QuestProgressionScript.claim_evaluation(candidate, id, tier)
+	var result := {"ok": evaluation.ok, "status": evaluation.status, "goal_kind": kind, "goal_id": id, "tier": tier,
+		"reward_id": str(evaluation.get("reward_id", "")), "reward": evaluation.reward.duplicate(true)}
+	if not evaluation.ok or evaluation.status == "duplicate_ignored":
+		return result
+	data.merge(evaluation.meta, true)
+	_grant_reward_payload(data, evaluation.reward, "z2_quest_reward")
+	_append_unique(data["claimed_reward_ids"], str(evaluation.reward_id))
+	_refresh_profile_awards(data)
+	result["new_unlock_ids"] = refresh_map_unlocks(data)
+	_refresh_red_dots(data)
+	return result
+
+
 static func next_instance_id(data: Dictionary, source: String, item_id: String) -> String:
 	data["transaction_sequence"] = int(data.get("transaction_sequence", 0)) + 1
 	return "m7:%s:%06d:%s" % [source, int(data["transaction_sequence"]), item_id]
 
 
 static func add_item_instance(data: Dictionary, item_id: String, source: String) -> Dictionary:
-	var item := M7ContentCatalogScript.item_definition(item_id)
+	var item := M7ContentCatalogScript.item_definition(item_id, data)
 	if item.is_empty():
 		return {}
 	item["instance_id"] = next_instance_id(data, source, item_id)
@@ -212,17 +364,17 @@ static func refresh_red_dots(data: Dictionary) -> Dictionary:
 
 static func _default_task_states() -> Dictionary:
 	var result := {}
-	var definitions := M7ContentCatalogScript.task_definitions()
+	var definitions := M7ContentCatalogScript.legacy_task_definitions()
 	for index in range(definitions.size()):
 		result[str(definitions[index].get("id", ""))] = _goal_state("active" if index == 0 else "locked")
-	for definition in M7ContentCatalogScript.optional_task_definitions():
+	for definition in M7ContentCatalogScript.legacy_optional_task_definitions():
 		result[str(definition.get("id", ""))] = _goal_state("active")
 	return result
 
 
 static func _default_achievement_states() -> Dictionary:
 	var result := {}
-	for definition in M7ContentCatalogScript.achievement_definitions():
+	for definition in M7ContentCatalogScript.legacy_achievement_definitions():
 		result[str(definition.get("id", ""))] = _goal_state("active")
 	return result
 
@@ -274,7 +426,7 @@ static func _commission_completed(commission_id: String, result_snapshot: Dictio
 static func _update_active_task(data: Dictionary, result_snapshot: Dictionary, recovered_items: Array, run_stats: Dictionary, events: Array, commission_completed: bool, is_failure: bool) -> void:
 	var states: Dictionary = data.get("task_states", {})
 	var active_id := ""
-	for definition in M7ContentCatalogScript.task_definitions():
+	for definition in M7ContentCatalogScript.task_definitions(data):
 		var id := str(definition.get("id", ""))
 		if str(_dictionary(states.get(id, {})).get("status", "locked")) == "active":
 			active_id = id
@@ -411,6 +563,17 @@ static func _update_collection_sets(data: Dictionary) -> void:
 
 static func refresh_map_unlocks(data: Dictionary) -> Array[String]:
 	var unlocked: Array = data.get("unlocked_map_ids", [])
+	if Z2Rules.applies_to(data):
+		sync_z2_quests(data)
+		var current: Array = []
+		var added: Array[String] = []
+		for id in Z2Rules.MAP_RULES:
+			if Z2Rules.map_blockers(data, id).is_empty():
+				current.append(id)
+				if not unlocked.has(id):
+					added.append(id)
+		data["unlocked_map_ids"] = current
+		return added
 	var new_unlocks: Array[String] = []
 	for definition in M7ContentCatalogScript.map_definitions():
 		var map_id := str(definition["id"])
@@ -422,6 +585,8 @@ static func refresh_map_unlocks(data: Dictionary) -> Array[String]:
 
 
 static func map_unlock_blockers(data: Dictionary, definition: Dictionary) -> PackedStringArray:
+	if Z2Rules.applies_to(data):
+		return Z2Rules.map_blockers(data, str(definition.get("id", "")))
 	var blockers := PackedStringArray()
 	if bool(definition.get("required_tutorial", false)) and not bool(data.get("tutorial_completed", false)):
 		blockers.append("完成新手教程")
@@ -439,7 +604,7 @@ static func map_unlock_blockers(data: Dictionary, definition: Dictionary) -> Pac
 	var achievement_id := str(definition.get("required_achievement_id", ""))
 	var achievement := _dictionary(_dictionary(data.get("achievement_states", {})).get(achievement_id, {}))
 	if not achievement_id.is_empty() and not bool(achievement.get("achieved", false)):
-		var achievement_definition := _find_definition(M7ContentCatalogScript.achievement_definitions(), achievement_id)
+		var achievement_definition := _find_definition(M7ContentCatalogScript.achievement_definitions(data), achievement_id)
 		blockers.append("达成「%s」" % str(achievement_definition.get("display_name", achievement_id)))
 	return blockers
 
@@ -464,7 +629,7 @@ static func _all_event_types_completed(data: Dictionary) -> bool:
 
 
 static func _activate_next_task(data: Dictionary, claimed_id: String) -> void:
-	var definitions := M7ContentCatalogScript.task_definitions()
+	var definitions := M7ContentCatalogScript.task_definitions(data)
 	var states: Dictionary = data.get("task_states", {})
 	for index in range(definitions.size() - 1):
 		if str(definitions[index].get("id", "")) != claimed_id:
@@ -497,7 +662,7 @@ static func _grant_reward_payload(data: Dictionary, reward: Dictionary, source: 
 
 static func _add_exp(data: Dictionary, amount: int) -> void:
 	data["profile_exp"] = maxi(0, int(data.get("profile_exp", 0)) + maxi(0, amount))
-	data["profile_level"] = M7ContentCatalogScript.profile_level_for_exp(int(data["profile_exp"]))
+	data["profile_level"] = Z2Rules.level_for_exp(int(data["profile_exp"])) if Z2Rules.applies_to(data) else M7ContentCatalogScript.profile_level_for_exp(int(data["profile_exp"]))
 	M7TalentCatalogScript.sync_progress(data)
 
 
@@ -526,7 +691,9 @@ static func _exploration_experience(result: Dictionary, run_stats: Dictionary, m
 
 
 static func _refresh_profile_awards(data: Dictionary) -> void:
-	var level := M7ContentCatalogScript.profile_level_for_exp(int(data.get("profile_exp", 0)))
+	var level := Z2Rules.level_for_exp(int(data.get("profile_exp", 0))) if Z2Rules.applies_to(data) else M7ContentCatalogScript.profile_level_for_exp(int(data.get("profile_exp", 0)))
+	if Z2Rules.applies_to(data) and not data.get("tutorial_completed", false):
+		level = 0
 	data["profile_level"] = level
 	var titles: Array = data.get("titles", [])
 	var badges: Array = data.get("badges", [])
@@ -542,7 +709,7 @@ static func _refresh_red_dots(data: Dictionary) -> void:
 	var task_claimable := _claimable_count(_dictionary(data.get("task_states", {})))
 	var achievement_claimable := _claimable_count(_dictionary(data.get("achievement_states", {})))
 	var research_available := 0
-	for definition in M7ContentCatalogScript.research_definitions():
+	for definition in M7ContentCatalogScript.research_definitions(data):
 		if _research_can_complete(data, definition):
 			research_available += 1
 	var talent_available := 0

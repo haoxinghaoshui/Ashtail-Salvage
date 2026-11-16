@@ -83,6 +83,8 @@ static func add_search_reward(context: RunContext, pos: Vector2i, adjacent_mines
 	if context == null:
 		return {"ok": false}
 	var reward := RunRuleService.apply_search_reward(context, pos, adjacent_mines, is_chest)
+	if not reward.get("ok", false):
+		return reward
 	if is_chest:
 		context.run_stats["chest_rooms"] = int(context.run_stats.get("chest_rooms", 0)) + 1
 	context.run_stats["searched_rooms"] = int(context.run_stats.get("searched_rooms", 0)) + 1

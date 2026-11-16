@@ -273,9 +273,23 @@ func _validate_tutorial_result(cycle: int) -> void:
 		_require(bool(current_data.get("tutorial_completed", false)), "production_completion_marker_not_saved")
 		var normalized := _progress_without_terminal_journal(current_data)
 		_require((normalized.get("unlocked_map_ids", []) as Array).has("classic_7x7_simple"), "production_completion_first_map_missing")
-		normalized["unlocked_map_ids"] = baseline_data["unlocked_map_ids"]
-		normalized["tutorial_completed"] = false
-		_require(normalized == _progress_without_terminal_journal(baseline_data), "production_completion_polluted_non_tutorial_meta")
+		var expected := _progress_without_terminal_journal(baseline_data)
+		_require(int(expected.profile_level) == 0 and int(expected.talent_points) == 100, "tutorial_baseline_must_be_current_Lv0_with_100_teaching_points")
+		expected["profile_level"] = 1
+		expected["tutorial_completed"] = true
+		expected["talent_points"] = 0
+		expected["talent_spent"] = 100
+		expected["talent_flags"] = ["z2_talent_01"]
+		expected["tutorial_completion_receipt"] = {"result_id": str(snapshot.get("result_id", ""))}
+		expected["unlocked_map_ids"] = ["tutorial_5x5", "classic_7x7_simple"]
+		# First teaching activates M01 and achievements only; no progress or reward.
+		for id in (expected.z2_goals.states as Dictionary):
+			if id == "M01" or str(id).begins_with("A"):
+				expected.z2_goals.states[id].unlocked = true
+				expected.z2_goals.states[id].activated_after_seq = 0
+				var projection: Dictionary = expected.achievement_states if str(id).begins_with("A") else expected.task_states
+				projection[id].status = "active"
+		_require(normalized == expected, "production_completion_changed_fields_outside_exact_Z2_teaching_contract")
 		completed_data = current_data.duplicate(true)
 	else:
 		_require(_progress_without_terminal_journal(current_data) == _progress_without_terminal_journal(completed_data), "production_replay_polluted_meta")

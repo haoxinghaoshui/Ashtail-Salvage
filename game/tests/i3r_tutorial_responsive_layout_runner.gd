@@ -11,8 +11,17 @@ const Art10UISkinKitScript := preload("res://scripts/presentation/art10_ui_skin_
 
 const PASS_MARKER := "I3R_TUTORIAL_RESPONSIVE_LAYOUT=PASS"
 const FAIL_MARKER := "I3R_TUTORIAL_RESPONSIVE_LAYOUT=FAIL"
-const PHYSICAL_SIZES := [Vector2i(1280, 720), Vector2i(1920, 1080)]
+const PHYSICAL_SIZES := [Vector2i(1280, 720), Vector2i(1920, 1080), Vector2i(960, 720), Vector2i(1600, 1000)]
 const UI_SCALES := [1.0, 1.25, 1.5]
+# Source frame ink is 12px; 36px NinePatch sampling protects corner ornaments.
+# I2_ASSET_BINDING separately locks source/hash, ornaments and copy-safe rects.
+const PROTOCOL_VISIBLE_BORDER_THICKNESS := 12.0
+
+class WorldPointerProbe extends Node:
+	var clicks := 0
+	func _unhandled_input(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			clicks += 1
 
 var failures: Array[String] = []
 
@@ -49,7 +58,10 @@ func _check_case(physical_size: Vector2i, ui_scale: float) -> void:
 		int(round(ui_scale * 100.0)),
 	]
 	canvas.size = viewport_size
+	canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(canvas)
+	var world_pointer := WorldPointerProbe.new()
+	canvas.add_child(world_pointer)
 
 	var surface := RunSurfaceScript.new() as RunSurface
 	canvas.add_child(surface)
@@ -89,6 +101,13 @@ func _check_case(physical_size: Vector2i, ui_scale: float) -> void:
 	_check(panel_rect.encloses(button_rect), _case_error(physical_size, ui_scale, "button_escapes_panel:%s" % button_rect))
 	_check(message != null and message.scroll_active, _case_error(physical_size, ui_scale, "message_not_scrollable"))
 	_check(message != null and message.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART, _case_error(physical_size, ui_scale, "message_not_wrapped"))
+	if message != null:
+		_check(message.text == str(_spawn_popup().get("message", "")), _case_error(physical_size, ui_scale, "tutorial_body_lost_source_text"))
+		_check(message.get_theme_font_size("normal_font_size") >= Art10UISkinKitScript.scaled_font_size(Art10UISkinKitScript.font_size(&"body"), ui_scale), _case_error(physical_size, ui_scale, "tutorial_body_font_reduced"))
+		await _wheel_to_end(message, message.get_v_scroll_bar(), _case_error(physical_size, ui_scale, "tutorial_body"))
+		_check(message.get_content_height() - message.get_v_scroll_bar().value <= message.size.y + 1.0, _case_error(physical_size, ui_scale, "tutorial_last_line_not_visible"))
+		_mouse_button(message.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+		_check(world_pointer.clicks == 0, _case_error(physical_size, ui_scale, "tutorial_click_reached_world"))
 	if message != null and message.get_content_height() > message.size.y + 0.5:
 		_check(message.scroll_active, _case_error(physical_size, ui_scale, "overflow_without_scroll"))
 	_check(title != null and title.get_line_count() == 1, _case_error(physical_size, ui_scale, "tutorial_title_wrapped"))
@@ -105,7 +124,6 @@ func _check_case(physical_size: Vector2i, ui_scale: float) -> void:
 	)
 
 	var risk_rect := surface.mine_risk_tag_art.get_global_rect()
-	var info_rect := surface.command_feedback_art.get_global_rect()
 	var key_rect := surface.bottom_overlay_art.get_global_rect()
 	_check(surface.mine_risk_label.text == "周围雷险：3", _case_error(physical_size, ui_scale, "mine_risk_count_missing"))
 	_check(not surface.command_feedback_art.visible, _case_error(physical_size, ui_scale, "steady_feedback_frame_visible"))
@@ -113,7 +131,8 @@ func _check_case(physical_size: Vector2i, ui_scale: float) -> void:
 	_check(not surface.action_hint_label.visible, _case_error(physical_size, ui_scale, "steady_action_hint_visible"))
 	_check(not panel_rect.intersects(risk_rect), _case_error(physical_size, ui_scale, "tutorial_overlaps_mine_risk"))
 	_check(not panel_rect.intersects(key_rect), _case_error(physical_size, ui_scale, "tutorial_overlaps_hotbar"))
-	_check(info_rect.encloses(surface.command_feedback_label.get_global_rect()), _case_error(physical_size, ui_scale, "feedback_copy_escapes_frame"))
+	# The retired frame is hidden; the visible copy belongs to its real scroll viewport.
+	_check(surface.command_feedback_scroll.is_ancestor_of(surface.command_feedback_label), _case_error(physical_size, ui_scale, "feedback_copy_outside_scroll_owner"))
 	_check(key_rect.encloses(surface.action_bar.get_global_rect()), _case_error(physical_size, ui_scale, "action_bar_escapes_frame"))
 	_check(surface.scanner_title_label.visible and surface.scanner_title_label.text == "区域扫描图", _case_error(physical_size, ui_scale, "scanner_title_missing"))
 	_check(
@@ -143,10 +162,10 @@ func _check_case(physical_size: Vector2i, ui_scale: float) -> void:
 		_case_error(physical_size, ui_scale, "protocol_title_overlaps_body")
 	)
 	var protocol_left_safe := maxf(
-		float(surface.status_card_art.get_patch_margin(SIDE_LEFT)),
+		PROTOCOL_VISIBLE_BORDER_THICKNESS,
 		status_art_rect.size.x * 0.18
 	)
-	var protocol_top_safe := float(surface.status_card_art.get_patch_margin(SIDE_TOP))
+	var protocol_top_safe := PROTOCOL_VISIBLE_BORDER_THICKNESS
 	_check(
 		protocol_title_rect.position.x >= status_art_rect.position.x + protocol_left_safe - 0.5
 		and protocol_title_rect.position.y >= status_art_rect.position.y + protocol_top_safe - 0.5,
@@ -198,6 +217,10 @@ func _check_case(physical_size: Vector2i, ui_scale: float) -> void:
 		),
 		_case_error(physical_size, ui_scale, "nonblocking_close_escapes_panel")
 	)
+	popup.apply_popup({})
+	await _frames(2)
+	await _check_fee_and_confirmation(popup, world_pointer, viewport_rect, physical_size, ui_scale)
+	await _check_feedback_scroll(surface, world_pointer, viewport_rect, physical_size, ui_scale)
 
 	print(
 		"I3R_TUTORIAL_RESPONSIVE_CASE physical=%dx%d logical=%dx%d ui=%d panel=%s room=%s footer=%s message_content=%s"
@@ -215,6 +238,111 @@ func _check_case(physical_size: Vector2i, ui_scale: float) -> void:
 	)
 	canvas.queue_free()
 	await _frames(3)
+
+
+func _check_fee_and_confirmation(popup: TutorialPopupPanel, world_pointer: WorldPointerProbe, viewport: Rect2, physical: Vector2i, scale: float) -> void:
+	# This is the actual Z2 teaching copy, projected without changing a Main profile.
+	var context := RunContextScript.new()
+	context.mode = &"tutorial"
+	context.profile_fields = {"ruleset_id": "z2", "z2_progression_version": 1, "flag_unlocked": false}
+	context.tutorial_triggers = {"0,0": &"spawn_intro"}
+	TutorialServiceScript.trigger_for(context, Vector2i.ZERO)
+	var signals_seen := {"confirmed": 0, "cancelled": 0}
+	var on_confirm := func() -> void: signals_seen.confirmed += 1
+	var on_cancel := func() -> void: signals_seen.cancelled += 1
+	popup.confirmed.connect(on_confirm)
+	popup.cancelled.connect(on_cancel)
+	popup.apply_popup(context.tutorial_popup)
+	await _frames(3)
+	var message := popup.get_node("Panel/Content/Message") as RichTextLabel
+	var primary := popup.get_node("Panel/Content/ConfirmButton") as Button
+	var case_id := _case_error(physical, scale, "z2_fee")
+	_check(message.text == str(context.tutorial_popup.message) and message.text.contains("花费100点") and primary.text.contains("100点"), case_id + ":fee_or_full_copy_missing")
+	await _wheel_to_end(message, message.get_v_scroll_bar(), case_id)
+	_check(message.get_content_height() - message.get_v_scroll_bar().value <= message.size.y + 1.0, case_id + ":fee_last_line_inaccessible")
+	var before := world_pointer.clicks
+	_mouse_button(primary.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	_check(signals_seen.confirmed == 1 and world_pointer.clicks == before, case_id + ":native_primary_click_not_exactly_once_or_leaked")
+	popup.apply_popup({"id": &"flag_entry_confirm", "title": "进入插旗房间？", "message": "此房间已插旗，进入前请再次确认。", "blocking": true, "confirm_text": "确认进入", "confirm_action": &"ui_accept"})
+	await _frames(3)
+	var cancel := popup.get_node("Panel/Content/CancelButton") as Button
+	var panel := popup.get_node("Panel") as Panel
+	for action: Button in [primary, cancel]:
+		_check(action.is_visible_in_tree() and viewport.encloses(action.get_global_rect()) and panel.get_global_rect().encloses(action.get_global_rect()), case_id + ":confirmation_action_outside_panel")
+		_check(action.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING and action.get_combined_minimum_size().y <= action.size.y + 0.5 and action.get_combined_minimum_size().x <= action.size.x + 0.5, case_id + ":confirmation_action_text_clipped")
+	_check(not primary.get_global_rect().intersects(cancel.get_global_rect()), case_id + ":confirm_cancel_overlap")
+	_mouse_button(cancel.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	_check(signals_seen.cancelled == 1 and signals_seen.confirmed == 1, case_id + ":native_cancel_not_isolated")
+	_mouse_button(primary.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	_check(signals_seen.confirmed == 2 and signals_seen.cancelled == 1 and world_pointer.clicks == before, case_id + ":native_confirmation_not_isolated")
+	popup.confirmed.disconnect(on_confirm)
+	popup.cancelled.disconnect(on_cancel)
+	popup.apply_popup({})
+	await _frames(2)
+
+
+func _check_feedback_scroll(surface: RunSurface, world_pointer: WorldPointerProbe, viewport: Rect2, physical: Vector2i, scale: float) -> void:
+	var scroll := surface.command_feedback_scroll
+	var label := surface.command_feedback_label
+	for copy in ["背包容量不足，请先整理物资。", "背包容量不足，请先整理物资。\n".repeat(18) + "最后一行：整理后才能继续拾取。"]:
+		surface.show_command_feedback({"ok": false, "accepted": false, "message": copy})
+		await _frames(3)
+		var case_id := _case_error(physical, scale, "feedback_long" if copy.contains("\n") else "feedback_short")
+		var visible_rect := scroll.get_global_rect()
+		_check(label.text == copy, case_id + ":source_text_changed")
+		_check(label.visible and scroll.visible and not surface.command_feedback_art.visible, case_id + ":visible_scroll_contract")
+		_check(label.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING and label.max_lines_visible == -1 and label.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART and not label.clip_text, case_id + ":copy_trimmed_or_unwrapped")
+		_check(label.get_theme_font_size("font_size") >= Art10UISkinKitScript.scaled_font_size(13, scale), case_id + ":font_reduced")
+		_check(viewport.encloses(visible_rect), case_id + ":viewport_outside_screen")
+		_check(not visible_rect.intersects(surface.mine_risk_tag_art.get_global_rect()) and not visible_rect.intersects(surface.action_bar.get_global_rect()), case_id + ":viewport_overlaps_risk_or_actions")
+		_check(label.get_global_rect().position.x >= visible_rect.position.x - 1.0 and label.get_global_rect().end.x <= visible_rect.end.x + 1.0, case_id + ":copy_exceeds_content_width")
+		var bar := scroll.get_v_scroll_bar()
+		_check((bar.max_value - bar.page > 1.0) == copy.contains("\n"), case_id + ":expected_real_overflow_branch_missing")
+		await _wheel_to_end(scroll, bar, case_id)
+		var tail := label.get_global_rect()
+		tail.position.y = tail.end.y - label.get_line_height()
+		tail.size.y = label.get_line_height()
+		_check(visible_rect.grow(1.0).encloses(tail), case_id + ":last_full_line_not_visible")
+		for action: Button in surface.action_buttons.values():
+			_check(viewport.encloses(action.get_global_rect()), case_id + ":action_left_screen_while_scrolling")
+		var clicks_before := world_pointer.clicks
+		_mouse_button(visible_rect.get_center(), MOUSE_BUTTON_LEFT)
+		_check(world_pointer.clicks == clicks_before, case_id + ":visible_feedback_click_reached_world")
+		surface.clear_command_feedback()
+		_check(not label.visible and not scroll.visible, case_id + ":empty_feedback_layer_remains_visible")
+		_mouse_button(visible_rect.get_center(), MOUSE_BUTTON_LEFT)
+		_check(world_pointer.clicks == clicks_before + 1, case_id + ":hidden_feedback_layer_blocks_world")
+	surface.show_command_feedback({"ok": true, "accepted": true, "message": "已拾取物资。"})
+	_check(not label.visible and not scroll.visible and not surface.command_feedback_art.visible, _case_error(physical, scale, "successful_feedback_became_permanent"))
+
+
+func _wheel_to_end(control: Control, bar: VScrollBar, case_id: String) -> void:
+	var end := maxf(0.0, bar.max_value - bar.page)
+	if end <= 1.0:
+		_check(not bar.is_visible_in_tree() and bar.value <= 1.0, case_id + ":unnecessary_actual_scroll_range")
+		return
+	var start := bar.value
+	var deadline := Time.get_ticks_msec() + 3000
+	while bar.value < bar.max_value - bar.page - 1.0 and Time.get_ticks_msec() < deadline:
+		_mouse_button(control.get_global_rect().get_center(), MOUSE_BUTTON_WHEEL_DOWN)
+		await process_frame
+	_check(bar.value > start and bar.value >= bar.max_value - bar.page - 1.0, case_id + ":native_wheel_did_not_reach_end")
+
+
+func _mouse_button(position: Vector2, button_index: MouseButton) -> void:
+	var motion := InputEventMouseMotion.new()
+	motion.position = position
+	motion.global_position = position
+	root.push_input(motion, true)
+	var event := InputEventMouseButton.new()
+	event.position = position
+	event.global_position = position
+	event.button_index = button_index
+	event.pressed = true
+	root.push_input(event, true)
+	event = event.duplicate()
+	event.pressed = false
+	root.push_input(event, true)
 
 
 func _spawn_popup() -> Dictionary:
@@ -276,7 +404,7 @@ func _finish() -> void:
 	Art10UISkinKitScript.set_runtime_ui_scale_factor(1.0)
 	if failures.is_empty():
 		print(
-			"%s cases=1280x720@100,125,150;1920x1080@100,125,150 route=deploy_standard safe_zones=left_hud,room,protocol,footer text=wrapped_scroll footer=mine_risk,hotbar_compact feedback=transient"
+			"%s cases=1280x720,1920x1080,960x720,1600x1000@100,125,150 route=component_projection safe_zones=left_hud,room,protocol,footer text=full_native_scroll footer=mine_risk,hotbar_compact feedback=transient+input_boundary"
 			% PASS_MARKER
 		)
 		quit(0)

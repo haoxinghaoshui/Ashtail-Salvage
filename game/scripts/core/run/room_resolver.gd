@@ -10,6 +10,8 @@ const RunEffectApplierScript := preload("res://scripts/core/run/run_effect_appli
 const RunTextCatalogScript := preload("res://scripts/core/run/run_text_catalog.gd")
 const Z1EventRuntimeScript := preload("res://scripts/core/run/z1_event_runtime.gd")
 const StateSnapshotScript := preload("res://scripts/core/run/run_state_snapshot.gd")
+const Z2Events := preload("res://scripts/core/run/z2_event_runtime.gd")
+const Z2Hooks := preload("res://scripts/core/run/z2_run_hooks.gd")
 
 
 class EntryFailure extends RefCounted:
@@ -42,7 +44,10 @@ func enter_room(context: RunContext) -> Dictionary:
 	if context.mode == &"tutorial":
 		difficulty = &"tutorial"
 	var entry_protocol := context.protocol_level
-	Z1EventRuntimeScript.record_entry(context, pos)
+	var z2 := Z2Hooks.applies_to(context)
+	var first_visit := not context.visited_cells.has(context.cell_key(pos))
+	if not z2:
+		Z1EventRuntimeScript.record_entry(context, pos)
 	if context.reveal_on_move:
 		context.intel_map.reveal_cell(pos, context.truth_map)
 	context.truth_map.mark_explored(pos)
@@ -56,7 +61,7 @@ func enter_room(context: RunContext) -> Dictionary:
 	var encounter := RunRuleService.encounter_for_room(context, context.current_room_type, pos)
 	context.encounter_type = StringName(encounter.get("encounter_type", &"none"))
 	context.encounter_tags = encounter.get("encounter_tags", []).duplicate(true)
-	_record_room_event(context, RunEventLog.EVENT_ROOM_ENTERED, {"position": pos, "room_type": context.current_room_type, "encounter_type": context.encounter_type})
+	_record_room_event(context, RunEventLog.EVENT_ROOM_ENTERED, {"position": pos, "room_type": context.current_room_type, "encounter_type": context.encounter_type, "first_visit": first_visit})
 
 	var first_explore := not context.explored_cells.has(context.cell_key(pos))
 	var exploration_cost := ProtocolService.exploration_cost(difficulty, entry_protocol, first_explore)
@@ -69,6 +74,30 @@ func enter_room(context: RunContext) -> Dictionary:
 		if not bool(applied.ok):
 			StateSnapshotScript.install_context(context, before)
 			return applied
+	if z2:
+		var opening := Z2Hooks.opening_hook(context, {"kind": "room_entered", "fact_id": "room:" + context.cell_key(pos), "actual": true, "pos": pos, "first_visit": first_visit})
+		if not opening.get("ok", false):
+			StateSnapshotScript.install_context(context, before)
+			return opening
+		var event_id := ""
+		if context.current_room_type == &"Event":
+			var selected := EventService.select_z2_event(context, pos)
+			if not selected.get("ok", false):
+				StateSnapshotScript.install_context(context, before)
+				return selected
+			event_id = str(selected.event_type)
+		var hooks := Z2Events.hooks_for(runtime_controller, context, pos, event_id)
+		var continued := Z2Events.on_room_entered(context, pos, event_id, hooks)
+		if not continued.get("ok", false):
+			StateSnapshotScript.install_context(context, before)
+			return continued
+		if not event_id.is_empty() and Z2Events.canonical(event_id) != "cage":
+			var state := EventService.get_event_state(context, pos)
+			if not state.get("completed", false) and state.get("requires_prepare", true):
+				var prepared := EventService.prepare_z2_event(context, pos, event_id, runtime_controller)
+				if not prepared.get("ok", false):
+					StateSnapshotScript.install_context(context, before)
+					return prepared
 
 	if context.current_room_type == &"Mine":
 		var mine_result := _enter_mine(context, pos, entry_failure)
@@ -90,7 +119,7 @@ func enter_room(context: RunContext) -> Dictionary:
 	elif context.current_room_type == &"Monster" and not context.truth_map.is_cleared(pos):
 		context.enemy_state = CombatState.build_enemy_state(context, pos, context.current_adjacent_mines)
 		context.last_message = RunTextCatalogScript.monster_available()
-	elif context.current_room_type == &"Event" and (not context.interacted_cells.has(context.cell_key(pos)) or EventService.get_event_type(context, pos) == &"z1_event_e25"):
+	elif context.current_room_type == &"Event" and (z2 or not context.interacted_cells.has(context.cell_key(pos)) or EventService.get_event_type(context, pos) == &"z1_event_e25"):
 		context.event_state = EventService.get_event_state(context, pos)
 		context.last_message = RunTextCatalogScript.event_available(context.event_state.get("event_type", &"event"))
 	elif context.current_room_type == &"Chest" and not context.searched_cells.has(context.cell_key(pos)):
@@ -111,7 +140,7 @@ func enter_room(context: RunContext) -> Dictionary:
 	}
 
 
-func search_current_room(context: RunContext) -> Dictionary:
+func search_current_room(context: RunContext, completed_timer: bool = false) -> Dictionary:
 	if context == null or not context.run_active:
 		return {"ok": false, "reason": "run_not_active", "blocked_reason": "run_not_active", "message": "Run is not active."}
 	var pos := context.get_current_pos()
@@ -130,7 +159,13 @@ func search_current_room(context: RunContext) -> Dictionary:
 		return {"ok": false, "reason": "spawn_not_searchable", "blocked_reason": "spawn_not_searchable", "message": context.last_message}
 
 	var is_chest := context.current_room_type == &"Chest"
+	if Z2Hooks.applies_to(context) and not completed_timer:
+		if runtime_controller == null:
+			return {"ok": false, "reason": "search_runtime_unavailable"}
+		return runtime_controller.begin_z2_search()
 	var reward := RunInventory.add_search_reward(context, pos, context.current_adjacent_mines, is_chest)
+	if not reward.get("ok", false):
+		return reward
 	context.searched_cells[key] = true
 	context.last_reward = reward
 	context.blocked_reason = String(reward.get("blocked_reason", ""))
@@ -138,6 +173,11 @@ func search_current_room(context: RunContext) -> Dictionary:
 		context.truth_map.mark_cleared(pos)
 	context.intel_map.refresh_revealed_cell(pos, context.truth_map)
 	_record_room_event(context, RunEventLog.EVENT_ROOM_SEARCHED, {"position": pos, "is_chest": is_chest, "reward": reward.duplicate(true)})
+	if Z2Hooks.applies_to(context) and not is_chest:
+		var receipt := {"room_type": "normal", "complete": true, "search_id": str(context.run_id) + ":search:" + key, "room_id": key}
+		var linked := Z2Events.on_normal_search_completed(context, pos, receipt, Z2Events.hooks_for(runtime_controller, context, pos, "coil"))
+		if not linked.get("ok", false):
+			return linked
 	var reward_items: Array = reward.get("items", [])
 	var floor_items: Array = reward.get("ground_items", [])
 	context.last_message = RunTextCatalogScript.search_complete(int(reward.get("gold", 0)), reward_items.size(), floor_items.size(), context.blocked_reason)
@@ -284,8 +324,17 @@ func resolve_runtime_combat(context: RunContext, payload: Dictionary) -> Diction
 	))
 	var reward_gold := CombatState.reward_gold_for_enemy_power(enemy_power)
 	var reward_result := RunRuleService.apply_combat_reward(context, pos, reward_gold)
+	if not reward_result.get("ok", false):
+		return reward_result
 	RunEffectApplierScript.apply_effects(context, [RunEffectApplierScript.effect(RunEffectApplierScript.EFFECT_MONSTER_MARK_DEFEATED, "runtime_combat_cleared", {"position": pos}, pos)], runtime_controller)
 	var power_gain := CombatState.grant_monster_clear_progress(context)
+	if Z2Hooks.applies_to(context):
+		var supplied := Z2SupplyRuntime.on_event(context, context.asset_ledger.get_items_by_location(&"equipped"), {"kind": "ordinary_clear", "room_id": context.cell_key(pos), "actual": true})
+		if not supplied.get("ok", false):
+			return supplied
+		var opened := Z2Hooks.opening_hook(context, {"kind": "ordinary_combat_cleared", "fact_id": "combat:" + context.cell_key(pos), "combat_id": str(context.run_id) + ":combat:" + context.cell_key(pos), "pos": pos, "actual": true, "automatic": false})
+		if not opened.get("ok", false):
+			return opened
 	context.last_reward = reward_result.duplicate(true)
 	context.blocked_reason = String(reward_result.get("blocked_reason", ""))
 	context.enemy_state = encounter_profile.duplicate(true)
@@ -325,14 +374,23 @@ func _resolve_cage_combat(context: RunContext, pos: Vector2i, payload: Dictionar
 	var combat_snapshot: Dictionary = payload.get("combat_snapshot", {})
 	if not bool(combat_snapshot.get("cleared", false)):
 		return {"ok": false, "reason": "combat_not_cleared", "blocked_reason": "combat_not_cleared"}
-	var result := EventService.resolve_cage(context, pos, true)
+	var cage_before := EventService.cage_state(context, pos)
+	var result: Dictionary
+	if Z2Hooks.applies_to(context):
+		var receipt := {"encounter_id": str(cage_before.get("combat_request", {}).get("encounter_id", "")), "room_id": context.cell_key(pos), "actual_combat": true, "outcome": "win"}
+		result = Z2Events.on_cage_combat_completed(context, pos, receipt, Z2Events.hooks_for(runtime_controller, context, pos, "cage"))
+	else:
+		result = EventService.resolve_cage(context, pos, true)
 	if not bool(result.get("ok", false)):
 		return result
+	context.truth_map.mark_cleared(pos)
+	context.intel_map.refresh_revealed_cell(pos, context.truth_map)
 	context.enemy_state["combat_snapshot"] = combat_snapshot.duplicate(true)
 	context.enemy_state["reward_committed"] = true
 	var cage := EventService.cage_state(context, pos)
 	_record_room_event(context, RunEventLog.EVENT_COMBAT_RESOLVED, {
-		"position": pos, "runtime": true, "cage": true,
+		"position": pos, "runtime": true, "cage": true, "won": true,
+		"stage_authority": "z2_event_runtime" if Z2Hooks.applies_to(context) else "legacy",
 		"combat_tick": payload.get("combat_tick", 0), "combat_seed": payload.get("combat_seed", 0),
 		"monster_types": [String(cage.get("monster_type", "slime"))], "reward": result.duplicate(true),
 	})
@@ -344,6 +402,13 @@ func resolve_runtime_combat_defeat(context: RunContext, payload: Dictionary) -> 
 		return {"ok": false, "reason": "run_not_active"}
 	if context.failed:
 		return {"ok": true, "status": &"runtime_combat_defeat_already_resolved"}
+	if Z2Hooks.applies_to(context) and context.current_room_type == &"Event":
+		var cage := EventService.cage_state(context, context.get_current_pos())
+		if cage.get("active", false):
+			var receipt := {"encounter_id": str(cage.get("combat_request", {}).get("encounter_id", "")), "room_id": context.cell_key(context.get_current_pos()), "actual_combat": true, "outcome": "loss"}
+			var resolved := Z2Events.on_cage_combat_completed(context, context.get_current_pos(), receipt, Z2Events.hooks_for(runtime_controller, context, context.get_current_pos(), "cage"))
+			if not resolved.get("ok", false):
+				return resolved
 	if context.hp > 0:
 		var applied := RunEffectApplierScript.apply_damage_packet(context, {"amount": context.hp, "damage_type": "dot", "survivals": [], "source_id": "runtime_combat_defeat"})
 		if not bool(applied.ok):
@@ -396,12 +461,17 @@ func _enter_mine(context: RunContext, pos: Vector2i, entry_failure: EntryFailure
 		if not bool(mine_hit.ok):
 			return mine_hit
 		var damage := int(mine_hit.facts.actual_hp_loss)
-		var applied := RunEffectApplierScript.apply_effects(context, [RunEffectApplierScript.effect_protocol_pressure_delta(RunBalanceCatalogScript.MINE_PRESSURE_DELTA, "mine_triggered")], entry_failure)
+		var opening := Z2Hooks.opening_hook(context, {"kind": "mine_hit", "fact_id": "mine:" + key, "actual": true, "pos": pos})
+		if not opening.get("ok", false):
+			return opening
+		var mine_pressure := 0 if opening.get("facts", {}).get("replace_mine_pressure", false) else RunBalanceCatalogScript.MINE_PRESSURE_DELTA
+		var applied := RunEffectApplierScript.apply_effects(context, [RunEffectApplierScript.effect_protocol_pressure_delta(mine_pressure, "mine_triggered")], entry_failure)
 		if not bool(applied.ok):
 			return applied
 		context.run_stats["mine_hits"] = int(context.run_stats.get("mine_hits", 0)) + 1
+		_record_room_event(context, &"mine_triggered", {"position": pos, "actual_hp_loss": damage})
 		context.intel_map.refresh_revealed_cell(pos, context.truth_map)
-		context.last_message = RunTextCatalogScript.mine_triggered(damage, RunBalanceCatalogScript.MINE_PRESSURE_DELTA)
+		context.last_message = RunTextCatalogScript.mine_triggered(damage, context.pressure - pressure_before)
 		if context.mine_hits_are_fatal and not context.failed:
 			entry_failure.fail_run("fatal_mine")
 	else:

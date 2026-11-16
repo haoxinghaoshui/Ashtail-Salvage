@@ -34,8 +34,8 @@ class FakeMetaProgressAdapter:
 		_record(&"complete_research", research_id, blocked_instance_ids)
 		return _resolve(&"complete_research", research_id, -25)
 
-	func claim_goal_reward(goal_kind: String, goal_id: String) -> Dictionary:
-		var target_id := "%s:%s" % [goal_kind, goal_id]
+	func claim_goal_reward(goal_kind: String, goal_id: String, tier: int) -> Dictionary:
+		var target_id := "%s:%s:%d" % [goal_kind, goal_id, tier]
 		_record(&"claim_goal", target_id, [])
 		return _resolve(&"claim_goal", target_id, 30)
 
@@ -243,11 +243,11 @@ func _test_all_action_payloads() -> void:
 		"claim-1",
 		"long_term",
 		&"claim_goal",
-		{"goal_kind": "achievement", "goal_id": "achievement_safe_return"}
+		{"goal_kind": "achievement", "goal_id": "A01", "tier": 2}
 	))
-	_expect(bool(claim.get("ok", false)) and str(claim.get("target_id", "")) == "achievement:achievement_safe_return", "claim did not retain exact goal kind/id")
+	_expect(bool(claim.get("ok", false)) and str(claim.get("target_id", "")) == "achievement:A01:2", "claim did not retain exact goal kind/id/tier")
 	var claim_call: Dictionary = adapter.calls.back()
-	_expect(str(claim_call.get("target_id", "")) == "achievement:achievement_safe_return", "claim adapter target was not exact")
+	_expect(str(claim_call.get("target_id", "")) == "achievement:A01:2", "claim adapter kind/id/tier was not exact")
 	var viewed := controller.execute_meta_action(_request(
 		"view-1",
 		"long_term",
@@ -263,7 +263,7 @@ func _test_failure_propagation() -> void:
 	adapter.set_failure(&"purchase", "too_expensive", &"insufficient_gold")
 	adapter.set_failure(&"sell_collectible", "configured", &"configured_item_blocked")
 	adapter.set_failure(&"complete_research", "locked_research", &"prerequisite_missing")
-	adapter.set_failure(&"claim_goal", "task:not_ready", &"not_claimable")
+	adapter.set_failure(&"claim_goal", "task:not_ready:1", &"not_claimable")
 	adapter.set_failure(&"mark_viewed", "unsupported", &"unknown_view_kind")
 	var controller = _controller()
 	controller.bind_meta_progress_adapter(adapter)
@@ -271,7 +271,7 @@ func _test_failure_propagation() -> void:
 		{"request_id": "failure-purchase", "action": &"purchase", "payload": {"item_id": "too_expensive"}, "status": &"insufficient_gold"},
 		{"request_id": "failure-sell", "action": &"sell_collectible", "payload": {"instance_id": "configured"}, "status": &"configured_item_blocked"},
 		{"request_id": "failure-research", "action": &"complete_research", "payload": {"research_id": "locked_research"}, "status": &"prerequisite_missing"},
-		{"request_id": "failure-claim", "action": &"claim_goal", "payload": {"goal_kind": "task", "goal_id": "not_ready"}, "status": &"not_claimable"},
+		{"request_id": "failure-claim", "action": &"claim_goal", "payload": {"goal_kind": "task", "goal_id": "not_ready", "tier": 1}, "status": &"not_claimable"},
 		{"request_id": "failure-view", "action": &"mark_viewed", "payload": {"view_kind": "unsupported"}, "status": &"unknown_view_kind"},
 	]
 	for case_data in cases:

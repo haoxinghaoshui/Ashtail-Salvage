@@ -207,7 +207,8 @@ func apply_chest_search_result(result: Dictionary, snapshot: Dictionary) -> void
 	configure_room(snapshot)
 	if chest == null:
 		return
-	chest.apply_search_result(bool(result.get("ok", false)))
+	var searched := bool((snapshot.get("search_state_data", {}) as Dictionary).get("searched", false))
+	chest.apply_search_result(bool(result.get("ok", false)) and searched)
 	_refresh_context_popup(last_player_local_pos, chest if chest.can_interact_from(last_player_local_pos) else null)
 
 

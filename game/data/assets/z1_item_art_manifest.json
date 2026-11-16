@@ -1585,6 +1585,132 @@
         "type": "static",
         "frame_count": 1
       }
+    },
+    {
+      "design_id": "eq_folding_shovel",
+      "runtime_id": "eq_folding_shovel",
+      "display_name": "折叠铲",
+      "visual_key": "z2.item.eq_folding_shovel",
+      "asset_id": "item.z2.eq_folding_shovel",
+      "path": "res://assets/items/z1/eq_folding_shovel.png",
+      "kind": "item",
+      "rarity": "tier_5",
+      "width": 128,
+      "height": 128,
+      "sha256": "fdf45153d04c228699606c679b771a598c27c2219a80c7d1fe91e660bf5ba99f",
+      "source": "D:/AGAME2/_worktrees/z1-scene-art/sources/art/Z1/items/supplies_pending_20261115/originals/eq_folding_shovel.source.png",
+      "source_sha256": "86c2b3801a3e443e14f1c0dc46fc88dd7610677399ea66899b8c6ebe096dc5b0",
+      "import_audit": "sources/imports/z2/z2_supply_candidate_art_import.json",
+      "activation": "playable",
+      "animation": {
+        "type": "static",
+        "frame_count": 1
+      }
+    },
+    {
+      "design_id": "eq_old_work_badge",
+      "runtime_id": "eq_old_work_badge",
+      "display_name": "旧工牌",
+      "visual_key": "z2.item.eq_old_work_badge",
+      "asset_id": "item.z2.eq_old_work_badge",
+      "path": "res://assets/items/z1/eq_old_work_badge.png",
+      "kind": "item",
+      "rarity": "tier_6",
+      "width": 128,
+      "height": 128,
+      "sha256": "6bd6b19dc70e2a7852c1ae2285ef8236c1ca7c33201f77d1c4d7c17924ce9e96",
+      "source": "D:/AGAME2/_worktrees/z1-scene-art/sources/art/Z1/items/supplies_pending_20261115/originals/eq_old_work_badge.source.png",
+      "source_sha256": "ece3b0ffe32733e7f1c028ef2df6309773b904b24206f152689f39b54cff863f",
+      "import_audit": "sources/imports/z2/z2_supply_candidate_art_import.json",
+      "activation": "playable",
+      "animation": {
+        "type": "static",
+        "frame_count": 1
+      }
+    },
+    {
+      "design_id": "eq_black_box_bell",
+      "runtime_id": "eq_black_box_bell",
+      "display_name": "黑盒铃",
+      "visual_key": "z2.item.eq_black_box_bell",
+      "asset_id": "item.z2.eq_black_box_bell",
+      "path": "res://assets/items/z1/eq_black_box_bell.png",
+      "kind": "item",
+      "rarity": "tier_6",
+      "width": 128,
+      "height": 128,
+      "sha256": "bce4592a8284e0cd0617e61a4130337933114e144ce6286424bbbeff788e66c0",
+      "source": "D:/AGAME2/_worktrees/z1-scene-art/sources/art/Z1/items/supplies_pending_20261115/originals/eq_black_box_bell.source.png",
+      "source_sha256": "c9db16f747a0fc7f1327911e014a2961187a5a8e29d6f5914930154ea49bb795",
+      "import_audit": "sources/imports/z2/z2_supply_candidate_art_import.json",
+      "activation": "playable",
+      "animation": {
+        "type": "static",
+        "frame_count": 1
+      }
+    },
+    {
+      "design_id": "con_red_battery",
+      "runtime_id": "con_red_battery",
+      "display_name": "红电池",
+      "visual_key": "z2.item.con_red_battery",
+      "asset_id": "item.z2.con_red_battery",
+      "path": "res://assets/items/z1/con_red_battery.png",
+      "kind": "item",
+      "rarity": "tier_5",
+      "width": 128,
+      "height": 128,
+      "sha256": "7dcdff812add4308f8b3158a7e822c2e92dd199f88d207201ddc931b0b2c6417",
+      "source": "D:/AGAME2/_worktrees/z1-scene-art/sources/art/Z1/items/supplies_pending_20261115/originals/con_red_battery.source.png",
+      "source_sha256": "54740ea4089b973e795a607c36a69c7cdd69f642b7cd80d41fc0b69862fc7258",
+      "import_audit": "sources/imports/z2/z2_supply_candidate_art_import.json",
+      "activation": "playable",
+      "animation": {
+        "type": "static",
+        "frame_count": 1
+      }
+    },
+    {
+      "design_id": "con_waiver_medicine",
+      "runtime_id": "con_waiver_medicine",
+      "display_name": "免责药",
+      "visual_key": "z2.item.con_waiver_medicine",
+      "asset_id": "item.z2.con_waiver_medicine",
+      "path": "res://assets/items/z1/con_waiver_medicine.png",
+      "kind": "item",
+      "rarity": "tier_6",
+      "width": 128,
+      "height": 128,
+      "sha256": "c71037c6964f8aa1910c035660df86b97a16a2093babaf9886c318f862103022",
+      "source": "D:/AGAME2/_worktrees/z1-scene-art/sources/art/Z1/items/supplies_pending_20261115/originals/con_waiver_medicine.source.png",
+      "source_sha256": "21fee9d50efcb4bbae49d3cdf6a34beae97f0802b792fcc85b87c47dbec290bf",
+      "import_audit": "sources/imports/z2/z2_supply_candidate_art_import.json",
+      "activation": "playable",
+      "animation": {
+        "type": "static",
+        "frame_count": 1
+      }
+    },
+    {
+      "design_id": "con_countdown_pill",
+      "runtime_id": "con_countdown_pill",
+      "display_name": "倒计时丸",
+      "visual_key": "z2.item.con_countdown_pill",
+      "asset_id": "item.z2.con_countdown_pill",
+      "path": "res://assets/items/z1/con_countdown_pill.png",
+      "kind": "item",
+      "rarity": "tier_6",
+      "width": 128,
+      "height": 128,
+      "sha256": "292ac38aa8625e29ec08997c2813b2e931619c562f0f6e126603d015f1808b3e",
+      "source": "D:/AGAME2/_worktrees/z1-scene-art/sources/art/Z1/items/supplies_pending_20261115/originals/con_countdown_pill.source.png",
+      "source_sha256": "0ead50fb95718092c58b6e6879d7aa08da63ac35f2697517ef7e1095294eb891",
+      "import_audit": "sources/imports/z2/z2_supply_candidate_art_import.json",
+      "activation": "playable",
+      "animation": {
+        "type": "static",
+        "frame_count": 1
+      }
     }
   ]
 }

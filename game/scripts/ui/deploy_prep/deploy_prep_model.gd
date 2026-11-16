@@ -2,9 +2,11 @@ extends RefCounted
 class_name DeployPrepModel
 
 const DeployConfigScript := preload("res://scripts/ui/deploy_prep/deploy_config.gd")
+const OpeningOffer := preload("res://scripts/core/progression/z2_opening_offer.gd")
 const DeployMapProjectionScript := preload("res://scripts/ui/deploy_prep/deploy_map_projection.gd")
 const DeployTabModelScript := preload("res://scripts/ui/deploy_prep/deploy_tab_model.gd")
 const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
 const ItemRarityDescriptorScript := preload("res://scripts/presentation/item_rarity_descriptor.gd")
 
 const EMERGENCY_CLAIM_ID := &"m6_emergency_ration"
@@ -484,12 +486,47 @@ static func _warehouse_sell_reason_text(reason_code: StringName) -> String:
 			return "该物品不可出售"
 
 
+static func _initial_supply_row(config: Dictionary) -> Dictionary:
+	var meta := _dictionary_from(config.get("meta_progress_summary", {}))
+	var state := DeployConfigScript.initial_supply_claim_state(config)
+	var facts := []
+	for raw_item in _array_from(meta.get("initial_supply_items", [])):
+		var item := _dictionary_from(raw_item)
+		facts.append(_fact(
+			"%s ×1" % str(item.get("display_name", "物资")),
+			"价值 %s 金币 · 重量 %s" % [str(item.get("purchase_price", item.get("value", "—"))), str(item.get("weight", "—"))]
+		))
+	facts.append(_fact("领取条件", "完成教学 · Lv.1 · 每份档案一次"))
+	facts.append(_fact("领取去向", "存入仓库，自行选择携带"))
+	var claimed := bool(state["claimed"])
+	var enabled := bool(state["enabled"])
+	return {
+		"id": &"claim_initial_supplies",
+		"filter_id": DeployTabModelScript.FILTER_CLAIM_RECEIVE,
+		"title": "首次补给", "category": "一次领取",
+		"state": "claimed" if claimed else ("ready" if enabled else "locked"),
+		"summary": "已领取 · 已入仓库" if claimed else ("完成教学后领取 · 存入仓库"),
+		"detail": str(state["message"]), "detail_kind": &"claim",
+		"unlocked": enabled or claimed, "claimed": claimed,
+		"unlock_text": str(state["message"]), "facts": facts,
+		"actions": [_action(
+			&"claim_initial_supplies", "已领取" if claimed else "领取至仓库",
+			enabled, false, false, StringName(state["reason_code"]), {"target_id": "initial_supplies"}
+		)],
+		"preview": false, "display_only": false, "read_only": true,
+	}
+
+
 static func _claim_rows(config: Dictionary, selected_filter: StringName) -> Array:
 	var result := []
+	var meta := _dictionary_from(config.get("meta_progress_summary", {}))
+	var z2_profile := Z2Rules.applies_to(meta)
 	var wallet := _wallet_projection(config)
 	var active_locked := bool(config.get("active_run_locked", false))
 	var claimed := _array_from(config.get("enabled_claims", [])).has(EMERGENCY_CLAIM_ID)
-	if selected_filter in [DeployTabModelScript.FILTER_ALL, DeployTabModelScript.FILTER_CLAIM_RECEIVE]:
+	if z2_profile and selected_filter in [DeployTabModelScript.FILTER_ALL, DeployTabModelScript.FILTER_CLAIM_RECEIVE]:
+		result.append(_initial_supply_row(config))
+	if not z2_profile and selected_filter in [DeployTabModelScript.FILTER_ALL, DeployTabModelScript.FILTER_CLAIM_RECEIVE]:
 		var ration := M7ContentCatalogScript.item_definition("con_ration")
 		var capacity_available := int(config.get("equipment_used", 0)) + int(ration.get("weight", 0)) <= int(config.get("equipment_capacity", 100))
 		var claim_enabled := not active_locked and (claimed or capacity_available)
@@ -528,8 +565,7 @@ static func _claim_rows(config: Dictionary, selected_filter: StringName) -> Arra
 		})
 	if selected_filter == DeployTabModelScript.FILTER_CLAIM_RECEIVE:
 		return result
-	var meta := _dictionary_from(config.get("meta_progress_summary", {}))
-	var shop_catalog := _array_from(meta.get("shop_catalog", M7ContentCatalogScript.shop_definitions()))
+	var shop_catalog := _array_from(meta.get("shop_catalog", M7ContentCatalogScript.shop_definitions(meta)))
 	for raw_shop in shop_catalog:
 		var shop := _dictionary_from(raw_shop)
 		var unlocked := bool(shop.get("unlocked", M7ContentCatalogScript.is_shop_unlocked(shop, meta)))
@@ -538,7 +574,7 @@ static func _claim_rows(config: Dictionary, selected_filter: StringName) -> Arra
 		if selected_filter == DeployTabModelScript.FILTER_CLAIM_LOCKED and unlocked:
 			continue
 		var item_id := str(shop.get("item_id", ""))
-		var item := M7ContentCatalogScript.item_definition(item_id)
+		var item := M7ContentCatalogScript.item_definition(item_id, meta)
 		var price := int(shop.get("price", 0))
 		var purchase_quantity := DeployConfigScript.purchase_quantity(config, item_id)
 		var total_price := price * purchase_quantity
@@ -582,6 +618,7 @@ static func _claim_rows(config: Dictionary, selected_filter: StringName) -> Arra
 			"rarity_color": Color(rarity_descriptor.get("color", Color.WHITE)),
 			"price": price,
 			"unit_price": price,
+			"weight": int(item.get("weight", 0)),
 			"total_price": total_price,
 			"purchase_quantity": purchase_quantity,
 			"quantity_capable": true,
@@ -596,7 +633,7 @@ static func _claim_rows(config: Dictionary, selected_filter: StringName) -> Arra
 			"affordable": affordable,
 			"unlock_text": unlock_text,
 			"facts": [
-				_fact("单价", "%d 金币" % price),
+				_fact("单价", "%d 金币 · 重量 %d" % [price, int(item.get("weight", 0))]),
 				_fact("本次购买", "%d 件 / %d 金币" % [purchase_quantity, total_price]),
 				_fact("交易后余额", str(wallet_gold - total_price), &"positive" if affordable else &"warning"),
 				_fact("解锁", unlock_text, &"positive" if unlocked else &"muted"),
@@ -656,8 +693,45 @@ static func _objective_rows(config: Dictionary) -> Array:
 	return result
 
 
+static func _opening_rows(config: Dictionary) -> Array:
+	var state := DeployConfigScript.opening_offer_state(config)
+	if not state.qualified:
+		return []
+	var offer: Dictionary = state.offer
+	var actions := []
+	var can_edit: bool = not state.locked and not state.closed
+	var payload := {"offer_id": str(offer.get("offer_id", ""))}
+	if offer.is_empty():
+		actions.append(_action(&"opening_prepare", "查看本次三选一", can_edit, false, false, &"active_run_locked" if state.locked else &"ok"))
+	elif not state.closed:
+		var can_refresh: bool = can_edit and int(offer.get("refresh_count", 0)) < 10 and int(state.gold) >= int(state.refresh_cost)
+		actions.append(_action(&"opening_refresh", "刷新 · %d金币" % int(state.refresh_cost) if int(offer.get("refresh_count", 0)) < 10 else "刷新次数已用完", can_refresh, false, false, &"opening_refresh_unavailable", payload))
+		actions.append(_action(&"opening_skip", "跳过本次开局效果", can_edit, false, false, &"active_run_locked" if state.locked else &"ok", payload))
+	var selected := str(offer.get("selected", ""))
+	var selected_index := OpeningOffer.IDS.find(selected)
+	var status: String = "已跳过" if str(offer.get("status", "")) == "skipped" else ("已选择：" + OpeningOffer.LABELS[selected_index] if selected_index >= 0 else "三选一或跳过后出发")
+	var result: Array = [{"id": &"opening_offer", "filter_id": DeployTabModelScript.FILTER_ALL,
+		"title": "开局准备", "category": "开局效果", "state": "selected" if state.closed else "ready", "summary": status,
+		"detail": OpeningOffer.DESCRIPTIONS[selected_index] if selected_index >= 0 else "选择后本次出发不可更换；刷新与选择保存在档案中。",
+		"detail_kind": &"opening_offer", "facts": [_fact("已刷新", "%d / 10" % int(offer.get("refresh_count", 0)))], "actions": actions,
+		"preview": false, "display_only": false, "read_only": true}]
+	if not state.closed:
+		for id: Variant in offer.get("candidates", []):
+			var index := OpeningOffer.IDS.find(str(id))
+			if index < 0:
+				continue
+			var choice := payload.duplicate(true)
+			choice["effect_id"] = str(id)
+			result.append({"id": StringName("opening_" + str(id)), "filter_id": DeployTabModelScript.FILTER_ALL,
+				"title": OpeningOffer.LABELS[index], "category": "开局三选一", "state": "ready", "summary": "本次候选",
+				"detail": OpeningOffer.DESCRIPTIONS[index], "detail_kind": &"opening_offer", "facts": [],
+				"actions": [_action(&"opening_choose", "选择此效果", can_edit, false, false, &"active_run_locked" if state.locked else &"ok", choice)],
+				"preview": false, "display_only": false, "read_only": true})
+	return result
+
+
 static func _loadout_rows(config: Dictionary, map_projection: Dictionary) -> Array:
-	var result := []
+	var result := _opening_rows(config)
 	var selected_map := _dictionary_from(map_projection.get("selected_detail", {}))
 	var map_name := str(config.get("map_display_name", selected_map.get("display_name", "未选择地图")))
 	var scale_label := str(selected_map.get("scale_label", "—"))
@@ -1207,6 +1281,8 @@ static func _item_names_with_counts(items: Array, empty_text: String) -> String:
 
 static func _validity_reason_text(reason_code: StringName) -> String:
 	match reason_code:
+		&"opening_selection_required":
+			return "请在携带清单完成开局三选一或跳过"
 		&"no_maps_available":
 			return "没有已解锁地图"
 		&"map_locked":

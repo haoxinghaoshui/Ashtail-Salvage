@@ -55,7 +55,16 @@ static func capture_data(target: Object, excluded: Array = []) -> Dictionary:
 		if (int(property.get("usage", 0)) & PROPERTY_USAGE_SCRIPT_VARIABLE) == 0 or name in excluded:
 			continue
 		var value: Variant = target.get(name)
-		if value is Dictionary or value is Array:
+		if target is TruthMap and name == "rooms":
+			var rooms := {}
+			for key in value:
+				var room: Dictionary = value[key].duplicate()
+				# This schema is explicitly display_only/no_persistence and depends
+				# only on room type. Retain all actual room state and other fields.
+				room.erase("RoomRulePreview")
+				rooms[key] = room.duplicate(true)
+			result[name] = rooms
+		elif value is Dictionary or value is Array:
 			result[name] = value.duplicate(true)
 		elif value is PackedStringArray:
 			result[name] = value.duplicate()
@@ -75,6 +84,16 @@ static func install_data(target: Object, data: Dictionary) -> void:
 			current.merge(value.duplicate(true))
 		else:
 			target.set(name, value)
+	if target is TruthMap and data.has("rooms"):
+		# Rebuild after spawn_pos and the other map fields have been installed.
+		var previews := {}
+		for room: Dictionary in target.rooms.values():
+			if room.has("RoomRulePreview"):
+				continue
+			var room_type: StringName = target._normalized_room_type(room, room.get("pos", Vector2i.ZERO))
+			if not previews.has(room_type):
+				previews[room_type] = TruthMap.RoomCommonRuleSchemaScript.room_rule_preview_for(room_type)
+			room["RoomRulePreview"] = previews[room_type].duplicate(true)
 
 static func capture_context(context: RunContext) -> Dictionary:
 	var components: Dictionary = {}
@@ -90,9 +109,21 @@ static func install_context(context: RunContext, snapshot: Dictionary) -> Dictio
 	for name in COMPONENTS:
 		if not components.has(name):
 			return {"ok": false, "reason": "missing_snapshot_component"}
+	var registry: ContentDefRegistry = context.content_defs
+	var data: Dictionary = snapshot["data"]
+	var profile: Dictionary = data.get("profile_fields", {})
+	var use_z2 := str(profile.get("ruleset_id", "")) == "z2" and int(profile.get("z2_progression_version", 0)) == 1
+	if bool(data.get("run_started", false)) and (registry == null or registry.definitions.has("rules.z2") != use_z2):
+		registry = ContentDefRegistry.new()
+		if use_z2:
+			var registered := registry.setup_z2()
+			if not registered.get("ok", false):
+				return registered
+		else:
+			registry.setup_defaults()
 	for name in COMPONENTS:
-		var data: Variant = components[name]
-		if data == null:
+		var component_data: Variant = components[name]
+		if component_data == null:
 			context.set(name, null)
 			continue
 		var target: Variant = context.get(name)
@@ -105,15 +136,13 @@ static func install_context(context: RunContext, snapshot: Dictionary) -> Dictio
 				"transaction_log": target = RunTransactionLog.new()
 				"rule_pipeline": target = RunRulePipeline.new()
 			context.set(name, target)
-		install_data(target, data)
+		install_data(target, component_data)
 	install_data(context, snapshot["data"])
 	if context.query_facade == null:
 		context.query_facade = RunQueryFacade.new()
 	if context.minefield_service == null:
 		context.minefield_service = MinefieldService.new()
-	if context.content_defs == null and context.run_started:
-		context.content_defs = ContentDefRegistry.new()
-		context.content_defs.setup_defaults()
+	context.content_defs = registry
 	return {"ok": true}
 
 static func can_encode(value: Variant) -> bool:

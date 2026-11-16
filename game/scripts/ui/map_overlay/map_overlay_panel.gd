@@ -40,6 +40,8 @@ func apply_layout_profile(profile: Dictionary) -> void:
 		float(layout_profile.get("ui_scale_factor", ui_scale_factor))
 	)
 	layout_profile["ui_scale_factor"] = ui_scale_factor
+	if is_inside_tree():
+		layout_profile["actual_viewport_size"] = Vector2i(UILayerContractScript.viewport_size_from_profile(layout_profile).max(get_viewport_rect().size))
 	set_meta("runtime_ui_scale_factor", ui_scale_factor)
 	var is_low := bool(layout_profile.get("is_low_resolution", false))
 	var is_high := bool(layout_profile.get("is_high_resolution", false))
@@ -142,8 +144,9 @@ func _ready() -> void:
 
 
 func _apply_layer_order() -> void:
-	z_as_relative = true
-	z_index = 0
+	# The production input shield uses MODAL - 1 even for the read-only map.
+	# Keep the whole map above it; lifting only cell icons leaves text dimmed.
+	UILayerContractScript.apply_layer(self, &"modal")
 	var dimmer := get_node_or_null("Dimmer") as CanvasItem
 	if dimmer != null:
 		dimmer.z_as_relative = true

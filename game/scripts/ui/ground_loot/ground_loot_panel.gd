@@ -36,6 +36,7 @@ func _ready() -> void:
 
 func build() -> void:
 	name = "GroundLootPanel"
+	UILayerContractScript.apply_layer(self, &"modal")
 	Art10UISkinKitScript.apply_player_ui_theme(self)
 	visible = false
 	offset_left = 390.0
@@ -121,6 +122,10 @@ func build() -> void:
 	detail_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	detail_scroll.custom_minimum_size.y = 112.0
 	detail_column.add_child(detail_scroll)
+	var detail_content := VBoxContainer.new()
+	detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_content.add_theme_constant_override("separation", 5)
+	detail_scroll.add_child(detail_content)
 	tooltip_label = Label.new()
 	tooltip_label.name = "GroundLootItemTooltip"
 	tooltip_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -129,7 +134,7 @@ func build() -> void:
 	tooltip_label.custom_minimum_size = Vector2(500, 54)
 	tooltip_label.add_theme_font_size_override("font_size", 15)
 	tooltip_label.add_theme_constant_override("line_spacing", 2)
-	detail_scroll.add_child(tooltip_label)
+	detail_content.add_child(tooltip_label)
 
 	last_result_label = Label.new()
 	last_result_label.name = "GroundLootCommandResult"
@@ -138,7 +143,7 @@ func build() -> void:
 	last_result_label.custom_minimum_size = Vector2(0, 22)
 	last_result_label.add_theme_font_size_override("font_size", 14)
 	last_result_label.hide()
-	detail_column.add_child(last_result_label)
+	detail_content.add_child(last_result_label)
 	_refresh_ui_scale_metrics()
 
 
@@ -200,6 +205,8 @@ func show_command_result(result: Dictionary) -> void:
 	last_result_label.visible = last_result_label.text.strip_edges() != ""
 	Art10UISkinKitScript.apply_label(last_result_label, 14, PresentationTheme.color_for_key(&"ui.accent"))
 	_set_scaled_font(last_result_label, 14)
+	if last_result_label.visible:
+		detail_scroll.call_deferred("ensure_control_visible", last_result_label)
 	var pulse_state := &"ready"
 	if not bool(result.get("accepted", result.get("ok", false))):
 		pulse_state = &"warning"
@@ -274,6 +281,8 @@ func _main_game_modal_rect(profile: Dictionary, y_shift: float = 0.0) -> Rect2:
 	var height: float = maxf(1.0, viewport_size.y)
 	var margin: float = 18.0 if bool(profile.get("is_low_resolution", false)) else 24.0
 	var left_width: float = min(UILayerContractScript.run_left_width(profile), width * 0.42)
+	if width < 960.0:
+		left_width = 0.0
 	var gameplay_left: float = left_width + margin
 	var gameplay_width: float = maxf(260.0, width - gameplay_left - margin)
 	var modal_width: float = clampf(gameplay_width * 0.90, 520.0, 760.0)
@@ -318,6 +327,9 @@ func _add_item_row(item: Dictionary) -> void:
 	item_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_apply_art09_item_icon(item_button, item)
 	_apply_art21r2_modal_button(item_button, &"art21r2.modal.item_row.normal", &"secondary", 15, 10, 18)
+	item_button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	item_button.clip_text = false
+	item_button.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 	_apply_rarity_row_style(item_button, item)
 	var show_detail := func() -> void: _show_item_detail(item)
 	item_button.pressed.connect(show_detail)
@@ -461,10 +473,14 @@ func _apply_art21r2_modal_button(button: Button, visual_key: StringName, tone: S
 	button.set_meta("ui_scale_base_font_size", font_size_value)
 	var size_class := &"compact" if button.custom_minimum_size.x <= 96.0 else &"regular"
 	var inset_profile := Art10UISkinKitScript.control_inset_profile(size_class)
+	var content_insets: Vector4 = inset_profile.get("content", Vector4(padding, padding, padding, padding))
+	if visual_key == &"art21r2.modal.item_row.normal":
+		content_insets.y = 14.0
+		content_insets.w = 14.0
 	var texture := Art21UIPlacementContractScript.texture_for_visual_key(visual_key, &"ui.art19.button.dark")
 	var style := Art10UISkinKitScript.style_box_from_texture_with_insets(
 		texture,
-		inset_profile.get("content", Vector4(padding, padding, padding, padding)),
+		content_insets,
 		inset_profile.get("slice", Vector4(texture_margin, texture_margin, texture_margin, texture_margin))
 	)
 	if style != null:

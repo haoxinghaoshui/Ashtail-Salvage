@@ -147,11 +147,44 @@ static func apply_pressure_packet(context: RunContext, packet: Dictionary) -> Di
 static func _apply_packet(context: RunContext, packet: Dictionary, kind: String) -> Dictionary:
 	if context == null:
 		return {"ok": false, "reason": "no_active_run", "state": {}, "facts": {}}
+	if is_z2_run(context) and context.run_active and context.hp > 0 and not context.failed and not context.extracted and not context.abandoned:
+		# Validate the original packet before the supply composer reads its arrays.
+		# This preview is pure; only the composed packet below is installed.
+		var checked := _resolve_packet(context, capture_vitals(context), packet, kind)
+		if not bool(checked.ok):
+			return checked
+		var routed := packet.duplicate(true)
+		if kind == "damage" and not routed.has("damage_type"):
+			routed.damage_type = _legacy_damage_type(str(routed.get("reason", routed.get("source_id", kind))))
+		if kind == "pressure" and not routed.has("source_kind"):
+			var source := str(routed.get("reason", routed.get("source_id", "")))
+			if source.begins_with("combat"):
+				routed.source_kind = "combat"
+			elif source in ["event_trap", "event_mechanism", "mechanism"]:
+				routed.source_kind = "mechanism"
+		# Runtime load avoids a mutual preload: supplies use our final Vitals entry.
+		var supplies: Script = load("res://scripts/core/run/z2_supply_runtime.gd")
+		var result: Dictionary = supplies.on_event(context, supplies.equipped_items(context), {"kind": kind, "packet": routed})
+		if bool(result.get("ok", false)):
+			result["state"] = capture_vitals(context)
+		return result
+	return apply_vitals_packet(context, packet, kind)
+
+
+# Final low-level entry for an already supply-composed packet. Never routes back
+# through Z2SupplyRuntime; numerical rules still live only in RunVitalsResolver.
+static func apply_vitals_packet(context: RunContext, packet: Dictionary, kind: String) -> Dictionary:
+	if context == null or kind not in ["damage", "heal", "pressure"]:
+		return {"ok": false, "reason": "invalid_vitals_target", "state": {}, "facts": {}}
 	var result := _resolve_packet(context, capture_vitals(context), packet, kind)
 	if bool(result.ok):
 		install_vitals(context, result.state)
 		_record_vitals(context, kind, result.facts)
 	return result
+
+
+static func is_z2_run(context: RunContext) -> bool:
+	return context != null and str(context.profile_fields.get("ruleset_id", "")) == "z2" and context.profile_fields.get("z2_progression_version") == 1
 
 
 static func _resolve_packet(context: RunContext, state: Dictionary, packet: Dictionary, kind: String) -> Dictionary:
@@ -178,12 +211,13 @@ static func _resolve_packet(context: RunContext, state: Dictionary, packet: Dict
 			if not composed.get("flat_reductions", []) is Array:
 				return {"ok": false, "reason": "invalid_packet", "state": state, "facts": {}}
 			var reductions := _array(composed.get("flat_reductions", []))
-			if context.protocol_pressure_reduce > 0:
-				reductions.append({"amount": context.protocol_pressure_reduce})
-			if context.asset_ledger != null:
-				var legacy := Z1SupplyRules.pressure_reduction(context, str(composed.get("reason", composed.source_id)))
-				if legacy > 0:
-					reductions.append({"amount": legacy})
+			if not is_z2_run(context):
+				if context.protocol_pressure_reduce > 0:
+					reductions.append({"amount": context.protocol_pressure_reduce})
+				if context.asset_ledger != null:
+					var legacy := Z1SupplyRules.pressure_reduction(context, str(composed.get("reason", composed.source_id)))
+					if legacy > 0:
+						reductions.append({"amount": legacy})
 			composed.flat_reductions = reductions
 			result = VitalsScript.resolve_pressure(state, composed)
 			if bool(result.ok):
@@ -225,6 +259,8 @@ static func advance_statuses(context: RunContext, delta: float, trigger: Diction
 	if not bool(result.ok):
 		return _status_failure(before, str(result.reason))
 	var candidate: Dictionary = result.state
+	var routed_before := {}
+	var route_supplies := is_z2_run(context)
 	var facts: Dictionary = result.facts
 	facts.packets = []
 	var durable: bool = not facts.started.is_empty() or not facts.ended.is_empty() or not facts.hits_consumed.is_empty()
@@ -243,8 +279,18 @@ static func advance_statuses(context: RunContext, delta: float, trigger: Diction
 			if units <= 0:
 				continue
 			var packet := {"amount": units, "source_id": str(status.get("source_id", status.id)), "damage_type": "dot"}
-			var applied := _resolve_packet(context, candidate, packet, "damage" if periodic_kind == "dot" else "heal")
+			var packet_kind := "damage" if periodic_kind == "dot" else "heal"
+			var applied: Dictionary
+			if route_supplies:
+				if routed_before.is_empty():
+					routed_before = StateSnapshotScript.capture_context(context)
+				install_vitals(context, candidate)
+				applied = _apply_packet(context, packet, packet_kind)
+			else:
+				applied = _resolve_packet(context, candidate, packet, packet_kind)
 			if not bool(applied.ok):
+				if not routed_before.is_empty():
+					StateSnapshotScript.install_context(context, routed_before)
 				return _status_failure(before, str(applied.reason))
 			# Preserve the status array being advanced while installing candidate resource fields.
 			var statuses: Array = candidate.statuses
@@ -255,8 +301,9 @@ static func advance_statuses(context: RunContext, delta: float, trigger: Diction
 	var changed := candidate != before
 	if changed:
 		install_vitals(context, candidate)
-	for fact in facts.packets:
-		_record_vitals(context, str(fact.kind), fact)
+	if not route_supplies:
+		for fact in facts.packets:
+			_record_vitals(context, str(fact.kind), fact)
 	if durable:
 		context.record_event(&"status_advanced", str(context.active_command.get("command_id", "")), &"player", "simulation_time", facts)
 	return {"ok": true, "reason": "", "state": candidate, "facts": facts, "changed": changed, "durability_required": durable}

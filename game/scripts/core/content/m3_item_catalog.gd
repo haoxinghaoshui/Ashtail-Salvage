@@ -32,6 +32,9 @@ static func all_items() -> Array[Dictionary]:
 
 static func normalize_instance_units(source: Dictionary) -> Dictionary:
 	var result := source.duplicate(true)
+	if source.get("content_version", "") == "z2-system-20261116":
+		# New instances already carry the frozen Z2 units and item effects.
+		return result
 	var item_id := str(source.get("item_id", ""))
 	for definition in all_items():
 		if str(definition.get("item_id", "")) != item_id:

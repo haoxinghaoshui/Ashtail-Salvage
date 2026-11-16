@@ -98,7 +98,12 @@ func _test_limited_transition_runtime() -> void:
 		"manual_map": {"spawn": Vector2i.ZERO, "monsters": [Vector2i(1, 0)], "exits": [{"pos": Vector2i(4, 4), "exit_id": "test_exit"}]}})
 	bus.runtime_controller = RefCounted.new() # Deliberately has no optional room/combat API.
 	_check(bool(bus.dispatch(&"move_by", {"delta": Vector2i.RIGHT}).get("ok", false)), "limited runtime remains compatible with room movement")
+	bus.context.asset_ledger.add_currency(&"black_coin", 100)
+	for index in range(32):
+		bus.context.asset_ledger.create_item_instance(M3RItemUsabilityModel.item_definition("col_01"), &"inventory")
 	_check(bool(bus.dispatch(&"flee_runtime_combat", {"source": "g41_in_run_runtime"}).get("ok", false)), "limited runtime remains compatible with legacy flee resolution")
+	_check(bus.context.asset_ledger.get_currency(&"black_coin") == 90, "legacy flee compatibility retains exactly one ten-coin charge")
+	_check(not bus.context.asset_ledger.get_room_floor_items(Vector2i(1, 0)).is_empty(), "legacy flee compatibility still exercises actual instance drops")
 
 
 func _new_transition_profile(label: String) -> void:
@@ -107,6 +112,9 @@ func _new_transition_profile(label: String) -> void:
 	var meta := MetaProgressAdapter.new()
 	manager.configure_meta_adapter(meta)
 	_check(bool(meta.initialize_z2_profile(RuntimeController.Z2_CONTENT_VERSION).get("ok", false)), label + ": real profile created")
+	_check(meta.begin_tutorial_training().get("ok", false), label + ": teaching eligibility begins")
+	_check(meta.purchase_tutorial_flag().get("ok", false), label + ": teaching purchase persists")
+	_check(meta._apply_tutorial_settlement({"mode": "tutorial", "outcome": "Training Complete", "settlement": {"outcome": "success"}}, "transition-teaching-" + label).get("ok", false), label + ": legal teaching qualification persists")
 	_check(bool(manager.save_manifest().get("ok", false)), label + ": profile selected on disk")
 
 
@@ -125,7 +133,10 @@ func _discard_transition_scene(main: Node) -> void:
 
 
 func _prepare_transition_scene(scene, source_type: StringName, target_type: StringName, direction: Vector2i) -> void:
-	_check(bool(scene.command_bus.dispatch(&"start_demo_run").get("ok", false)), "transition fixture: real admission")
+	var config := RunStartConfig.default_config()
+	config.merge({"map_config_id": "classic_7x7_simple", "difficulty": &"simple", "seed_value": 71}, true)
+	config.selected_objective_id = M7ContentCatalog.commission_offer_candidates("classic_7x7_simple", 0)[0].id
+	_check(bool(scene.command_bus.dispatch(&"start_standard_run", {"run_start_config": config}).get("ok", false)), "transition fixture: real standard admission")
 	var context = scene.run_context
 	var source := Vector2i(2, 2)
 	context.tutorial_popup.clear()
@@ -179,26 +190,26 @@ func _test_flee_then_transition_disk_failure() -> void:
 	_check(bool(fled.get("ok", false)) and disk.checkpoint_writes == 1, "flee: first real checkpoint succeeds")
 	var first := _read_transition_checkpoint(runtime, "flee-success")
 	_check(first.get("bridge", {}).get("flee_authorized", false) and first.get("bridge", {}).get("simulation") == null, "flee: first checkpoint includes authorization and cleared simulation")
-	_check(context.asset_ledger.get_currency(&"black_coin") == 90, "flee: exactly one 10-coin cost")
+	_check(context.asset_ledger.get_currency(&"black_coin") == 100, "flee: Z2 ordinary flee preserves all 100 coins")
 	var items: Dictionary = context.asset_ledger.item_instances.duplicate(true)
 	var floor_items: Dictionary = context.asset_ledger.room_floor_items.duplicate(true)
-	_check(not context.asset_ledger.get_room_floor_items(Vector2i(2, 2)).is_empty(), "flee fixture exercises actual instance drops")
+	_check(context.asset_ledger.get_room_floor_items(Vector2i(2, 2)).is_empty() and context.asset_ledger.get_items_by_location(&"inventory").size() == 16, "Z2 flee retains all sixteen instances without floor drops")
 	var first_bytes := FileAccess.get_file_as_bytes(runtime.checkpoint_service.checkpoint_path)
 	var authorized: Dictionary = runtime.capture_authoritative_state()
 	scene._attempt_room_transition(Vector2i.RIGHT)
 	_check(disk.checkpoint_writes == 2 and not runtime.persistence_error.is_empty(), "flee: cut the second actual checkpoint rename")
-	_check(runtime.capture_authoritative_state() == authorized, "flee: failed crossing rolls back to paid authorization")
+	_check(runtime.capture_authoritative_state() == authorized, "flee: failed crossing rolls back to committed authorization")
 	_check(FileAccess.get_file_as_bytes(runtime.checkpoint_service.checkpoint_path) == first_bytes, "flee: failed crossing leaves first checkpoint byte-identical")
 	_discard_transition_scene(main)
 	main = await _open_transition_scene()
 	scene = main.get_node("RunScene")
 	runtime = scene.runtime_controller
 	_check(runtime.persistence_error.is_empty() and scene.in_run_runtime.flee_authorized and not scene.in_run_runtime.has_active_combat(), "flee: disk-only restart retains authorization without restarting combat")
-	_check(runtime.context.asset_ledger.get_currency(&"black_coin") == 90 and runtime.context.asset_ledger.item_instances == items and runtime.context.asset_ledger.room_floor_items == floor_items, "flee: restart preserves coins and each instance location")
+	_check(runtime.context.asset_ledger.get_currency(&"black_coin") == 100 and runtime.context.asset_ledger.item_instances == items and runtime.context.asset_ledger.room_floor_items == floor_items, "flee: restart preserves coins and each instance location")
 	scene._show_run_screen()
 	scene._attempt_room_transition(Vector2i.RIGHT)
 	_check(runtime.context.get_current_pos() == Vector2i(3, 2), "flee: restarted authorized run crosses without another flee")
-	_check(runtime.context.asset_ledger.get_currency(&"black_coin") == 90 and runtime.context.asset_ledger.item_instances == items and runtime.context.asset_ledger.room_floor_items == floor_items, "flee: retry crossing cannot duplicate fees or instances")
+	_check(runtime.context.asset_ledger.get_currency(&"black_coin") == 100 and runtime.context.asset_ledger.item_instances == items and runtime.context.asset_ledger.room_floor_items == floor_items, "flee: retry crossing cannot duplicate fees or instances")
 	var completed := _read_transition_checkpoint(runtime, "flee-crossed")
 	_check(completed.get("bridge", {}).get("current_room_key", "") == "3,2" and not completed.get("bridge", {}).get("flee_authorized", true), "flee: successful crossing durably consumes room-specific authorization")
 	_discard_transition_scene(main)
@@ -249,10 +260,10 @@ func _test_flee_position_handoff() -> void:
 	_check(bool(fled.get("ok", false)) and disk.checkpoint_writes == 1, "flee position: original flee action saves once")
 	var checkpoint := _read_transition_checkpoint(runtime, "flee-position-success")
 	_check(checkpoint.get("local_position") == exit_b and checkpoint.get("bridge", {}).get("simulation") == null, "flee position: first disk snapshot hands B off before clearing simulation")
-	_check(checkpoint.get("bridge", {}).get("flee_authorized", false) and context.asset_ledger.get_currency(&"black_coin") == 90, "flee position: authorization and one fee share the checkpoint")
+	_check(checkpoint.get("bridge", {}).get("flee_authorized", false) and context.asset_ledger.get_currency(&"black_coin") == 100, "flee position: authorization and unchanged wallet share the checkpoint")
 	var items: Dictionary = context.asset_ledger.item_instances.duplicate(true)
 	var floor_items: Dictionary = context.asset_ledger.room_floor_items.duplicate(true)
-	_check(not context.asset_ledger.get_room_floor_items(combat_room).is_empty(), "flee position: actual item drops are exercised")
+	_check(context.asset_ledger.get_room_floor_items(combat_room).is_empty() and context.asset_ledger.get_items_by_location(&"inventory").size() == 16, "flee position: Z2 preserves all sixteen inventory instances")
 	var first_bytes := FileAccess.get_file_as_bytes(runtime.checkpoint_service.checkpoint_path)
 	scene._attempt_room_transition(Vector2i.UP)
 	_check(disk.checkpoint_writes == 2 and not runtime.persistence_error.is_empty() and context.get_current_pos() == combat_room, "flee position: precisely the following crossing save fails")
@@ -261,7 +272,7 @@ func _test_flee_position_handoff() -> void:
 	scene.persistence_controller.persistence_retry_button.pressed.emit()
 	_check(runtime.persistence_error.is_empty() and not scene.persistence_controller.persistence_error_panel.visible, "flee position: real retry button recovers in the same process")
 	_check(scene.player_controller.get_local_position() == exit_b and runtime.get_restored_local_position(Vector2.ZERO) == exit_b, "flee position: same-process retry restores B, not entrance A")
-	_check(scene.in_run_runtime.flee_authorized and not scene.in_run_runtime.has_active_combat() and context.asset_ledger.get_currency(&"black_coin") == 90 and context.asset_ledger.item_instances == items and context.asset_ledger.room_floor_items == floor_items, "flee position: retry preserves authorization, one fee and exact instance locations")
+	_check(scene.in_run_runtime.flee_authorized and not scene.in_run_runtime.has_active_combat() and context.asset_ledger.get_currency(&"black_coin") == 100 and context.asset_ledger.item_instances == items and context.asset_ledger.room_floor_items == floor_items, "flee position: retry preserves authorization, unchanged wallet and exact instance locations")
 	_check(disk.checkpoint_writes == 2 and FileAccess.get_file_as_bytes(runtime.checkpoint_service.checkpoint_path) == first_bytes, "flee position: retry did not repair position with an extra save")
 	_discard_transition_scene(main)
 	main = await _open_transition_scene()
@@ -269,10 +280,10 @@ func _test_flee_position_handoff() -> void:
 	runtime = scene.runtime_controller
 	_check(runtime.persistence_error.is_empty() and scene.run_context.get_current_pos() == combat_room, "flee position: immediate Main restart recovers the same room")
 	_check(scene.player_controller.get_local_position() == exit_b and runtime.get_restored_local_position(Vector2.ZERO) == exit_b, "flee position: disk-only restart restores B, not entrance A")
-	_check(scene.in_run_runtime.flee_authorized and not scene.in_run_runtime.has_active_combat() and runtime.context.asset_ledger.get_currency(&"black_coin") == 90 and runtime.context.asset_ledger.item_instances == items and runtime.context.asset_ledger.room_floor_items == floor_items, "flee position: restart preserves permission and costs exactly once")
+	_check(scene.in_run_runtime.flee_authorized and not scene.in_run_runtime.has_active_combat() and runtime.context.asset_ledger.get_currency(&"black_coin") == 100 and runtime.context.asset_ledger.item_instances == items and runtime.context.asset_ledger.room_floor_items == floor_items, "flee position: restart preserves permission and all coins exactly")
 	scene._show_run_screen()
 	scene._attempt_room_transition(Vector2i.UP)
-	_check(runtime.context.get_current_pos() == next_room and runtime.context.asset_ledger.get_currency(&"black_coin") == 90 and runtime.context.asset_ledger.item_instances == items and runtime.context.asset_ledger.room_floor_items == floor_items, "flee position: restarted run crosses without another fee or item loss")
+	_check(runtime.context.get_current_pos() == next_room and runtime.context.asset_ledger.get_currency(&"black_coin") == 100 and runtime.context.asset_ledger.item_instances == items and runtime.context.asset_ledger.room_floor_items == floor_items, "flee position: restarted run crosses without another fee or item loss")
 	var sounds: Array[WeakRef] = []
 	for child in scene.player_feedback_service.get_children():
 		if child is AudioStreamPlayer and child.stream != null:
@@ -333,9 +344,19 @@ func _test_shortcut_transition_checkpoint(command: StringName, via_ui: bool = fa
 	context.z1_event_rooms[context.cell_key(context.get_current_pos())] = {"event_type": &"z1_event_e16"}
 	context.asset_ledger.add_currency(&"black_coin", 100, "shortcut_fixture")
 	context.asset_ledger.sync_compat_fields(context)
+	var prepared: Dictionary = scene._dispatch_command(command) if command == &"interact_current_room" else scene.command_bus.dispatch(&"select_event_option", {"option_id": &"prepare"})
+	_check(prepared.get("ok", false), label + ": real shortcut quote prepared through its original entry route")
 	var options: Array = EventService.get_event_state(context, context.get_current_pos()).get("options", [])
-	var target: Vector2i = options[0].get("payload", {}).get("target_pos", Vector2i.ZERO)
+	var preview: Dictionary = options.filter(func(option: Dictionary) -> bool: return option.id == &"preview_target")[0]
+	var target: Vector2i = preview.payload.target_pos
 	context.truth_map.set_room_type(target, target_type)
+	var preview_payload: Dictionary = preview.payload.duplicate(true)
+	preview_payload["option_id"] = &"preview_target"
+	_check(scene.command_bus.dispatch(&"select_event_option", preview_payload).get("ok", false), label + ": actual target preview precedes travel")
+	options = EventService.get_event_state(context, context.get_current_pos()).get("options", [])
+	var travel: Dictionary = options.filter(func(option: Dictionary) -> bool: return option.id == &"travel")[0]
+	var travel_payload: Dictionary = travel.payload.duplicate(true)
+	travel_payload["option_id"] = &"travel"
 	if via_ui:
 		scene._apply_full_view_models()
 		var projection := G41WorldObjectProjection.build(context.get_status_snapshot())
@@ -350,17 +371,23 @@ func _test_shortcut_transition_checkpoint(command: StringName, via_ui: bool = fa
 	if via_ui:
 		scene._show_event_panel(EventService.get_event_state(context, context.get_current_pos()))
 		_check(scene._runtime_modal_is_top(&"event"), label + ": actual event modal opens within interaction range")
-		var button := scene.event_choice_panel.find_child("EventOption_0", true, false) as Button
-		_check(button != null and not button.disabled, label + ": actual travel button enabled")
+		var dialogue: Control = scene.z2_event_adapter.dialogue
+		for advance in range(16):
+			if dialogue.get_node("%ChoicesFrame").visible:
+				break
+			var click := InputEventMouseButton.new()
+			click.button_index = MOUSE_BUTTON_LEFT
+			dialogue.get_node("%DialogueText").gui_input.emit(click)
+		var button := dialogue.find_child("Option_%d" % options.find(travel), true, false) as Button
+		_check(button != null and button.is_visible_in_tree() and not button.disabled, label + ": actual Z2 travel button enabled")
 		if button != null:
 			button.pressed.emit()
-			if not scene.event_choice_panel._pending_option.is_empty():
-				scene.event_choice_panel._confirm_button.pressed.emit()
 		result = scene.last_command_result
 	elif command == &"interact_current_room":
-		result = scene._dispatch_command(command, {"option_id": &"travel"})
+		# Z2 interact prepares the service; the explicitly selected quoted action travels.
+		result = scene._dispatch_command(&"select_event_option", travel_payload)
 	else:
-		result = scene.command_bus.dispatch(command, {"option_id": &"travel"})
+		result = scene.command_bus.dispatch(command, travel_payload)
 	_check(bool(result.get("ok", false)) and context.get_current_pos() == target and disk.checkpoint_writes == 1, label + ": shortcut changes room in one real disk commit")
 	var checkpoint := _read_transition_checkpoint(runtime, label)
 	var bridge_state: Dictionary = checkpoint.get("bridge", {})

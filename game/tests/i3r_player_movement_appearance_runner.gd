@@ -138,12 +138,13 @@ func _start_production_case(appearance_config: Dictionary) -> Dictionary:
 	_require(adapter != null and bus != null, "production start authorities are missing")
 	if adapter == null or bus == null:
 		return {"main": main, "run_scene": run_scene}
+	_require(bool(preload("res://tests/z2_legacy_main_fixture.gd").qualify(run_scene).get("ok", false)), "appearance fixture did not earn teaching qualification")
 	var fixture_meta: Dictionary = adapter.data.duplicate(true)
 	fixture_meta["player_appearance"] = appearance_config.duplicate(true)
-	fixture_meta["unlocked_map_ids"].append("classic_10x10_standard")
 	adapter.data = fixture_meta
 	var summary: Dictionary = adapter.get_summary()
 	var run_start := RunStartConfigScript.default_config()
+	run_start.merge(preload("res://tests/z2_legacy_main_fixture.gd").config(1001), true)
 	run_start["seed_value"] = 1001
 	run_start["source_page"] = &"deploy_prep"
 	var candidates := M7ContentCatalogScript.commission_offer_candidates(

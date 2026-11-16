@@ -26,6 +26,7 @@ var discard_request_count: int = 0
 var production_retry_command_count: int = 0
 var production_discard_command_count: int = 0
 var production_result_signal_count: int = 0
+var production_result_signals: Array[Dictionary] = []
 
 
 func _initialize() -> void:
@@ -254,7 +255,7 @@ func _validate_production_run_scene_guards() -> void:
 	var panel = run_scene.result_panel
 	bus.command_requested.connect(_on_production_command_requested)
 	bus.result_available.connect(_on_production_result_available)
-	_require(bool(bus.dispatch(&"start_demo_run").get("ok", false)), "production durable run admission failed")
+	_require(bool(preload("res://tests/z2_legacy_main_fixture.gd").start(run_scene).get("ok", false)), "production durable run admission failed")
 	_require(bool(runtime.checkpoint_service.load_checkpoint().get("can_simulate", false)), "production run was not admitted durably")
 	# Give the real terminal result a visible item section for the frozen-body guard.
 	runtime.context.asset_ledger.create_item_instance({
@@ -271,7 +272,12 @@ func _validate_production_run_scene_guards() -> void:
 	_require(bool(run_scene.call("_show_run_screen")), "production RunScene could not enter the run surface")
 	var terminal: Dictionary = bus.dispatch(&"abandon_run", {"confirmed": true, "source": "i2_terminal_fixture"})
 	_require(bool(terminal.get("ok", false)), "production terminal checkpoint failed before meta settlement")
+	_require(runtime.context.phase == &"failure_salvage" and not bool(runtime.context.result_snapshot.get("settlement", {}).get("finalized", false)), "Z2 abandon must retain an unfinalized selection checkpoint")
+	_require(production_result_signal_count == 1 and production_result_signals.size() == 1 and not bool(production_result_signals[0].get("settlement", {}).get("finalized", true)), "Z2 abandon must publish exactly one pending selection result")
+	_require(bool(bus.dispatch(&"confirm_failure_salvage", {"selected_instance_ids": []}).get("ok", false)), "production terminal selection did not finalize through the public command")
 	var terminal_snapshot: Dictionary = runtime.context.result_snapshot.duplicate(true)
+	_require(production_result_signal_count == 2 and production_result_signals.size() == 2 and production_result_signals[1] == terminal_snapshot and bool(terminal_snapshot.get("settlement", {}).get("finalized", false)), "Z2 selection must publish exactly one finalized result")
+	_require(production_result_signals.size() == 2 and production_result_signals[0].get("run_id") == terminal_snapshot.get("run_id") and production_result_signals[0].get("outcome") == terminal_snapshot.get("outcome"), "selection cannot change the terminal run or outcome")
 	var run_id := str(runtime.context.run_id)
 	var checkpoint_path: String = runtime.checkpoint_service.checkpoint_path
 	_require(FileAccess.file_exists(checkpoint_path), "failed terminal lost its durable checkpoint")
@@ -292,7 +298,7 @@ func _validate_production_run_scene_guards() -> void:
 	_require(FileAccess.get_file_as_string(adapter.active_meta_progress_path) == before_disk and FileAccess.get_file_as_string(checkpoint_path) == terminal_disk, "pending terminal restart changed durable storage")
 	_release_runtime(reopened_runtime)
 	await create_timer(0.20).timeout
-	_require(production_result_signal_count == 1, "real terminal did not emit exactly one result")
+	_require(production_result_signal_count == 2, "restart emitted a result after pending and finalized selection signals")
 	_require(bool(run_scene.call("_runtime_modal_is_top", &"result")), "production result modal was not registered as stack top")
 	_require(not panel.normal_exit_allowed() and panel.retry_save_allowed(), "durable unsaved result did not expose only retry")
 	_require(not panel.discard_unsaved_allowed() and not panel.discard_unsaved_button.visible and panel.discard_unsaved_button.disabled, "durable result exposed discard")
@@ -313,7 +319,7 @@ func _validate_production_run_scene_guards() -> void:
 	panel.retry_save_button.pressed.emit()
 	await process_frame
 	_require(production_retry_command_count == 1, "production retry did not dispatch exactly one retry command")
-	_require(production_result_signal_count == 1, "failed production retry re-emitted result_available")
+	_require(production_result_signal_count == 2, "failed production retry re-emitted result_available")
 	_require(str(runtime.last_meta_commit.get("status", "")) == "save_failed" and runtime.persistence_error.is_empty(), "blocked retry failed outside terminal meta persistence")
 	_require(not panel.normal_exit_allowed() and bool(run_scene.call("_runtime_modal_is_top", &"result")), "failed production retry unlocked or dismissed the result")
 	_require(root.gui_get_focus_owner() == panel.retry_save_button, "failed production retry did not restore focus to retry")
@@ -323,7 +329,7 @@ func _validate_production_run_scene_guards() -> void:
 	panel.retry_save_button.pressed.emit()
 	await process_frame
 	_require(production_retry_command_count == 2, "successful production retry did not dispatch exactly one additional command")
-	_require(production_result_signal_count == 1, "successful production retry re-emitted result_available")
+	_require(production_result_signal_count == 2, "successful production retry re-emitted result_available")
 	_require(panel.normal_exit_allowed() and runtime.persistence_error.is_empty(), "successful production retry did not restore normal exits")
 	_require(root.gui_get_focus_owner() == panel.return_deploy_button, "successful production retry did not move focus to the primary exit")
 	_require(runtime.context.result_snapshot == terminal_snapshot, "production retry replaced the immutable terminal snapshot")
@@ -335,7 +341,7 @@ func _validate_production_run_scene_guards() -> void:
 	var duplicate: Dictionary = bus.dispatch(&"retry_terminal_commit")
 	_require(bool(duplicate.get("ok", false)) and runtime.persistence_error.is_empty(), "production duplicate retry rejected the saved receipt")
 	_require(adapter.data == committed_data and FileAccess.get_file_as_string(adapter.active_meta_progress_path) == committed_disk, "production duplicate retry wrote progress twice")
-	_require(production_result_signal_count == 1, "duplicate production retry re-emitted result_available")
+	_require(production_result_signal_count == 2, "duplicate production retry re-emitted result_available")
 	run_scene.call("_return_from_result_to_deploy")
 	_require(StringName(run_scene.screen_state) == &"deploy_shell" and not bool(run_scene.call("_runtime_modal_is_top", &"result")), "saved production result did not return through Deploy authority")
 	main.queue_free()
@@ -370,8 +376,9 @@ func _on_production_command_requested(command_name: StringName, _payload: Dictio
 		production_discard_command_count += 1
 
 
-func _on_production_result_available(_snapshot: Dictionary) -> void:
+func _on_production_result_available(snapshot: Dictionary) -> void:
 	production_result_signal_count += 1
+	production_result_signals.append(snapshot.duplicate(true))
 
 
 func _warehouse_has(items: Variant, instance_id: String) -> bool:

@@ -89,8 +89,8 @@ func _run() -> void:
 	_require(int(run_scene.get("run_context").get("seed_value")) == FIXED_SEED, "fixed seed did not reach the authoritative run")
 	_require(Vector2i(started.get("position", Vector2i(-1, -1))) == Vector2i(2, 6), "seed-13 run did not start at the audited spawn")
 	var context: RunContext = run_scene.get("run_context")
-	context.z1_event_rooms[context.cell_key(Vector2i(3, 5))] = {"event_type": &"trader"}
-	setup_exceptions.append("legacy trader encounter at (3,5)")
+	context.z1_event_rooms[context.cell_key(Vector2i(3, 5))] = {"event_type": &"information"}
+	setup_exceptions.append("Lv1-eligible information encounter at (3,5)")
 	terminal_write_failure.target_run_id = str(context.run_id)
 	_require(bool(run_scene.runtime_controller.checkpoint_service.load_checkpoint().get("can_simulate", false)), "input journey did not persist its admission")
 	await _checkpoint("03_run_spawn", "run admitted through deploy")
@@ -156,9 +156,13 @@ func _run() -> void:
 	_require(await _move_until_context(KEY_W, &"event", 2.0, "event.proximity"), "event proximity did not expose player-facing context")
 	await _checkpoint("09_event_proximity", "event decision available")
 	await _tap_key(KEY_E, "event.open")
-	var event_panel := run_scene.get("event_panel") as Control
+	var event_panel: Control = run_scene.get("z2_event_adapter").dialogue
 	_require(await _wait_until(func() -> bool: return event_panel != null and event_panel.visible, 2.0), "real E input did not open the event decision modal")
-	var event_choice := _first_enabled_button(run_scene.get("event_options_box") as Control)
+	for advance in range(16):
+		if event_panel.get_node("%ChoicesFrame").visible:
+			break
+		await _click_control(event_panel.get_node("%DialogueText"), "event.advance_dialogue_%d" % advance)
+	var event_choice := _first_enabled_button(event_panel.get_node("%ChoicesFrame") as Control)
 	_require(event_choice != null, "event modal exposed no enabled player decision")
 	if event_choice != null:
 		await _click_control(event_choice, "event.choose_first_enabled")
@@ -231,6 +235,8 @@ func _run() -> void:
 	_require(await _wait_until(func() -> bool: return result_panel != null and result_panel.visible, 5.0), "confirmed extraction did not open the production result")
 	var result_snapshot: Dictionary = run_scene.get("run_context").get("result_snapshot")
 	_require(StringName(result_snapshot.get("outcome", &"")) == &"Extracted", "success journey did not settle as Extracted")
+	await _confirm_terminal_selection_via_input(result_panel, "success")
+	result_snapshot = run_scene.get("run_context").get("result_snapshot")
 	_require(result_panel.call("retry_save_allowed"), "isolated save blocker did not expose real save retry")
 	var runtime = run_scene.runtime_controller
 	var adapter = run_scene.meta_progress_adapter
@@ -262,6 +268,22 @@ func _run() -> void:
 	_finish()
 
 
+func _confirm_terminal_selection_via_input(panel: Control, label: String) -> void:
+	if not bool(panel.call("requires_salvage_confirmation")):
+		return
+	var before: Dictionary = run_scene.get("run_context").get("result_snapshot").duplicate(true)
+	_require(not bool(before.get("settlement", {}).get("finalized", true)), label + " retention UI has no pending authority")
+	_require(not bool(panel.call("normal_exit_allowed")), label + " retention decision allowed an early exit")
+	var confirm := panel.get("salvage_confirm_button") as Button
+	_require(confirm != null and confirm.is_visible_in_tree() and not confirm.disabled, label + " retention confirmation is not reachable")
+	if confirm == null or not confirm.is_visible_in_tree() or confirm.disabled:
+		return
+	await _click_control(confirm, label + ".confirm_retention")
+	_require(await _wait_until(func() -> bool: return not bool(panel.call("requires_salvage_confirmation")), 5.0), label + " real retention input did not finalize selection")
+	var after: Dictionary = run_scene.get("run_context").get("result_snapshot")
+	_require(bool(after.get("settlement", {}).get("finalized", false)) and after.get("run_id") == before.get("run_id") and after.get("outcome") == before.get("outcome"), label + " retention changed terminal identity or failed to finalize")
+
+
 func _configure_isolated_save_failure_fixture() -> void:
 	if not _configure_isolated_z2_profile("input_journey"):
 		return
@@ -285,10 +307,11 @@ func _configure_isolated_z2_profile(label: String) -> bool:
 	_require(bool(selected.get("ok", false)) and bool(configured.get("ok", false)) and bool(initialized.get("ok", false)), label + ": isolated Z2 profile initialization failed")
 	if not bool(initialized.get("ok", false)):
 		return false
-	adapter.data["tutorial_completed"] = true
-	adapter.data["unlocked_map_ids"] = ["tutorial_5x5", "classic_7x7_simple"]
-	_require(adapter.save(), label + ": post-tutorial fixture did not save")
-	setup_exceptions.append("%s: tutorial_completed=true; unlocked_map_ids=[tutorial_5x5,classic_7x7_simple]; profile=%s" % [label, profile_id])
+	var qualified: Dictionary = preload("res://tests/z2_legacy_main_fixture.gd").qualify(run_scene)
+	_require(bool(qualified.get("ok", false)), label + ": post-tutorial fixture did not earn and save qualification")
+	if not bool(qualified.get("ok", false)):
+		return false
+	setup_exceptions.append("%s: persisted teaching eligibility via Meta begin/purchase/settlement APIs; profile=%s" % [label, profile_id])
 	var session: Dictionary = runtime.initialize_z2_session(manager)
 	_require(bool(session.get("ok", false)), label + ": checkpoint session initialization failed")
 	if not bool(session.get("ok", false)):

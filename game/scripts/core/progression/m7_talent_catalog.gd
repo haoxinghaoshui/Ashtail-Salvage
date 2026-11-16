@@ -1,5 +1,7 @@
 extends RefCounted
 class_name M7TalentCatalog
+const Z2Catalog := preload("res://scripts/core/progression/z2_talent_catalog.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
 
 const CATALOG_VERSION := 1
 const TALENT_COST := 1
@@ -100,6 +102,8 @@ static func point_budget_for_level(profile_level: int) -> int:
 
 
 static func sync_progress(data: Dictionary) -> Dictionary:
+	if Z2Rules.applies_to(data):
+		return Z2Catalog.sync_progress(data)
 	var flags := _unique_strings(data.get("talent_flags", []))
 	var points := maxi(0, int(data.get("talent_points", 0)))
 	var target_budget := point_budget_for_level(maxi(1, int(data.get("profile_level", 1))))
@@ -115,6 +119,8 @@ static func sync_progress(data: Dictionary) -> Dictionary:
 
 
 static func projection(meta: Dictionary) -> Array[Dictionary]:
+	if Z2Rules.applies_to(meta):
+		return Z2Catalog.projection(meta)
 	var normalized := meta.duplicate(true)
 	sync_progress(normalized)
 	var flags := _unique_strings(normalized.get("talent_flags", []))
@@ -157,6 +163,8 @@ static func projection(meta: Dictionary) -> Array[Dictionary]:
 
 
 static func active_effects(meta: Dictionary) -> Array[Dictionary]:
+	if Z2Rules.applies_to(meta):
+		return Z2Catalog.active_effects(meta)
 	var flags := _unique_strings(meta.get("talent_flags", []))
 	var result: Array[Dictionary] = []
 	for raw_definition in definitions():
@@ -176,6 +184,8 @@ static func active_effects(meta: Dictionary) -> Array[Dictionary]:
 
 
 static func summary(meta: Dictionary) -> Dictionary:
+	if Z2Rules.applies_to(meta):
+		return Z2Catalog.summary(meta)
 	var normalized := meta.duplicate(true)
 	sync_progress(normalized)
 	var flags := _unique_strings(normalized.get("talent_flags", []))
@@ -201,6 +211,8 @@ static func summary(meta: Dictionary) -> Dictionary:
 
 
 static func unlock_evaluation(meta: Dictionary, talent_id: String) -> Dictionary:
+	if Z2Rules.applies_to(meta):
+		return Z2Catalog.unlock_evaluation(meta, talent_id)
 	var node := definition(talent_id)
 	if node.is_empty():
 		return {"ok": false, "status": &"unknown_talent", "talent_id": talent_id}

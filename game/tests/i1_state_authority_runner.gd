@@ -95,6 +95,9 @@ func _test_no_phase_write_bypass() -> void:
 	_require_equal(regex_error, OK, "phase write regex compile")
 	if regex_error != OK:
 		return
+	_require(not _is_data_record_phase_write("res://scripts/core/run/z2_search_runtime.gd", "context.phase = next_phase"), "search owner must not bypass RunContext phase authority")
+	_require(not _is_data_record_phase_write("res://scripts/core/run/z2_supply_runtime.gd", "run.phase = next_phase"), "supply owner must not bypass RunContext phase authority")
+	_require(not _is_data_record_phase_write("res://scripts/unknown.gd", "record.phase = \"ready\""), "unclassified phase owners must remain fail-closed")
 	var write_locations: Array[String] = []
 	_collect_phase_writes("res://scripts", phase_write_regex, write_locations)
 	_require(not write_locations.is_empty(), "phase authority has no discoverable write")
@@ -118,10 +121,26 @@ func _collect_phase_writes(directory_path: String, phase_write_regex: RegEx, wri
 				var source := FileAccess.get_file_as_string(entry_path)
 				var lines := source.split("\n")
 				for index in range(lines.size()):
-					if phase_write_regex.search(lines[index]) != null:
+					if phase_write_regex.search(lines[index]) != null and not _is_data_record_phase_write(entry_path, lines[index]):
 						write_locations.append("%s:%d" % [entry_path, index + 1])
 		entry = directory.get_next()
 	directory.list_dir_end()
+
+
+func _is_data_record_phase_write(path: String, line: String) -> bool:
+	# These fields describe search/status records, not the RunContext lifecycle.
+	# Match the exact member assignment in its owner; never exempt an entire file.
+	var record_writes := {
+		"res://scripts/core/run/z2_search_runtime.gd": [
+			"record.phase = \"ready\"",
+			"_state.rooms[room_key].phase = \"completed\"",
+		],
+		"res://scripts/core/run/z2_supply_runtime.gd": [
+			"run.temporary_statuses[target].phase = \"ended\"",
+			"status.phase = \"ended\"",
+		],
+	}
+	return (record_writes.get(path, []) as Array).has(line.strip_edges())
 
 
 func _require_equal(actual: Variant, expected: Variant, label: String) -> void:

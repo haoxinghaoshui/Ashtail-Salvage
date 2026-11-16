@@ -100,8 +100,21 @@ func _check_quick_bag(surface: RunSurface, profile: Dictionary) -> void:
 			_check(marker != null and marker.mouse_filter == Control.MOUSE_FILTER_IGNORE, "Quick bag row %d rarity marker intercepted input" % index)
 			var normal_style := button.get_theme_stylebox("normal") as StyleBoxFlat
 			_check(normal_style != null and not normal_style.border_color.is_equal_approx(Color(rarity.get("color"))), "Quick bag row %d still uses a full rarity border" % index)
+			var presentation := RunUIViewModelScript.item_presentation(item)
+			var instance_id := String(item.get("instance_id", ""))
+			_check(String(button.get_meta("item_instance_id", "")) == instance_id, "Quick bag row %d changed its instance identity" % index)
+			_check(button.get_meta("item_instance_ids", []) == [instance_id], "Quick bag row %d lost or duplicated its source instance" % index)
+			_check(String(button.get_meta("item_stack_key", "")) == RunUIViewModelScript.item_stack_key(item), "Quick bag row %d changed its semantic stack key" % index)
+			_check(button.text == "%s ×%d" % [presentation.get("display_name", ""), presentation.get("quantity", 0)], "Quick bag row %d lost its full name or quantity" % index)
+			_check(button.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART and button.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING, "Quick bag row %d trims its full display text" % index)
+			_check(button.tooltip_text == String(presentation.get("detail_text", "")), "Quick bag row %d bypassed or truncated the shared full detail" % index)
+			_check(button.tooltip_text.contains(String(item.get("display_name", ""))) and button.tooltip_text.contains(String(rarity.get("label", ""))) and button.tooltip_text.contains(String(item.get("short_description", ""))), "Quick bag row %d full tooltip omitted source name, rarity or description" % index)
+			_check(button.tooltip_text.contains("重量：%s　数量：%d" % [item.get("weight", 0), item.get("quantity", 0)]), "Quick bag row %d full tooltip omitted source weight or quantity" % index)
 			var level := int(item.get("collectible_level", 0))
-			_check(button.text.contains("收藏等级 %d" % level) if level > 0 else not button.text.contains("收藏等级"), "Quick bag row %d collectible-level visibility drifted" % index)
+			_check(int(button.get_meta("collectible_level", -1)) == level, "Quick bag row %d authoritative collectible level drifted" % index)
+			# The reference quick row shows name/count; the complete tooltip retains
+			# collectible level. Do not treat the hidden compatibility label as visible UI.
+			_check(button.tooltip_text.contains("收藏等级：%d" % level) if level > 0 else not button.tooltip_text.contains("收藏等级"), "Quick bag row %d collectible-level detail visibility drifted" % index)
 		if item_count > 0:
 			var first_button := buttons[0]
 			var before_actions := unexpected_actions
@@ -111,6 +124,7 @@ func _check_quick_bag(surface: RunSurface, profile: Dictionary) -> void:
 			var first_item: Dictionary = items[0]
 			var rarity := ItemRarityDescriptor.describe_item(first_item)
 			var detail := surface.backpack_detail_label.text
+			_check(detail == String(RunUIViewModelScript.item_presentation(first_item).get("detail_text", "")) and detail == first_button.tooltip_text, "Quick-bag read-only focus detail differs from the complete shared descriptor")
 			_check(detail.contains(String(first_item.get("display_name", ""))), "Quick-bag focus detail omitted item name")
 			_check(detail.contains(String(rarity.get("label", ""))) and not detail.contains("[T"), "Quick-bag focus detail omitted natural-language rarity or exposed a T-code")
 			_check(detail.contains("数量") and detail.contains("重量"), "Quick-bag focus detail omitted quantity or weight")

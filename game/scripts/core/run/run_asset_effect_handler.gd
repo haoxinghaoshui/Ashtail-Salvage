@@ -1,5 +1,6 @@
 extends RefCounted
 class_name RunAssetEffectHandler
+const Settlement := preload("res://scripts/core/run/run_settlement_service.gd")
 
 # Applies the asset-related subset of EffectSpec dictionaries.
 # RunAssetLedger remains the only owner of asset state.
@@ -80,13 +81,23 @@ static func apply_effect(context: RunContext, effect: Dictionary) -> Dictionary:
 		EFFECT_SELL_BEST_INVENTORY_ITEM:
 			result = _with_effect_type(context.asset_ledger.sell_best_inventory_item(bool(payload.get("confirm_high_value", false))), effect_type)
 		EFFECT_SETTLE_SUCCESS:
-			result = _with_effect_type(context.asset_ledger.settle_success(), effect_type, true)
+			var settled: Dictionary = Settlement.apply(context, Settlement.build(context, "success", _array_from_variant(payload.get("selected_instance_ids", [])), false, {"selection_confirmed": bool(payload.get("selection_confirmed", false))})) if Settlement.applies_to(context) else context.asset_ledger.settle_success()
+			result = _with_effect_type(settled, effect_type, true)
 		EFFECT_SETTLE_FAILURE:
-			result = _with_effect_type(context.asset_ledger.settle_failure(_array_from_variant(payload.get("selected_instance_ids", []))), effect_type, true)
+			var selected := _array_from_variant(payload.get("selected_instance_ids", []))
+			var settled: Dictionary = Settlement.apply(context, Settlement.build(context, "abandon" if context.abandoned else "failure", selected)) if Settlement.applies_to(context) else context.asset_ledger.settle_failure(selected)
+			result = _with_effect_type(settled, effect_type, true)
 		EFFECT_SETTLE_ABANDON:
-			result = _with_effect_type(context.asset_ledger.settle_abandon(String(payload.get("reason", "abandoned"))), effect_type, true)
+			var settled: Dictionary = Settlement.build(context, "abandon", [], true).get("settlement", {}) if Settlement.applies_to(context) else context.asset_ledger.settle_abandon(String(payload.get("reason", "abandoned")))
+			result = _with_effect_type(settled, effect_type, true)
 		_:
 			result = {"ok": false, "status": &"unknown_effect", "reason": "unknown_asset_effect", "effect_type": effect_type}
+	if bool(result.get("ok", false)) and effect_type in [EFFECT_ADD_CURRENCY, EFFECT_SELL_BEST_INVENTORY_ITEM] and context.profile_fields.get("z2_progression_version") == 1:
+		# Consume each committed credit before the next effect can spend it. The
+		# dynamic dependency avoids a preload cycle through the vitals pipeline.
+		var triggered: Dictionary = load("res://scripts/core/run/z2_run_hooks.gd").consume_new_incomes(context)
+		if not triggered.get("ok", false):
+			return triggered
 	var after: Dictionary = _asset_summary(context)
 	var transaction: Dictionary = _record_transaction_for_effect(context, effect, effect_type, result, before, after)
 	if not transaction.is_empty():
@@ -137,7 +148,8 @@ static func _record_events_for_effect(context: RunContext, effect: Dictionary, e
 		EFFECT_REPLACE_GROUND_ITEM:
 			context.record_event(RunEventLog.EVENT_ITEM_PICKED_UP, command_id, actor_id, source, {"item": _dictionary_from_variant(result.get("item", {})), "dropped_item": _dictionary_from_variant(result.get("dropped_item", {})), "replacement": true})
 		EFFECT_SETTLE_SUCCESS, EFFECT_SETTLE_FAILURE, EFFECT_SETTLE_ABANDON:
-			context.record_event(RunEventLog.EVENT_SETTLEMENT_COMPLETED, command_id, actor_id, source, {"outcome": result.get("outcome", ""), "settlement": result.duplicate(true)})
+			if bool(result.get("finalized", false)):
+				context.record_event(RunEventLog.EVENT_SETTLEMENT_COMPLETED, command_id, actor_id, source, {"outcome": result.get("outcome", ""), "settlement": result.duplicate(true)})
 
 
 static func _asset_summary(context: RunContext) -> Dictionary:
@@ -155,6 +167,8 @@ static func _asset_summary(context: RunContext) -> Dictionary:
 
 
 static func _currency_delta_for_effect(effect_type: StringName, payload: Dictionary, result: Dictionary) -> Dictionary:
+	if effect_type in [EFFECT_SETTLE_SUCCESS, EFFECT_SETTLE_FAILURE, EFFECT_SETTLE_ABANDON] and not bool(result.get("finalized", false)):
+		return {}
 	match effect_type:
 		EFFECT_ADD_CURRENCY:
 			return {String(payload.get("currency_id", "")): int(payload.get("amount", 0))}

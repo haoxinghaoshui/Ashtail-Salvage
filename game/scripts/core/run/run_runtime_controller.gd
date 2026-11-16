@@ -8,9 +8,13 @@ const RunStartConfigScript := preload("res://scripts/core/run/run_start_config.g
 const RunStateMachineScript := preload("res://scripts/core/run/run_state_machine.gd")
 const CheckpointServiceScript := preload("res://scripts/core/save/run_checkpoint_service.gd")
 const VitalsEffects := preload("res://scripts/core/run/run_effect_applier.gd")
-const Z2_CONTENT_VERSION := "z2-t00-t04-20261115"
+const Z2_CONTENT_VERSION := "z2-system-20261116"
 const StateSnapshotScript := preload("res://scripts/core/run/run_state_snapshot.gd")
 const ActionTransactionScript := preload("res://scripts/core/run/run_action_transaction.gd")
+const Z2Hooks := preload("res://scripts/core/run/z2_run_hooks.gd")
+const Z2Search := preload("res://scripts/core/run/z2_search_runtime.gd")
+const Z2Opening := preload("res://scripts/core/run/z2_opening_runtime.gd")
+const Z2_SEARCH_BASE_SECONDS := {"Normal": 2.0, "Chest": 3.0}
 
 const META_ACTION_PURCHASE := &"purchase"
 const META_ACTION_SELL := &"sell_collectible"
@@ -18,6 +22,7 @@ const META_ACTION_SELL_BATCH := &"sell_collectibles_batch"
 const META_ACTION_UNLOCK_TALENT := &"unlock_talent"
 const META_ACTION_RESEARCH := &"complete_research"
 const META_ACTION_CLAIM := &"claim_goal"
+const META_ACTION_CLAIM_INITIAL := &"claim_initial_supplies"
 const META_ACTION_MARK_VIEWED := &"mark_viewed"
 const TERMINAL_COMMIT_PENDING_STATUSES := [
 	&"awaiting_salvage_confirmation",
@@ -82,6 +87,64 @@ func describe_ownership() -> Dictionary:
 		"writable_context_instances": 1,
 		"read_only": false,
 	}
+
+
+func z2_event_hooks(_context: RunContext, _pos: Vector2i, _event_id: String) -> Dictionary:
+	return Z2Hooks.event_hooks(_context, _active_action_id, Callable(self, "_enter_z2_shortcut"))
+
+
+func _enter_z2_shortcut(request: Dictionary) -> Dictionary:
+	if not _planning_action or not context.run_active or in_run_runtime.has_active_combat():
+		return {"ok": false, "reason": "room_transition_locked"}
+	var target: Vector2i = request.get("target_pos", Vector2i(-1, -1))
+	if not context.is_inside(target):
+		return {"ok": false, "reason": "invalid_target"}
+	var previous: Vector2i = context.get_current_pos()
+	context.player_pos = target
+	context.current_pos = target
+	RunInventory.record_move(context)
+	var entered: Dictionary = command_bus.room_resolver.enter_room(context)
+	if entered.get("ok", false):
+		sync_room_transition(target - previous)
+	return entered
+
+
+func execute_z2_opening_action(action: String, payload: Dictionary) -> Dictionary:
+	if not _planning_action or not context.run_active or not Z2Hooks.applies_to(context):
+		return {"ok": false, "reason": "opening_action_unavailable"}
+	if action != "end" and in_run_runtime.has_active_combat():
+		return {"ok": false, "reason": "combat_locked"}
+	var request := {"action_id": _active_action_id, "instance_id": str(payload.get("instance_id", "")), "tool": str(payload.get("tool", ""))}
+	return Z2Opening.execute(context, action, request, {"resolve_tool": Callable(self, "_resolve_z2_opening_tool"), "trap_threshold": Callable(self, "_z2_trap_threshold")})
+
+
+func _z2_trap_threshold(candidate: RunContext) -> float:
+	var state := EventService.get_event_state(candidate, candidate.get_current_pos())
+	if str(state.get("event_type", "")) != "mechanism" or state.get("variant", "") != "mechanical" or state.get("completed", false) or not state.get("prepared", false):
+		return -1.0
+	return float(state.get("threshold", -1))
+
+
+func _resolve_z2_opening_tool(candidate: RunContext, request: Dictionary) -> Dictionary:
+	if request.tool == "scan":
+		var before := candidate.intel_map.known_rooms.duplicate(true)
+		for direction in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+			var pos: Vector2i = candidate.get_current_pos() + direction
+			if candidate.is_inside(pos) and not candidate.intel_map.is_revealed(pos):
+				candidate.intel_map.scan_cell(pos, candidate.truth_map, &"room_type", 1.0)
+		return {"ok": true, "applied": before != candidate.intel_map.known_rooms}
+	if request.tool != "trap" or not is_equal_approx(_z2_trap_threshold(candidate), float(request.get("base_threshold", -1))):
+		return {"ok": false, "reason": "stale_mechanism"}
+	var key := candidate.cell_key(candidate.get_current_pos())
+	var room: Dictionary = candidate.z1_event_rooms[key]
+	room.z2_process.mechanism.threshold = float(request.threshold)
+	var state := EventService.get_event_state(candidate, candidate.get_current_pos())
+	var result := EventService.execute_option(candidate, candidate.get_current_pos(), &"attempt", self, {"revision": int(state.get("revision", 0))})
+	if result.get("ok", false):
+		result["applied"] = true
+		result["threshold"] = request.threshold
+		command_bus.room_resolver._finish_event_result(candidate, candidate.get_current_pos(), result)
+	return result
 
 
 func start_demo_run(room_resolver: RoomResolver) -> Dictionary:
@@ -188,12 +251,16 @@ func execute_meta_action(action: Dictionary) -> Dictionary:
 			StringName(normalized.get("status", &"invalid_meta_action"))
 		)
 	var payload: Dictionary = normalized.get("payload", {})
+	if String(action_id).begins_with("opening_"):
+		payload["request_id"] = request_id
 	var identity_payload := _meta_action_identity_payload(payload)
 	var target_id := str(normalized.get("target_id", ""))
 	if _meta_action_cache.has(request_id):
 		var cached_entry: Dictionary = _meta_action_cache.get(request_id, {})
 		if cached_entry.get("payload", {}) == identity_payload:
 			var duplicate_envelope: Dictionary = cached_entry.get("envelope", {}).duplicate(true)
+			if bool(cached_entry.get("shared_summary", false)):
+				duplicate_envelope["result"]["summary"] = duplicate_envelope.get("meta_progress_summary", {}).duplicate(true)
 			duplicate_envelope["duplicate"] = true
 			return duplicate_envelope
 		var cached_envelope: Dictionary = cached_entry.get("envelope", {})
@@ -277,6 +344,12 @@ func _normalize_meta_action(source_page: String, action_id: StringName, action: 
 	}
 	var target_id := ""
 	match action_id:
+		&"opening_prepare", &"opening_refresh", &"opening_choose", &"opening_skip":
+			target_id = "opening_offer"
+			payload["offer_id"] = _exact_meta_id(action.get("offer_id", ""))
+			payload["effect_id"] = _exact_meta_id(action.get("effect_id", ""))
+		META_ACTION_CLAIM_INITIAL:
+			target_id = "initial_supplies"
 		META_ACTION_PURCHASE:
 			target_id = _exact_meta_id(action.get("item_id", ""))
 			if target_id.is_empty():
@@ -324,6 +397,11 @@ func _normalize_meta_action(source_page: String, action_id: StringName, action: 
 			target_id = "%s:%s" % [goal_kind, goal_id]
 			payload["goal_kind"] = goal_kind
 			payload["goal_id"] = goal_id
+			var tier_value: Variant = action.get("tier", 1)
+			if not (tier_value is int or tier_value is float) or not is_finite(float(tier_value)) or float(tier_value) != floor(float(tier_value)) or int(tier_value) < 1:
+				return {"ok": false, "status": &"invalid_goal_tier"}
+			payload["tier"] = int(tier_value)
+			target_id += ":%d" % int(tier_value)
 		META_ACTION_MARK_VIEWED:
 			target_id = _exact_meta_id(action.get("view_kind", ""))
 			if target_id.is_empty():
@@ -342,6 +420,10 @@ func _dispatch_meta_action(payload: Dictionary) -> Dictionary:
 	var action_id := StringName(payload.get("action", &""))
 	var result: Variant
 	match action_id:
+		&"opening_prepare", &"opening_refresh", &"opening_choose", &"opening_skip":
+			result = meta_progress_adapter.apply_z2_opening_action(String(action_id).trim_prefix("opening_"), payload)
+		META_ACTION_CLAIM_INITIAL:
+			result = meta_progress_adapter.claim_initial_supplies()
 		META_ACTION_PURCHASE:
 			var quantity := int(payload.get("quantity", 1))
 			if meta_progress_adapter.has_method("purchase_items"):
@@ -377,7 +459,8 @@ func _dispatch_meta_action(payload: Dictionary) -> Dictionary:
 		META_ACTION_CLAIM:
 			result = meta_progress_adapter.claim_goal_reward(
 				str(payload.get("goal_kind", "")),
-				str(payload.get("goal_id", ""))
+				str(payload.get("goal_id", "")),
+				int(payload.get("tier", 1))
 			)
 		META_ACTION_MARK_VIEWED:
 			result = meta_progress_adapter.mark_long_term_viewed(str(payload.get("view_kind", "")))
@@ -400,9 +483,18 @@ func _meta_summary_after_action(result: Dictionary) -> Dictionary:
 
 
 func _store_meta_action_result(request_id: String, payload: Dictionary, envelope: Dictionary) -> void:
+	if str(envelope.get("status", "")) in ["save_failed", "write_blocked", "persistence_failed"]:
+		# No durable receipt exists for a failed save. The same request must be
+		# allowed to retry after storage recovers, without reopening the game.
+		return
+	var cached_envelope := envelope.duplicate(true)
+	var shared_summary: bool = cached_envelope.get("result", {}).get("summary", {}) is Dictionary and not cached_envelope.get("meta_progress_summary", {}).is_empty() and cached_envelope.get("result", {}).get("summary", {}) == cached_envelope.get("meta_progress_summary", {})
+	if shared_summary:
+		cached_envelope["result"].erase("summary")
 	_meta_action_cache[request_id] = {
 		"payload": payload.duplicate(true),
-		"envelope": envelope.duplicate(true),
+		"envelope": cached_envelope,
+		"shared_summary": shared_summary,
 	}
 
 
@@ -663,6 +755,12 @@ func confirm_failure_salvage(selected_instance_ids: Array) -> Dictionary:
 	return result
 
 
+func terminal_selection_state(selected_instance_ids: Array) -> Dictionary:
+	if not RunSettlementService.applies_to(context) or context.phase != &"failure_salvage":
+		return {}
+	return RunSettlementService.selection_state(context, str(context.settlement_result.get("outcome", "failure")), selected_instance_ids)
+
+
 func abandon_run(reason: String = "player_abandoned") -> Dictionary:
 	var result := _with_actor(state_machine.abandon_run(context, reason))
 	in_run_runtime.reset()
@@ -676,9 +774,10 @@ func debug_force_fail(reason: String = "debug_forced_failure") -> Dictionary:
 	return result
 
 
-func _enter_room_after_start(room_resolver: RoomResolver) -> void:
+func _enter_room_after_start(room_resolver: RoomResolver) -> Dictionary:
 	if room_resolver != null and context != null:
-		room_resolver.enter_room(context)
+		return room_resolver.enter_room(context)
+	return {"ok": true}
 
 
 func _finalize_start(result: Dictionary, room_resolver: RoomResolver) -> void:
@@ -689,9 +788,32 @@ func _finalize_start(result: Dictionary, room_resolver: RoomResolver) -> void:
 	_checkpoint_elapsed = 0.0
 	_idle_accumulator = 0.0
 	_has_local_position = false
-	context.shield += RunInventory.claim_departure_shield(context.asset_ledger, str(context.run_id))
+	if RunSettlementService.applies_to(context):
+		var supplied := Z2SupplyRuntime.on_departure(context, context.asset_ledger.get_items_by_location(RunAssetLedger.LOCATION_EQUIPPED))
+		if not supplied.get("ok", false):
+			result.merge(supplied, true)
+			return
+		var opening := Z2Opening.admit_departure(context, context.run_start_config.get("z2_opening_offer", {}))
+		if not opening.get("ok", false):
+			result.merge(opening, true)
+			return
+		context.z1_event_flags["z2_income_cursor"] = context.asset_ledger.settlement_log.size()
+		context.run_start_config["starting_power"] = context.power
+		context.run_start_config["starting_pressure"] = context.pressure
+		var actual_opening: Dictionary = Z2Opening.public_state(context)
+		context.run_start_config["opening_effect"] = {"id": actual_opening.get("selected", ""), "batch": 1} if actual_opening.get("status", "") == "selected" else {}
+		var hidden: Array[Vector2i] = []
+		var visible: Array = context.truth_map.get_visible_exits(null)
+		for exit_pos in context.truth_map.exits:
+			if not visible.has(exit_pos):
+				hidden.append(exit_pos)
+		context.run_start_config["hidden_exits_at_start"] = hidden
+	else:
+		context.shield += RunInventory.claim_departure_shield(context.asset_ledger, str(context.run_id))
 	in_run_runtime.reset()
-	_enter_room_after_start(room_resolver)
+	var entered := _enter_room_after_start(room_resolver)
+	if not entered.get("ok", false):
+		result.merge(entered, true)
 
 
 func _with_actor(result: Dictionary) -> Dictionary:
@@ -786,6 +908,8 @@ func _valid_runtime_snapshot(snapshot: Dictionary) -> bool:
 	for id in snapshot.meta_action_cache:
 		var entry: Variant = snapshot.meta_action_cache[id]
 		if not id is String or not entry is Dictionary or not entry.get("payload") is Dictionary or not entry.get("envelope") is Dictionary:
+			return false
+		if entry.has("shared_summary") and (not entry.shared_summary is bool or (entry.shared_summary and (not entry.envelope.get("meta_progress_summary") is Dictionary or not entry.envelope.get("result") is Dictionary or entry.envelope.result.has("summary")))):
 			return false
 	return true
 
@@ -905,6 +1029,16 @@ func execute_atomic_operation(kind: StringName, payload: Dictionary, operation: 
 		stale["message"] = "选项条件已变化，请重新确认。"
 		stale["action_result"] = stale.duplicate(true)
 		return stale
+	if kind == &"confirm_tutorial_popup" and context.mode == &"tutorial" and str(context.tutorial_popup.get("id", "")) == "spawn_intro" and context.profile_fields.get("z2_progression_version") == 1 and not bool(payload.get("preview", false)):
+		# Validate request identity and conditions before the durable purchase.
+		# A later checkpoint failure keeps the lesson pending and reuses this
+		# idempotent payment when the player retries.
+		if meta_progress_adapter == null:
+			return _atomic_error("meta_progress_adapter_missing")
+		if not meta_progress_adapter.data.get("talent_flags", []).has("z2_talent_01"):
+			var learned: Dictionary = meta_progress_adapter.purchase_tutorial_flag()
+			if not learned.get("ok", false):
+				return learned
 	if action_id.is_empty():
 		action_id = "action:" + Crypto.new().generate_random_bytes(16).hex_encode()
 	var before := capture_authoritative_state()
@@ -917,6 +1051,10 @@ func execute_atomic_operation(kind: StringName, payload: Dictionary, operation: 
 	_pending_terminal_reason = ""
 	var returned: Variant = operation.call()
 	var result: Dictionary = returned if returned is Dictionary else _atomic_error("invalid_action_result")
+	if result.get("ok", false):
+		var triggered := Z2Hooks.after_action(context, before["context"], action_id)
+		if not triggered.get("ok", false):
+			result = triggered
 	if not bool(result.get("ok", false)) and context.last_message != str(before["context"]["data"].get("last_message", "")):
 		result["message"] = context.last_message
 		if result.get("action_result") is Dictionary:
@@ -997,12 +1135,12 @@ func initialize_z2_session(manager) -> Dictionary:
 	_persistence_manager = manager
 	if meta_progress_adapter == null:
 		return _storage_error(_atomic_error("meta_progress_adapter_missing"))
+	var reset: Dictionary = manager.reset_outdated_profiles_for_z2()
+	if not bool(reset.get("ok", false)):
+		return _storage_error(reset)
+	manager.configure_meta_adapter(meta_progress_adapter)
 	if not meta_progress_adapter.can_write_persistence():
 		return _storage_error(_atomic_error(meta_progress_adapter.write_block_reason))
-	if not meta_progress_adapter.data.has("ruleset_id"):
-		# Z2 explicitly starts a separate profile. Existing legacy progress remains intact.
-		manager.switch_profile("z2_default")
-		manager.configure_meta_adapter(meta_progress_adapter)
 	if meta_progress_adapter.last_load_status == "missing":
 		var initialized: Dictionary = meta_progress_adapter.initialize_z2_profile(Z2_CONTENT_VERSION)
 		if not bool(initialized.get("ok", false)):
@@ -1013,8 +1151,10 @@ func initialize_z2_session(manager) -> Dictionary:
 	if not bool(manifest_saved.get("ok", false)):
 		return _storage_error(manifest_saved)
 	var registry := ContentDefRegistry.new()
-	registry.setup_defaults()
-	_content_hash = StateSnapshotScript.fingerprint(registry.definitions)
+	var registered := registry.setup_z2()
+	if not registered.get("ok", false):
+		return _storage_error(registered)
+	_content_hash = StateSnapshotScript.fingerprint(registry.snapshot())
 	checkpoint_service = CheckpointServiceScript.new()
 	var configured: Dictionary = manager.configure_checkpoint_service(checkpoint_service, meta_progress_adapter, "z2", Z2_CONTENT_VERSION)
 	if not bool(configured.get("ok", false)):
@@ -1122,11 +1262,65 @@ func advance_simulation_time(delta: float, trigger: Dictionary = {}) -> Dictiona
 	var result: Dictionary = VitalsEffects.advance_statuses(context, delta, trigger)
 	if not bool(result.get("ok", false)):
 		return result
+	if Z2Hooks.applies_to(context) and context.hp > 0 and not in_run_runtime.has_active_combat():
+		var search := _advance_z2_search(delta)
+		if not search.get("ok", false):
+			return search
+		if search.get("completed_now", false):
+			result["durability_required"] = true
 	_checkpoint_elapsed += delta
 	if _checkpoint_elapsed >= 1.0:
 		result["durability_required"] = true
 		_checkpoint_elapsed = fmod(_checkpoint_elapsed, 1.0)
 	return result
+
+
+func begin_z2_search() -> Dictionary:
+	var search := Z2Search.new()
+	var saved: Dictionary = context.z1_event_flags.get("z2_search", {})
+	if not saved.is_empty() and not search.import_transaction_state(saved).get("ok", false):
+		return {"ok": false, "reason": "invalid_search_snapshot"}
+	var result := search.begin(str(context.run_id), context.cell_key(context.get_current_pos()), context.current_room_type,
+		Z2_SEARCH_BASE_SECONDS, Z2TalentRuntime.from_context(context), _z2_search_gates())
+	if result.get("ok", false):
+		context.z1_event_flags["z2_search"] = search.export_transaction_state()
+		context.last_message = "搜索中：%d%%" % roundi(float(result.progress) * 100.0)
+		result["message"] = context.last_message
+	return result
+
+
+func _z2_search_gates() -> Dictionary:
+	return {"run_active": context.run_active, "online": true, "paused": false, "combat_active": in_run_runtime.has_active_combat()}
+
+
+func _advance_z2_search(delta: float) -> Dictionary:
+	var saved: Dictionary = context.z1_event_flags.get("z2_search", {})
+	var room: String = context.cell_key(context.get_current_pos())
+	if saved.is_empty() or not saved.get("rooms", {}).has(room) or context.searched_cells.has(room):
+		return {"ok": true}
+	var search := Z2Search.new()
+	var restored := search.import_transaction_state(saved)
+	if not restored.get("ok", false):
+		return restored
+	var result := search.advance(delta, str(context.run_id), room, _z2_search_gates())
+	if not result.get("ok", false):
+		return result
+	context.z1_event_flags["z2_search"] = search.export_transaction_state()
+	context.last_message = "搜索中：%d%%" % roundi(float(result.progress) * 100.0)
+	if result.phase == "ready":
+		var completed := search.complete(str(context.run_id), room, _z2_search_gates())
+		if not completed.get("ok", false):
+			return completed
+		if completed.get("completed_now", false):
+			var reward: Dictionary = command_bus.room_resolver.search_current_room(context, true)
+			if not reward.get("ok", false):
+				return reward
+			context.z1_event_flags["z2_search"] = search.export_transaction_state()
+			# Timed search changes world objects and exact floor contents. Publish
+			# that full projection only after this atomic idle step is persisted.
+			defer_state_change(&"all")
+			return {"ok": true, "completed_now": true}
+	return {"ok": true}
 
 func advance_idle_frame(delta: float) -> Dictionary:
 	if not context.run_active or not persistence_error.is_empty():

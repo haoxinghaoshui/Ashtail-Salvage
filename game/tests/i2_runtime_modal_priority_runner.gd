@@ -43,8 +43,8 @@ func _exercise_main(main: Node) -> void:
 	_require(bus != null, "production CommandBus is missing")
 	if bus == null:
 		return
-	var start_result: Dictionary = bus.dispatch(&"start_demo_run")
-	_require(bool(start_result.get("ok", false)), "demo run fixture did not start")
+	var start_result: Dictionary = preload("res://tests/z2_legacy_main_fixture.gd").start(run_scene)
+	_require(bool(start_result.get("ok", false)), "qualified standard run fixture did not start")
 	_require(bool(run_scene.call("_show_run_screen")), "production run screen did not open")
 	await _frames(4)
 	var exploration_fixture := _explore_adjacent_through_command(bus, run_scene)
@@ -301,6 +301,9 @@ func _exercise_main(main: Node) -> void:
 	_assert_run_hud_policy(run_scene, &"result")
 	await _assert_lower_layers_blocked(run_scene, bus, stack, &"result", false)
 	await _assert_stale_modal_direct_calls_blocked(run_scene, bus, stack, &"result")
+	_require(run_scene.get("run_context").phase == &"failure_salvage", "Z2 result must await explicit retention selection")
+	_require(bool(bus.dispatch(&"confirm_failure_salvage", {"selected_instance_ids": []}).get("ok", false)), "explicit empty retention selection did not finalize the result")
+	await _frames(4)
 	var sequence_before_result_escape := int(bus.get("command_sequence"))
 	var domain_before_result_escape := _run_domain_state_signature(run_scene)
 	_require(_send_escape(run_scene), "result Esc was not consumed")
@@ -496,12 +499,19 @@ func _assert_event_modal_priority(run_scene: Node, bus: Variant, stack: Variant,
 	var event_state: Dictionary = context.call("get_status_snapshot").get("event_state", {})
 	run_scene.call("_show_event_panel", event_state)
 	await _frames(4)
-	var event_panel := run_scene.get("event_panel") as Control
+	var event_panel := run_scene.get("event_modal_root") as Control
+	_require(run_scene.get("z2_event_adapter").is_visible_in_tree(), "delivered Z2 event dialogue is not visible")
 	_require(stack.call("top_modal_id") == &"event" and int(stack.call("depth")) == 1, "event did not enter the runtime modal stack")
 	_require(event_panel != null and event_panel.visible, "event modal is not visible")
 	_assert_run_hud_policy(run_scene, &"event")
 	_assert_shield_directly_below(input_shield, event_panel, "event")
-	_assert_focus_inside(event_panel, "event open")
+	# Z2 first presents narration; actionable keyboard focus belongs to its
+	# delivered choices stage, which replaces the legacy immediate option list.
+	await _assert_lower_layers_blocked(run_scene, bus, stack, &"event", false)
+	var choices := preload("res://tests/z2_legacy_main_fixture.gd").event_choices(run_scene)
+	await _frames(2)
+	_require(not choices.is_empty(), "event narration did not reach actionable choices")
+	_assert_focus_inside(event_panel, "event choices")
 	await _assert_lower_layers_blocked(run_scene, bus, stack, &"event", false)
 	await _assert_stale_modal_direct_calls_blocked(run_scene, bus, stack, &"event")
 	var sequence_before_escape := int(bus.get("command_sequence"))

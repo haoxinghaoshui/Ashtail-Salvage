@@ -6,6 +6,8 @@ const Z1SupplyCatalogScript := preload("res://scripts/core/content/z1_supply_cat
 const TutorialMapCatalogScript := preload("res://scripts/core/run/tutorial_map_catalog.gd")
 const Z1EventCatalogScript := preload("res://scripts/core/content/z1_event_catalog.gd")
 const Z1MonsterCatalogScript := preload("res://scripts/gameplay/combat/z1_monster_catalog.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
+const Z2Quests := preload("res://scripts/core/progression/z2_quest_catalog.gd")
 
 const DEFAULT_UNLOCKED_MAPS := [
 	"tutorial_5x5",
@@ -162,7 +164,31 @@ static func commission_offer_candidates(map_id: String, run_count: int, count: i
 	return commission_candidates(map_id, commission_offer_seed(map_id, run_count), count)
 
 
-static func task_definitions() -> Array[Dictionary]:
+static func task_definitions(meta: Dictionary = {}) -> Array[Dictionary]:
+	return Z2Quests.definitions("main") if meta.is_empty() or Z2Rules.applies_to(meta) else legacy_task_definitions()
+
+
+static func optional_task_definitions(meta: Dictionary = {}) -> Array[Dictionary]:
+	return Z2Quests.definitions("side") if meta.is_empty() or Z2Rules.applies_to(meta) else legacy_optional_task_definitions()
+
+
+static func achievement_definitions(meta: Dictionary = {}) -> Array[Dictionary]:
+	if not meta.is_empty() and not Z2Rules.applies_to(meta):
+		return legacy_achievement_definitions()
+	var definitions := Z2Quests.definitions("achievement")
+	for definition in definitions:
+		var state: Dictionary = meta.get("achievement_states", {}).get(definition.id, {})
+		definition["total_reward"] = definition.reward.duplicate(true)
+		for step in definition.reward_steps:
+			if not state.get("claimed_tiers", []).has(int(step.tier)):
+				definition.reward = step.reward.duplicate(true)
+				definition.target = int(step.target)
+				definition.tier = int(step.tier)
+				break
+	return definitions
+
+
+static func legacy_task_definitions() -> Array[Dictionary]:
 	return [
 		_goal("task_first_survey", "第一次踏勘", "打开小地图并探索 3 个不同房间。", {"gold": 20, "exp": 20}),
 		_goal("task_risk_mark", "风险标记", "标记任意 1 个未探索房间。", {"items": ["con_scan_pin"], "exp": 15}),
@@ -174,13 +200,13 @@ static func task_definitions() -> Array[Dictionary]:
 	]
 
 
-static func optional_task_definitions() -> Array[Dictionary]:
+static func legacy_optional_task_definitions() -> Array[Dictionary]:
 	return [
 		_goal("task_failure_salvage", "失败抢救", "失败后手动抢救至少 1 件物品并确认。", {"gold": 20, "exp": 20}),
 	]
 
 
-static func achievement_definitions() -> Array[Dictionary]:
+static func legacy_achievement_definitions() -> Array[Dictionary]:
 	return [
 		_goal("achievement_first_return", "首次归来", "第一次成功撤离。", {"gold": 30, "exp": 30}),
 		_goal("achievement_clean_route", "清洁路线", "成功撤离且本局未触发雷房。", {"gold": 40, "exp": 35}),
@@ -193,7 +219,13 @@ static func achievement_definitions() -> Array[Dictionary]:
 	]
 
 
-static func research_definitions() -> Array[Dictionary]:
+static func research_definitions(meta: Dictionary = {}) -> Array[Dictionary]:
+	if Z2Rules.applies_to(meta):
+		var recipes := Z2ContentEligibility.research_definitions()
+		for recipe in recipes:
+			var product := Z2ItemCatalog.definition(str(recipe.unlock_item_id))
+			recipe["effect"] = "合成%s×1，存入仓库；可重复进行，成品仅由研究获得。" % str(product.get("display_name", "物资"))
+		return recipes
 	return [
 		_research("research_anomaly_structure", "异常结构分析", "", 40, "mon_old_gear_set", "开放稳定剂购买，并显示完整怪物档案。"),
 		_research("research_protocol_formula", "协议稳定配方", "research_anomaly_structure", 60, "sp_altar_residue", "开放镇静糖购买，并显示协议压力规则详情。"),
@@ -201,14 +233,20 @@ static func research_definitions() -> Array[Dictionary]:
 	]
 
 
-static func research_definition(research_id: String) -> Dictionary:
-	for definition in research_definitions():
+static func research_definition(research_id: String, meta: Dictionary = {}) -> Dictionary:
+	for definition in research_definitions(meta):
 		if str(definition.get("id", "")) == research_id:
 			return definition.duplicate(true)
 	return {}
 
 
-static func shop_definitions() -> Array[Dictionary]:
+static func shop_definitions(meta: Dictionary = {}) -> Array[Dictionary]:
+	if Z2Rules.applies_to(meta):
+		var result: Array[Dictionary] = []
+		for item in Z2ItemCatalog.supplies():
+			if item.channels.has("camp_shop"):
+				result.append({"item_id": str(item.item_id), "display_name": str(item.display_name), "price": int(item.purchase_price), "unlock_kind": "z2_qualification", "unlock_value": str(item.min_profile_level)})
+		return result
 	return [
 		_shop("con_ration", 12),
 		_shop("con_tape_roll", 16),
@@ -223,14 +261,20 @@ static func shop_definitions() -> Array[Dictionary]:
 	]
 
 
-static func shop_definition(item_id: String) -> Dictionary:
-	for definition in shop_definitions():
+static func shop_definition(item_id: String, meta: Dictionary = {}) -> Dictionary:
+	for definition in shop_definitions(meta):
 		if str(definition.get("item_id", "")) == item_id:
 			return definition.duplicate(true)
 	return {}
 
 
-static func item_definition(item_id: String) -> Dictionary:
+static func item_definition(item_id: String, meta: Dictionary = {}) -> Dictionary:
+	if Z2Rules.applies_to(meta):
+		var current := Z2ItemCatalog.definition(item_id)
+		if not current.is_empty():
+			return current
+		if not Z2ContentEligibility.MATERIAL_RULES.has(item_id):
+			return {}
 	for definition in M3ItemCatalogScript.all_items():
 		if str(definition.get("item_id", "")) == item_id:
 			return definition.duplicate(true)
@@ -254,7 +298,9 @@ static func profile_level_for_exp(exp_value: int) -> int:
 	return 1
 
 
-static func profile_exp_for_level(level: int) -> int:
+static func profile_exp_for_level(level: int, meta: Dictionary = {}) -> int:
+	if Z2Rules.applies_to(meta):
+		return Z2Rules.exp_for_level(level)
 	return PROFILE_EXP_THRESHOLDS[level - 1] if level >= 1 and level <= PROFILE_EXP_THRESHOLDS.size() else -1
 
 
@@ -317,6 +363,8 @@ static func codex_subject(entry_id: String) -> Dictionary:
 
 
 static func is_shop_unlocked(definition: Dictionary, meta: Dictionary) -> bool:
+	if Z2Rules.applies_to(meta):
+		return int(meta.get("profile_level", 0)) >= 2 and Z2ContentEligibility.is_eligible(str(definition.get("item_id", "")), "camp_shop", Z2ContentEligibility.freeze_profile(meta))
 	match str(definition.get("unlock_kind", "default")):
 		"research":
 			return _array(meta.get("research_completed_ids", [])).has(str(definition.get("unlock_value", "")))

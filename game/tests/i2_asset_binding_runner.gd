@@ -25,9 +25,20 @@ const DIRECT_SOURCE_STATUSES := [
 	"art21r2_generated_contract_component",
 ]
 const PROTOCOL_UI_SCALES := [1.0, 1.5]
-const PROTOCOL_MIN_SOURCE_ASPECT := 2.0
-const PROTOCOL_MIN_RUNTIME_ASPECT := 2.0
-const PROTOCOL_MAX_ASPECT_DRIFT_RATIO := 0.20
+const PROTOCOL_FRAME_PATH := "res://assets/ui/art21r2/run_hud/ui_art21r2_run_status_card_frame.png"
+const PROTOCOL_FRAME_SHA256 := "A3FCB263A5356BAB28C412F4846265F5F86B7C9BC79A8E2470F1807FEA4635E9"
+# Source-pixel bounds include the three 3x3 rivets, their rims, corner bevels
+# and the bracket ends through x=35 / x=208. Straight edge runs may lengthen.
+const PROTOCOL_FIXED_ORNAMENTS := [
+	Rect2(0, 0, 36, 30), Rect2(208, 0, 36, 30),
+	Rect2(0, 83, 36, 27), Rect2(208, 83, 36, 27),
+]
+# Reviewed layout coordinates stay independent of NinePatch sampling margins.
+const PROTOCOL_FRAME_RECTS := {100: Rect2(12, 12, 256, 148), 150: Rect2(12, 12, 288, 190)}
+const PROTOCOL_COPY_SAFE_RECTS := {
+	100: Rect2(58.08, 30, 191.92, 112),
+	150: Rect2(63.84, 30, 218.16, 154),
+}
 const PROTOCOL_COPY_PRESSURE_GAP := 2.0
 const RECT_EPSILON := 0.5
 
@@ -49,7 +60,7 @@ func _run() -> void:
 	await _check_result_runtime(failures)
 	await _check_protocol_runtime(failures)
 	if failures.is_empty():
-		print("I2_ASSET_BINDING=PASS result_states=3 protocol_levels=5 protocol_scales=100,150 protocol_frame=single_horizontal_safe item_bindings=63 verified_hashes=%d" % verified_hash_count)
+		print("I2_ASSET_BINDING=PASS result_states=3 protocol_levels=5 protocol_scales=100,150 protocol_frame=single_ninepatch_ornaments_fixed_copy_safe item_bindings=63 verified_hashes=%d" % verified_hash_count)
 		quit(0)
 		return
 	for failure in failures:
@@ -190,6 +201,7 @@ func _check_protocol_runtime(failures: Array[String]) -> void:
 				"danger_theme_key": &"ui.warning",
 				"danger_label": "I2 pressure state",
 				"resource_summary": "",
+				"vitals_text": "生命 100/100\n强度 20",
 				"backpack_items": [],
 				"backpack_used": 0,
 				"backpack_capacity": 0,
@@ -259,39 +271,31 @@ func _check_protocol_main_frame(
 		failures.append("protocol_main_frame_resource_path_missing_scale_%d" % scale_percent)
 	else:
 		_check_registered_path(texture.resource_path, failures)
-	var source_size := texture.get_size()
-	var source_aspect := source_size.x / maxf(1.0, source_size.y)
-	if source_aspect < PROTOCOL_MIN_SOURCE_ASPECT:
-		failures.append("protocol_main_frame_source_aspect_scale_%d=%.3f_expected_at_least_%.3f" % [
-			scale_percent,
-			source_aspect,
-			PROTOCOL_MIN_SOURCE_ASPECT,
-		])
+	_check_protocol_ornaments(frame, texture, scale_percent, failures)
 	var frame_rect := frame.get_global_rect()
-	var runtime_aspect := frame_rect.size.x / maxf(1.0, frame_rect.size.y)
-	if runtime_aspect < PROTOCOL_MIN_RUNTIME_ASPECT:
-		failures.append("protocol_main_frame_runtime_aspect_scale_%d=%.3f_expected_at_least_%.3f" % [
-			scale_percent,
-			runtime_aspect,
-			PROTOCOL_MIN_RUNTIME_ASPECT,
-		])
-	var aspect_drift_ratio := absf(runtime_aspect - source_aspect) / maxf(0.001, source_aspect)
-	if aspect_drift_ratio > PROTOCOL_MAX_ASPECT_DRIFT_RATIO:
-		failures.append("protocol_main_frame_aspect_drift_scale_%d=%.3f_expected_at_most_%.3f" % [
-			scale_percent,
-			aspect_drift_ratio,
-			PROTOCOL_MAX_ASPECT_DRIFT_RATIO,
-		])
+	if not frame_rect.is_equal_approx(PROTOCOL_FRAME_RECTS[scale_percent]):
+		failures.append("protocol_frame_layout_changed_scale_%d=%s" % [scale_percent, frame_rect])
 	var viewport_size := Vector2(profile.get("actual_viewport_size", Vector2i(1280, 720)))
 	if not _contains_with_epsilon(Rect2(Vector2.ZERO, viewport_size), frame_rect):
 		failures.append("protocol_main_frame_outside_viewport_scale_%d=%s" % [
 			scale_percent,
 			frame_rect,
 		])
-	var safe_rect := _protocol_safe_rect(frame, profile)
+	var safe_rect: Rect2 = PROTOCOL_COPY_SAFE_RECTS[scale_percent]
 	var title_rect := surface.right_title_label.get_global_rect()
 	var body_rect := surface.right_body_label.get_global_rect()
-	var copy_rect := title_rect.merge(body_rect)
+	var vitals_rect := surface.vitals_label.get_global_rect()
+	var copy_rect := title_rect.merge(body_rect).merge(vitals_rect)
+	var body_mask := surface.right_body_label.get_theme_stylebox(&"normal") as StyleBoxFlat
+	if body_mask == null or not is_equal_approx(body_mask.bg_color.a, 1.0) or not body_mask.draw_center:
+		failures.append("protocol_body_background_rule_not_masked_scale_%d" % scale_percent)
+	else:
+		for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
+			if not is_zero_approx(body_mask.get_content_margin(side)) or not is_zero_approx(body_mask.get_expand_margin(side)):
+				failures.append("protocol_body_mask_changes_copy_layout_scale_%d" % scale_percent)
+	for label in [surface.right_title_label, surface.right_body_label, surface.vitals_label]:
+		if not label.is_visible_in_tree() or label.text.is_empty() or label.clip_text or label.text_overrun_behavior != TextServer.OVERRUN_NO_TRIMMING or label.get_minimum_size().y > label.size.y + RECT_EPSILON:
+			failures.append("protocol_copy_clipped_scale_%d=%s" % [scale_percent, label.name])
 	if not _contains_with_epsilon(safe_rect, copy_rect):
 		failures.append("protocol_copy_unsafe_scale_%d=copy:%s_safe:%s_frame:%s" % [
 			scale_percent,
@@ -305,6 +309,8 @@ func _check_protocol_main_frame(
 			title_rect,
 			body_rect,
 		])
+	if vitals_rect.intersects(title_rect) or vitals_rect.intersects(body_rect):
+		failures.append("protocol_vitals_overlap_scale_%d=%s" % [scale_percent, vitals_rect])
 	var pressure_rect := surface.protocol_pressure_track.get_global_rect()
 	if not _contains_with_epsilon(safe_rect, pressure_rect):
 		failures.append("protocol_pressure_unsafe_scale_%d=pressure:%s_safe:%s_frame:%s" % [
@@ -341,26 +347,34 @@ func _control_texture(control: Control) -> Texture2D:
 	return null
 
 
-func _protocol_safe_rect(frame: Control, profile: Dictionary) -> Rect2:
-	var frame_rect := frame.get_global_rect()
-	var text_padding: Vector2 = profile.get("text_safe_padding", Vector2(10.0, 7.0))
-	var left := text_padding.x
-	var top := text_padding.y
-	var right := text_padding.x
-	var bottom := text_padding.y
-	if frame is NinePatchRect:
-		var nine_patch := frame as NinePatchRect
-		left = maxf(left, float(nine_patch.get_patch_margin(SIDE_LEFT)))
-		top = maxf(top, float(nine_patch.get_patch_margin(SIDE_TOP)))
-		right = maxf(right, float(nine_patch.get_patch_margin(SIDE_RIGHT)))
-		bottom = maxf(bottom, float(nine_patch.get_patch_margin(SIDE_BOTTOM)))
-	return Rect2(
-		frame_rect.position + Vector2(left, top),
-		Vector2(
-			maxf(0.0, frame_rect.size.x - left - right),
-			maxf(0.0, frame_rect.size.y - top - bottom)
-		)
-	)
+func _check_protocol_ornaments(frame: Control, texture: Texture2D, scale_percent: int, failures: Array[String]) -> void:
+	if texture.resource_path != PROTOCOL_FRAME_PATH or texture.get_size() != Vector2(244, 110) or FileAccess.get_sha256(PROTOCOL_FRAME_PATH).to_upper() != PROTOCOL_FRAME_SHA256:
+		failures.append("protocol_ornament_source_changed_scale_%d" % scale_percent)
+		return
+	if not (frame is NinePatchRect):
+		failures.append("protocol_ornaments_require_ninepatch_scale_%d" % scale_percent)
+		return
+	var patch := frame as NinePatchRect
+	var leading := Vector2(patch.patch_margin_left, patch.patch_margin_top)
+	var trailing := Vector2(patch.patch_margin_right, patch.patch_margin_bottom)
+	var source_size := texture.get_size()
+	if patch.region_rect != Rect2() or patch.axis_stretch_horizontal != NinePatchRect.AXIS_STRETCH_MODE_STRETCH or patch.axis_stretch_vertical != NinePatchRect.AXIS_STRETCH_MODE_STRETCH:
+		failures.append("protocol_ninepatch_sampling_changed_scale_%d" % scale_percent)
+	if frame.size.x <= leading.x + trailing.x or frame.size.y <= leading.y + trailing.y or source_size.x <= leading.x + trailing.x or source_size.y <= leading.y + trailing.y:
+		failures.append("protocol_ninepatch_corner_overlap_scale_%d" % scale_percent)
+	var canvas_transform := frame.get_global_transform_with_canvas()
+	if not is_equal_approx(canvas_transform.x.length(), canvas_transform.y.length()):
+		failures.append("protocol_ornaments_nonuniform_canvas_scale_%d" % scale_percent)
+	var fixed_corners := [
+		Rect2(Vector2.ZERO, leading),
+		Rect2(source_size.x - trailing.x, 0, trailing.x, leading.y),
+		Rect2(0, source_size.y - trailing.y, leading.x, trailing.y),
+		Rect2(source_size - trailing, trailing),
+	]
+	for index in range(PROTOCOL_FIXED_ORNAMENTS.size()):
+		var corner: Rect2 = fixed_corners[index]
+		if not corner.encloses(PROTOCOL_FIXED_ORNAMENTS[index]):
+			failures.append("protocol_ornament_enters_stretch_scale_%d_corner_%d=ornament:%s_fixed:%s" % [scale_percent, index, PROTOCOL_FIXED_ORNAMENTS[index], corner])
 
 
 func _contains_with_epsilon(outer: Rect2, inner: Rect2) -> bool:

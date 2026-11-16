@@ -15,6 +15,7 @@ const SpecialRoomPresentationModelScript := preload("res://scripts/gameplay/inte
 const Art10UISkinKitScript := preload("res://scripts/presentation/art10_ui_skin_kit.gd")
 const Art21UIPlacementContractScript := preload("res://scripts/presentation/art21_ui_placement_contract.gd")
 const RuntimeInputProfileScript := preload("res://scripts/core/input/runtime_input_profile.gd")
+const UILayerContractScript := preload("res://scripts/ui/shell/ui_layer_contract.gd")
 const SemanticActionHintScript := preload("res://scripts/core/input/semantic_action_hint.gd")
 const EventChoicePanel := preload("res://scripts/ui/run_surface/z1_event_choice_panel.gd")
 const EventRooms := preload("res://scripts/ui/run_surface/z1_event_room_presentation.gd")
@@ -287,7 +288,14 @@ func _rebuild(context: Dictionary) -> void:
 		child.queue_free()
 	event_icon.texture = null
 	event_icon.hide()
-	var scale_factor := Art10UISkinKitScript.runtime_ui_scale_factor() if context_kind == &"event" else 1.0
+	var scale_factor := Art10UISkinKitScript.runtime_ui_scale_factor() if context_kind in [&"event", &"ground_loot"] else 1.0
+	if context_kind == &"ground_loot":
+		custom_minimum_size.x = minf(POPUP_WIDTH * scale_factor, maxf(1.0, room_bounds.size.x - 16.0))
+		UILayerContractScript.apply_layer(self, &"floating_info")
+	else:
+		custom_minimum_size.x = POPUP_WIDTH
+		z_as_relative = true
+		z_index = 80
 	title_label.add_theme_font_size_override("font_size", Art10UISkinKitScript.scaled_font_size(16, scale_factor))
 	for label in [hint_label, status_label]:
 		label.add_theme_font_size_override("font_size", Art10UISkinKitScript.scaled_font_size(13, scale_factor))
@@ -321,6 +329,8 @@ func _rebuild(context: Dictionary) -> void:
 		_rebuild_special_context(context)
 	item_scroll.visible = (context_kind == &"ground_loot") or (context_kind == &"chest" and bool(context.get("container_open", false)))
 	item_scroll.custom_minimum_size.y = minf(ROW_HEIGHT * maxf(1.0, float(context_items.size())), ROW_HEIGHT * 3.0)
+	if context_kind == &"ground_loot":
+		item_scroll.custom_minimum_size.y *= scale_factor
 	status_label.text = ""
 	status_label.visible = false
 	_apply_event_feedback()
@@ -363,6 +373,7 @@ func _build_replacement_view(context: Dictionary, backpack_remaining: int) -> vo
 	_build_replacement_rows(incoming, backpack_remaining)
 	item_scroll.visible = true
 	item_scroll.custom_minimum_size.y = minf(ROW_HEIGHT * maxf(1.0, float(inventory_items.size())), ROW_HEIGHT * 3.0)
+	item_scroll.custom_minimum_size.y *= Art10UISkinKitScript.runtime_ui_scale_factor()
 	status_label.text = ""
 	status_label.visible = false
 	_request_content_fit()
@@ -452,6 +463,11 @@ func _build_item_rows(items: Array[Dictionary], backpack_remaining: int) -> void
 		item_button.tooltip_text = String(presentation.get("detail_text", "尚未选择物品。"))
 		_apply_item_icon(item_button, item)
 		_style_button(item_button, &"secondary", 13)
+		if context_kind == &"ground_loot":
+			item_button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			item_button.clip_text = false
+			item_button.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+			item_button.add_theme_constant_override("icon_max_width", int(26 * Art10UISkinKitScript.runtime_ui_scale_factor()))
 		_apply_rarity_style(item_button, rarity)
 		row.add_child(item_button)
 		var instance_id := String(item.get("instance_id", ""))
@@ -493,6 +509,8 @@ func _apply_item_icon(button: Button, item: Dictionary) -> void:
 
 
 func _style_button(button: Button, tone: StringName, font_size: int) -> void:
+	if context_kind == &"ground_loot":
+		font_size = Art10UISkinKitScript.scaled_font_size(font_size, Art10UISkinKitScript.runtime_ui_scale_factor())
 	button.focus_mode = Control.FOCUS_ALL
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = Color(0.025, 0.055, 0.058, 0.96)
@@ -507,6 +525,9 @@ func _style_button(button: Button, tone: StringName, font_size: int) -> void:
 	normal.content_margin_top = 5
 	normal.content_margin_right = 8
 	normal.content_margin_bottom = 5
+	if context_kind == &"ground_loot":
+		normal.content_margin_top = 8
+		normal.content_margin_bottom = 8
 	var hover := normal.duplicate() as StyleBoxFlat
 	hover.bg_color = Color(0.06, 0.13, 0.13, 0.99)
 	button.add_theme_stylebox_override("normal", normal)
@@ -549,9 +570,9 @@ func _build_replacement_candidate_content(
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	content.offset_left = 10.0
-	content.offset_top = 4.0
+	content.offset_top = 8.0
 	content.offset_right = -4.0
-	content.offset_bottom = -4.0
+	content.offset_bottom = -8.0
 	content.add_theme_constant_override("separation", 4)
 	button.add_child(content)
 
@@ -578,8 +599,9 @@ func _build_replacement_candidate_content(
 	name_line.name = "ReplacementCandidateName"
 	name_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	name_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	name_line.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	name_line.add_theme_font_size_override("font_size", 12)
+	name_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	name_line.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	name_line.add_theme_font_size_override("font_size", Art10UISkinKitScript.scaled_font_size(12, Art10UISkinKitScript.runtime_ui_scale_factor()))
 	name_line.add_theme_color_override("font_color", Color(0.92, 0.94, 0.86, 1.0))
 	name_line.text = "%s ×%d" % [
 		String(presentation.get("display_name", "未命名物资")),
@@ -591,8 +613,9 @@ func _build_replacement_candidate_content(
 	meta_line.name = "ReplacementCandidateMeta"
 	meta_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	meta_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	meta_line.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	meta_line.add_theme_font_size_override("font_size", 11)
+	meta_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	meta_line.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	meta_line.add_theme_font_size_override("font_size", Art10UISkinKitScript.scaled_font_size(11, Art10UISkinKitScript.runtime_ui_scale_factor()))
 	meta_line.add_theme_color_override(
 		"font_color",
 		Color(rarity.get("color", Color(0.70, 0.80, 0.76, 1.0)))
@@ -600,6 +623,10 @@ func _build_replacement_candidate_content(
 	meta_line.text = _replacement_candidate_meta_text(presentation)
 	meta_line.set_meta("collectible_level", collectible_level)
 	text_stack.add_child(meta_line)
+	var fit_row := func() -> void:
+		button.custom_minimum_size.y = maxf(ROW_HEIGHT, content.get_combined_minimum_size().y + 16.0)
+	content.minimum_size_changed.connect(fit_row)
+	fit_row.call_deferred()
 
 
 func _replacement_candidate_meta_text(presentation: Dictionary) -> String:
@@ -775,6 +802,7 @@ func _context_signature(context: Dictionary) -> String:
 	var last_result: Dictionary = payload.get("last_result", {})
 	var parts: Array[String] = [
 		String(context_kind),
+		str(Art10UISkinKitScript.runtime_ui_scale_factor()) if context_kind == &"ground_loot" else "1",
 		str(context.get("opened_once", false)),
 		str(context.get("container_open", false)),
 		str(context.get("backpack_remaining", 0)),

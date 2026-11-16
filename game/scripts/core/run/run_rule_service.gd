@@ -71,12 +71,27 @@ static func encounter_for_room(context: RunContext, room_type: StringName, pos: 
 static func apply_search_reward(context: RunContext, pos: Vector2i, adjacent_mines: int, is_chest: bool) -> Dictionary:
 	if context == null or context.asset_ledger == null:
 		return make_rule_result(false, &"search_reward", DEFAULT_ACTOR_ID, "no_active_asset_ledger", [], ["No active asset ledger."])
+	var z2 := RunSettlementService.applies_to(context)
+	var suppress_loot := false
+	if z2:
+		if is_chest:
+			var opening := Z2RunHooks.opening_hook(context, {"kind": "chest_opened", "fact_id": "chest:" + context.cell_key(pos), "actual": true, "pos": pos})
+			if not opening.get("ok", false):
+				return opening
+			suppress_loot = bool(opening.get("facts", {}).get("suppress_loot", false))
+		if not suppress_loot:
+			var pool := Z2LootCatalog.preflight("chest" if is_chest else "search", context.run_start_config.get("profile_fields", {}).get("content_eligibility", {}), str(context.run_start_config.get("map_config_id", "")))
+			if not pool.get("ok", false):
+				return pool
 	var request: Dictionary = _make_rule_request(context, &"search_reward", "search", {"pos": pos, "adjacent_mines": adjacent_mines, "is_chest": is_chest})
 	var black_coin: int = RunRuleContent.default_search_black_coin(context, pos, adjacent_mines, is_chest)
 	var modifier_black_coin_delta: int = _numeric_modifier_delta(context, &"search_reward", "black_coin")
 	black_coin = maxi(0, black_coin + modifier_black_coin_delta + context.search_reward_bonus)
 	var item_defs: Array[Dictionary] = RunRuleContent.default_search_items(pos, adjacent_mines, is_chest, black_coin, context)
-	var coil_used := not is_chest and bool(context.z1_event_flags.get("coil_pending", false))
+	if suppress_loot:
+		black_coin = 0
+		item_defs.clear()
+	var coil_used := not z2 and not is_chest and bool(context.z1_event_flags.get("coil_pending", false))
 	if coil_used:
 		var extra_items := RunRuleContent.default_search_items(pos, adjacent_mines, false, black_coin + 7919, context)
 		if not extra_items.is_empty():
@@ -88,10 +103,19 @@ static func apply_search_reward(context: RunContext, pos: Vector2i, adjacent_min
 		_effect_for_request(request, 2, RunAssetEffectHandler.EFFECT_ADD_REWARD_ITEMS, "search", pos, {"item_defs": item_defs, "preferred_location": RunAssetLedger.LOCATION_ROOM_FLOOR, "room_pos": pos}),
 	]
 	var applied: Dictionary = RunAssetEffectHandler.apply_effects(context, effects)
+	if not applied.get("ok", false):
+		return applied
 	if coil_used and bool(applied.get("ok", false)):
 		context.z1_event_flags["coil_pending"] = false
 	var item_result: Dictionary = _effect_result(applied, RunAssetEffectHandler.EFFECT_ADD_REWARD_ITEMS)
 	var combined_items: Array = _combine_item_results(item_result)
+	if z2:
+		var value := 0
+		for item in combined_items:
+			value += maxi(0, int(item.get("base_value", 0)))
+		var supplied := Z2SupplyRuntime.on_event(context, context.asset_ledger.get_items_by_location(&"equipped"), {"kind": "chest_opened" if is_chest else "search_completed", "room_id": context.cell_key(pos), "new_output_base_value": value})
+		if not supplied.get("ok", false):
+			return supplied
 	var log_entry: Dictionary = {"type": &"rule_result", "rule_result": &"search_reward", "black_coin": black_coin, "items": combined_items.size()}
 	_append_rule_log(context, log_entry)
 	var result: Dictionary = make_rule_result(true, &"search_reward", DEFAULT_ACTOR_ID, "", effects, ["Search reward resolved."], {}, log_entry)
@@ -111,6 +135,10 @@ static func apply_search_reward(context: RunContext, pos: Vector2i, adjacent_min
 static func apply_combat_reward(context: RunContext, pos: Vector2i, reward_gold: int) -> Dictionary:
 	if context == null or context.asset_ledger == null:
 		return make_rule_result(false, &"combat_reward", DEFAULT_ACTOR_ID, "no_active_asset_ledger", [], ["No active asset ledger."])
+	if RunSettlementService.applies_to(context):
+		var pool := Z2LootCatalog.preflight_config(context.run_start_config)
+		if not pool.get("ok", false):
+			return pool
 	var request: Dictionary = _make_rule_request(context, &"combat_reward", "combat", {"pos": pos, "reward_gold": reward_gold})
 	var item_defs: Array[Dictionary] = []
 	var monster_drop := RunRuleContent.monster_trophy(pos, reward_gold, context)
@@ -136,6 +164,10 @@ static func apply_combat_flee(context: RunContext, pos: Vector2i) -> Dictionary:
 	if context == null or context.asset_ledger == null:
 		return make_rule_result(false, &"combat_flee", DEFAULT_ACTOR_ID, "no_active_asset_ledger", [], ["No active asset ledger."])
 	var request: Dictionary = _make_rule_request(context, &"combat_flee", "combat_flee", {"pos": pos})
+	if context.profile_fields.get("ruleset_id", "") == "z2" and context.profile_fields.get("z2_progression_version") == 1:
+		var result := make_rule_result(true, &"combat_flee", DEFAULT_ACTOR_ID)
+		result.merge({"black_coin_loss": 0, "dropped_instance_ids": [], "items_moved_to_room_floor": 0, "room_remains_uncleared": true})
+		return _finalize_rule(context, request, result)
 	var pending_black_coin := context.asset_ledger.get_currency(RunAssetLedger.CURRENCY_BLACK)
 	var black_coin_loss := int(floor(float(pending_black_coin) * 0.10))
 	var effects: Array = []
@@ -460,6 +492,8 @@ static func use_consumable(context: RunContext, instance_id: String = "") -> Dic
 		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, "item_not_in_inventory", [], ["Item is not in backpack."])
 	if not bool(item_before.get("can_consume", false)):
 		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, "item_not_consumable", [], ["Item is not consumable."])
+	if RunSettlementService.applies_to(context) and str(item_before.get("content_version", "")) == "z2-system-20261116":
+		return _use_z2_consumable(context, item_before)
 	var consumption_block := Z1SupplyRules.consumption_block(context, item_before)
 	if not consumption_block.is_empty():
 		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, consumption_block)
@@ -485,13 +519,40 @@ static func use_consumable(context: RunContext, instance_id: String = "") -> Dic
 	return _finalize_rule(context, request, result, applied)
 
 
-static func settle_success(context: RunContext) -> Dictionary:
+static func _use_z2_consumable(context: RunContext, item: Dictionary) -> Dictionary:
+	if str(item.item_id) == "con_salvage_seal" and bool(context.z1_event_flags.get("z2_salvage_seal_used", false)):
+		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, "salvage_seal_already_used")
+	var before := RunStateSnapshot.capture_context(context)
+	var effect_result: Dictionary = Z2SupplyRuntime.apply_consumable(context, item)
+	if not bool(effect_result.get("ok", false)):
+		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, str(effect_result.get("reason", "consumption_blocked")))
+	var request := _make_rule_request(context, &"use_consumable", "consumable", {"instance_id": item.instance_id, "item": item})
+	var counters: Dictionary = context.asset_ledger.item_instances[item.instance_id].get("counters", {}).duplicate(true)
+	counters["uses"] = int(counters.get("uses", 0)) + 1
+	context.asset_ledger.item_instances[item.instance_id]["counters"] = counters
+	var effect := _effect_for_request(request, 1, RunAssetEffectHandler.EFFECT_CONSUME_INVENTORY_ITEM, "consumable", context.get_current_pos(), {"instance_id": item.instance_id})
+	var applied := RunAssetEffectHandler.apply_effects(context, [effect])
+	if not applied.get("ok", false):
+		RunStateSnapshot.install_context(context, before)
+		return make_rule_result(false, &"use_consumable", DEFAULT_ACTOR_ID, "consume_instance_failed")
+	if str(item.item_id) == "con_salvage_seal":
+		context.z1_event_flags["z2_salvage_seal_used"] = true
+	context.run_stats["consumables_used"] = int(context.run_stats.get("consumables_used", 0)) + 1
+	context.record_event(&"consumable_used", str(context.active_command.get("command_id", "")), &"player", "consumable", {"instance_id": str(item.instance_id), "item_id": str(item.item_id), "effective": true, "effect_applied": true})
+	context.asset_ledger.sync_compat_fields(context)
+	var result := make_rule_result(true, &"use_consumable", DEFAULT_ACTOR_ID, "", [effect])
+	result.merge({"item": item.duplicate(true), "consumed_item": applied.get("last_result", {}).get("item", item), "effect_result": effect_result, "message": "已使用%s。" % str(item.display_name)})
+	return _finalize_rule(context, request, result, applied)
+
+
+static func settle_success(context: RunContext, selected_instance_ids: Array = [], selection_confirmed: bool = false) -> Dictionary:
 	if context == null or context.asset_ledger == null:
 		return {}
 	if _uses_tutorial_completion_only_policy(context):
 		return _tutorial_terminal_rule_result(context, &"settle_success", &"success")
-	var request: Dictionary = _make_rule_request(context, &"settle_success", "settlement", {"outcome": &"success"})
-	var effect: Dictionary = _effect_for_request(request, 1, RunAssetEffectHandler.EFFECT_SETTLE_SUCCESS, "settlement", context.get_current_pos(), {})
+	var payload := {"outcome": &"success", "selected_instance_ids": selected_instance_ids.duplicate(true), "selection_confirmed": selection_confirmed}
+	var request: Dictionary = _make_rule_request(context, &"settle_success", "settlement", payload)
+	var effect: Dictionary = _effect_for_request(request, 1, RunAssetEffectHandler.EFFECT_SETTLE_SUCCESS, "settlement", context.get_current_pos(), payload)
 	var applied: Dictionary = RunAssetEffectHandler.apply_effects(context, [effect])
 	var result: Dictionary = _dictionary_from_variant(applied.get("last_result", {}))
 	result.merge(make_rule_result(true, &"settle_success", DEFAULT_ACTOR_ID, "", [effect], ["Success settlement resolved."]), false)
@@ -503,6 +564,8 @@ static func build_failure_preview(context: RunContext, reason: String = "") -> D
 		return {}
 	if _uses_tutorial_completion_only_policy(context):
 		return _tutorial_terminal_settlement(&"failure", reason)
+	if RunSettlementService.applies_to(context):
+		return RunSettlementService.build(context, "failure", [], true).get("settlement", {})
 	return context.asset_ledger.build_failure_preview()
 
 

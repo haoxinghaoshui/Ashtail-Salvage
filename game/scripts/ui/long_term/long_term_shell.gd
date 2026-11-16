@@ -108,6 +108,7 @@ var content_record_facts_label: Label
 var content_list_scroll: ScrollContainer
 var card_grid_container: VBoxContainer
 var content_action_button: Button
+var goal_tier_actions: HBoxContainer
 var content_previous_button: Button
 var content_next_button: Button
 var current_content_cards: Array[Dictionary] = []
@@ -710,6 +711,13 @@ func _build_module_group() -> void:
 	content_action_button.pressed.connect(_on_content_action_pressed)
 	module_group.add_child(content_action_button)
 	_apply_generic_button_surface(content_action_button, &"secondary", &"normal", 12)
+	goal_tier_actions = HBoxContainer.new()
+	goal_tier_actions.name = "GoalTierActions"
+	goal_tier_actions.position = Vector2(LongTermLayoutContractScript.CONTENT_RECORD_FACTS.position.x, LongTermLayoutContractScript.CONTENT_ACTION.position.y)
+	goal_tier_actions.size = Vector2(LongTermLayoutContractScript.CONTENT_RECORD_FACTS.size.x, LongTermLayoutContractScript.CONTENT_ACTION.size.y)
+	goal_tier_actions.add_theme_constant_override("separation", 6)
+	module_group.add_child(goal_tier_actions)
+	goal_tier_actions.hide()
 	content_previous_button = _add_content_page_button("LongTermContentPrevious", LongTermLayoutContractScript.CONTENT_PREVIOUS, "上一页", -1)
 	content_next_button = _add_content_page_button("LongTermContentNext", LongTermLayoutContractScript.CONTENT_NEXT, "下一页", 1)
 	content_previous_button.visible = false
@@ -1011,7 +1019,7 @@ func _refresh_profile() -> void:
 	if profile_level_label == null:
 		return
 	var runtime: Dictionary = current_model.get("profile_runtime_panel", {})
-	profile_level_label.text = "等级 %02d" % maxi(1, int(runtime.get("profile_level", 1)))
+	profile_level_label.text = "等级 %02d" % maxi(0, int(runtime.get("profile_level", 1)))
 	var titles := runtime.get("titles", []) as Array
 	profile_role_label.text = str(runtime.get("current_title", titles[titles.size() - 1] if not titles.is_empty() else "回收员"))
 	profile_exp_value_label.text = str(maxi(0, int(runtime.get("profile_exp", 0))))
@@ -1019,8 +1027,10 @@ func _refresh_profile() -> void:
 	profile_exp_progress_label.text = (
 		"距 Lv.%d 还差 %d XP" % [int(runtime.get("profile_level", 1)) + 1, int(runtime.get("exp_to_next_level", 0))]
 		if next_level_exp >= 0
-		else "已达 Demo 上限"
+		else "已达等级上限"
 	)
+	if int(runtime.get("profile_level", 1)) == 0:
+		profile_exp_progress_label.text = "完成教学到达 Lv.1"
 	profile_exp_value_label.tooltip_text = profile_exp_progress_label.text
 	var values := [
 		_format_number(int(runtime.get("run_count", 0))),
@@ -1430,6 +1440,11 @@ func _wire_long_term_card_focus() -> void:
 	var count := long_term_card_buttons.size()
 	if count <= 0:
 		return
+	var tier_buttons: Array[Button] = []
+	if goal_tier_actions != null and goal_tier_actions.visible:
+		for child in goal_tier_actions.get_children():
+			if child is Button and not child.disabled:
+				tier_buttons.append(child)
 	var selected_secondary := secondary_buttons.get(get_selected_secondary_id(), null) as Button
 	for index in range(count):
 		var button := long_term_card_buttons[index]
@@ -1437,8 +1452,11 @@ func _wire_long_term_card_focus() -> void:
 		var action_value: Variant = card.get("action", {})
 		var action: Dictionary = action_value as Dictionary if action_value is Dictionary else {}
 		var action_reachable := index == selected_content_card_index and not action.is_empty() and content_action_button.visible and not content_action_button.disabled
+		var right_target: Control = content_action_button if action_reachable else button
+		if index == selected_content_card_index and not tier_buttons.is_empty():
+			right_target = tier_buttons[0]
 		button.focus_neighbor_left = button.get_path_to(button)
-		button.focus_neighbor_right = button.get_path_to(content_action_button if action_reachable else button)
+		button.focus_neighbor_right = button.get_path_to(right_target)
 		button.focus_neighbor_top = button.get_path_to(long_term_card_buttons[index - 1]) if index > 0 else (button.get_path_to(selected_secondary) if selected_secondary != null else NodePath())
 		button.focus_neighbor_bottom = button.get_path_to(long_term_card_buttons[index + 1]) if index + 1 < count else button.get_path_to(button)
 	if content_action_button != null:
@@ -1446,6 +1464,13 @@ func _wire_long_term_card_focus() -> void:
 		content_action_button.focus_neighbor_left = content_action_button.get_path_to(selected_button)
 		content_action_button.focus_neighbor_top = content_action_button.get_path_to(selected_button)
 		content_action_button.focus_neighbor_bottom = content_action_button.get_path_to(selected_button)
+	var selected_card := long_term_card_buttons[clampi(selected_content_card_index, 0, count - 1)]
+	for index in tier_buttons.size():
+		var button := tier_buttons[index]
+		button.focus_neighbor_left = button.get_path_to(tier_buttons[index - 1] if index > 0 else selected_card)
+		button.focus_neighbor_right = button.get_path_to(tier_buttons[index + 1] if index + 1 < tier_buttons.size() else button)
+		button.focus_neighbor_top = button.get_path_to(selected_card)
+		button.focus_neighbor_bottom = button.get_path_to(selected_card)
 	_wire_long_term_secondary_focus()
 
 
@@ -1475,6 +1500,11 @@ func _select_long_term_card(card_index: int, grab_focus: bool) -> void:
 
 
 func _refresh_selected_content_card(_from_input: bool) -> void:
+	if goal_tier_actions != null:
+		for child in goal_tier_actions.get_children():
+			goal_tier_actions.remove_child(child)
+			child.queue_free()
+		goal_tier_actions.hide()
 	if current_content_cards.is_empty():
 		if content_action_button != null:
 			content_action_button.visible = false
@@ -1497,6 +1527,17 @@ func _refresh_selected_content_card(_from_input: bool) -> void:
 	content_action_button.visible = not bool(card.get("empty_state", false)) and not action.is_empty() and not LOCKED_MODULES.has(displayed_module_id)
 	content_action_button.disabled = action.is_empty() or not pending_meta_action.is_empty()
 	content_action_button.text = "正在确认…" if not action.is_empty() and not pending_meta_action.is_empty() else str(card.get("action_label", "确认"))
+	for tier: Dictionary in card.get("tier_actions", []):
+		var button := Button.new()
+		button.name = "ClaimGoalTier%d" % int(tier.tier)
+		button.text = str(tier.label)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.disabled = not bool(tier.enabled) or not pending_meta_action.is_empty()
+		button.pressed.connect(_on_goal_tier_pressed.bind(tier.action, button))
+		goal_tier_actions.add_child(button)
+		_apply_generic_button_surface(button, &"secondary", &"normal", 12)
+		button.resized.connect(_apply_scaled_button_font.bind(button))
+		goal_tier_actions.show()
 	_wire_long_term_card_focus()
 
 
@@ -1513,6 +1554,17 @@ func _on_content_action_pressed() -> void:
 	content_action_button.disabled = true
 	content_action_button.text = "正在确认…"
 	_wire_long_term_card_focus()
+	meta_action_requested.emit(request)
+
+
+func _on_goal_tier_pressed(action: Dictionary, button: Button) -> void:
+	if button.disabled or not pending_meta_action.is_empty():
+		return
+	var request := _prepare_meta_action(action)
+	pending_meta_action = _meta_request_identity(request)
+	content_record_state_label.text = "正在确认…"
+	for child in goal_tier_actions.get_children():
+		(child as Button).disabled = true
 	meta_action_requested.emit(request)
 
 
@@ -1537,7 +1589,7 @@ func _meta_action_target_id(action: Dictionary) -> String:
 	match StringName(action.get("action", &"")):
 		&"complete_research": return str(action.get("research_id", ""))
 		&"unlock_talent": return str(action.get("talent_id", ""))
-		&"claim_goal": return "%s:%s" % [str(action.get("goal_kind", "")), str(action.get("goal_id", ""))]
+		&"claim_goal": return "%s:%s:%d" % [str(action.get("goal_kind", "")), str(action.get("goal_id", "")), int(action.get("tier", 1))]
 		&"mark_viewed": return str(action.get("view_kind", ""))
 	return ""
 
@@ -1561,7 +1613,11 @@ func _meta_result_player_message(envelope: Dictionary) -> String:
 		match status:
 			&"claimed": return "奖励已领取"
 			&"completed": return "研究完成，相关内容已经开放。"
-			&"talent_unlocked": return "天赋已解锁，将从之后确认出发的新一局生效。"
+			&"crafted": return "研究合成完成，成品已送入仓库。"
+			&"talent_unlocked":
+				if str(result.get("talent_id", "")) in ["z2_talent_29", "z2_talent_39"]:
+					return "已取得后续开局效果的选择资格，具体效果将在后续批次开放。"
+				return "天赋已解锁，将从之后确认出发的新一局生效。"
 			&"talent_already_unlocked": return "该天赋已经解锁，无需重复提交。"
 			&"duplicate_ignored": return "该项操作已经完成，无需重复提交。"
 		return "档案操作已完成。"

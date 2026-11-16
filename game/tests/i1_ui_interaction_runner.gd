@@ -38,8 +38,8 @@ func _run() -> void:
 	var bus: Variant = run_scene.get("command_bus")
 	_require(bus != null, "production CommandBus was not initialized")
 	if bus != null:
-		var start_result: Dictionary = bus.dispatch(&"start_demo_run")
-		_require(bool(start_result.get("ok", false)), "demo run could not be started")
+		var start_result: Dictionary = preload("res://tests/z2_legacy_main_fixture.gd").start(run_scene)
+		_require(bool(start_result.get("ok", false)), "qualified standard run could not be started")
 	run_scene.call("_show_run_screen")
 	await process_frame
 	await process_frame
@@ -200,14 +200,27 @@ func _assert_run_surface(run_surface: Control, profile: Dictionary, viewport_siz
 	_require(feedback != null and not feedback.visible and not feedback.text.contains("已确认"), "%s generic accepted acknowledgement leaked into player guidance" % resolution_id)
 	run_surface.call("show_command_feedback", {"ok": true, "accepted": true, "message": "已拾取应急药剂。"})
 	_require(feedback != null and not feedback.visible, "%s successful action duplicated its authoritative presentation in global feedback" % resolution_id)
-	run_surface.call("show_command_feedback", {"ok": false, "accepted": false, "message": "请靠近物资后再拾取。"})
-	_require(feedback != null and feedback.visible and feedback.text.contains("靠近物资"), "%s rejected action lacks player-facing feedback" % resolution_id)
-	if feedback != null and feedback_panel != null:
+	var rejection_copy := "请靠近物资后再拾取。"
+	var feedback_scroll := run_surface.get("command_feedback_scroll") as ScrollContainer
+	run_surface.call("show_command_feedback", {"ok": false, "accepted": false, "message": rejection_copy})
+	# Showing the previously hidden scroll child queues container layout and
+	# RunSurface reflow. Measure rendered geometry after that existing work.
+	for _layout_frame in range(3):
+		await process_frame
+	_require(feedback != null and feedback.is_visible_in_tree() and feedback.text == rejection_copy, "%s rejected action lacks its complete visible feedback" % resolution_id)
+	_require(feedback_scroll != null and feedback_scroll.is_visible_in_tree(), "%s rejected action lacks its visible scroll viewport" % resolution_id)
+	if feedback != null and feedback_panel != null and feedback_scroll != null:
 		_require(not feedback_panel.visible, "%s rejected action recreated the retired full-width feedback frame" % resolution_id)
-		_assert_inside_viewport(feedback, viewport_size, "%s unframed RunCommandFeedback" % resolution_id)
+		_require(feedback_scroll.is_ancestor_of(feedback), "%s feedback does not belong to its scroll viewport" % resolution_id)
+		_assert_inside_viewport(feedback_scroll, viewport_size, "%s RunCommandFeedbackScroll" % resolution_id)
+		_require(feedback.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING and not feedback.clip_text and feedback.max_lines_visible == -1 and feedback.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART, "%s rejected feedback truncates its source text" % resolution_id)
+		# This fixture is short: the complete body must fit, without scrolling.
+		_require(feedback_scroll.get_global_rect().grow(0.5).encloses(feedback.get_global_rect()), "%s complete short feedback is outside its viewport" % resolution_id)
 		_assert_single_line_fits(feedback, "%s rejected RunCommandFeedback" % resolution_id)
+		var bar := feedback_scroll.get_v_scroll_bar()
+		_require(not bar.is_visible_in_tree() and bar.max_value - bar.page <= 1.0, "%s short feedback exposes unnecessary scrolling" % resolution_id)
 	run_surface.call("advance_command_feedback", 3.0)
-	_require(feedback != null and not feedback.visible, "%s transient command feedback did not expire" % resolution_id)
+	_require(feedback != null and not feedback.visible and feedback_scroll != null and not feedback_scroll.visible, "%s transient command feedback or empty scroll layer did not expire" % resolution_id)
 
 
 func _assert_left_status_spacing(run_surface: Control, resolution_id: StringName) -> void:

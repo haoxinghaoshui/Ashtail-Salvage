@@ -3,6 +3,7 @@ class_name ResultPresentationModel
 
 const ItemRarityDescriptorScript := preload("res://scripts/presentation/item_rarity_descriptor.gd")
 const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
 const RunUIViewModelScript := preload("res://scripts/ui/shell/run_ui_view_model.gd")
 const SaveProfileManifestScript := preload("res://scripts/core/save/save_profile_manifest.gd")
 
@@ -135,6 +136,8 @@ static func _consequence_text(result_state: StringName, settlement: Dictionary, 
 	var cleared_count := _array(settlement.get("cleared_consumables", [])).size()
 	if awaiting_salvage:
 		var candidate_count := _array(settlement.get("settlement_pool", [])).size()
+		if result_state == &"success":
+			return "可保留 %d 件未用消耗品，每件占10点回收容量；容量不足时可取消部分战利品。穿戴装备和托运物资照常带回。" % int(settlement.get("retention_limit", 0))
 		return "黑资损失 %d，已锁定收益保留 %d；从 %d 件候选物资中选择可保全内容。" % [
 			int(settlement.get("black_coin_lost", 0)),
 			int(settlement.get("safe_yield_retained", settlement.get("safe_yield", 0))),
@@ -262,17 +265,29 @@ static func _career_feedback(progression: Dictionary, meta: Dictionary, show_fol
 	var level := int(progression.get("profile_level_after", meta.get("profile_level", 1)))
 	var leveled_up := level > int(progression.get("profile_level_before", level))
 	var text := "进度已保存 · 资历经验 +%d" % int(progression.get("exp_gained", 0))
+	if Z2Rules.applies_to(meta) and progression.has("talent_points_gained"):
+		text += " · 天赋点 +%d" % int(progression["talent_points_gained"])
 	if leveled_up or meta.has("profile_exp"):
 		text += (" · 升至 Lv.%d" if leveled_up else " · Lv.%d") % level
 	if meta.has("profile_exp"):
-		var next_exp := M7ContentCatalogScript.profile_exp_for_level(level + 1)
-		if next_exp >= 0:
+		var next_exp := M7ContentCatalogScript.profile_exp_for_level(level + 1, meta)
+		if Z2Rules.applies_to(meta) and level == 0:
+			text += " · 完成教学后升至 Lv.1"
+		elif next_exp >= 0:
 			text += " · 距 Lv.%d %d 经验" % [level + 1, maxi(0, next_exp - int(meta["profile_exp"]))]
 		else:
 			text += " · 已满级"
 	var details := PackedStringArray()
 	var breakdown := _dictionary(progression.get("experience_breakdown", {}))
-	if not breakdown.is_empty():
+	if not breakdown.is_empty() and Z2Rules.applies_to(meta):
+		details.append("基础经验 %d · 基础天赋点 %d" % [int(breakdown.get("base_experience", 0)), int(breakdown.get("base_talent", 0))])
+		var map_rules := Z2Rules.map_overrides(str(progression.get("map_id", "")))
+		if not map_rules.is_empty() and breakdown.has("ending_percent"):
+			details.append("难度 %d%% · 经验上限 %d · 天赋上限 %d · 结算 %d%%" % [
+				int(map_rules["experience_percent"]), int(map_rules["experience_cap"]),
+				int(map_rules["talent_cap"]), int(breakdown["ending_percent"]),
+			])
+	elif not breakdown.is_empty():
 		details.append("房间 +%d · 开箱 +%d · 战斗 +%d · 事件 +%d · 委托 +%d" % [
 			int(breakdown.get("room_exp", 0)), int(breakdown.get("chest_exp", 0)),
 			int(breakdown.get("combat_exp", 0)), int(breakdown.get("event_exp", 0)), int(breakdown.get("commission_exp", 0)),
@@ -313,7 +328,7 @@ static func _career_map_cue(new_unlock_ids: Array, meta: Dictionary) -> Dictiona
 		var blockers := requirements.split(" · ", false)
 		var text := name if blockers.is_empty() else "%s · %s" % [name, blockers[0]]
 		var tooltip := name if requirements.is_empty() else "%s · %s" % [name, requirements]
-		var required_exp := M7ContentCatalogScript.profile_exp_for_level(int(map.get("min_profile_level", 1)))
+		var required_exp := M7ContentCatalogScript.profile_exp_for_level(int(map.get("min_profile_level", 1)), meta)
 		if meta.has("profile_exp") and required_exp > int(meta["profile_exp"]):
 			tooltip += " · 还差 %d 经验" % (required_exp - int(meta["profile_exp"]))
 		return {"text": text, "tooltip": tooltip}

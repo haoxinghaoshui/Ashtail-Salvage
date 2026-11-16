@@ -1,6 +1,8 @@
 extends RefCounted
 class_name RunContext
 
+const Z2Talents := preload("res://scripts/core/progression/z2_talent_runtime.gd")
+
 # TruthMap = real map truth.
 # IntelMap = player-known intel.
 # UI reads ViewModels/snapshots, never TruthMap directly.
@@ -185,7 +187,15 @@ func start_run(config: Dictionary) -> void:
 	_new_lifecycle_authority().start_run(self, config)
 
 
-func _initialize_run(config: Dictionary) -> void:
+func _initialize_run(config: Dictionary) -> Dictionary:
+	var registry := ContentDefRegistry.new()
+	var frozen_profile: Dictionary = config.get("profile_fields", {})
+	if str(frozen_profile.get("ruleset_id", "")) == "z2" and int(frozen_profile.get("z2_progression_version", 0)) == 1:
+		var registered := registry.setup_z2()
+		if not registered.get("ok", false):
+			return registered
+	else:
+		registry.setup_defaults()
 	var command_before_reset := active_command.duplicate(true)
 	_reset_data()
 	active_command = command_before_reset
@@ -202,8 +212,7 @@ func _initialize_run(config: Dictionary) -> void:
 	transaction_log = RunTransactionLog.new()
 	rule_pipeline = RunRulePipeline.new()
 	_register_run_modifiers(config)
-	content_defs = ContentDefRegistry.new()
-	content_defs.setup_defaults()
+	content_defs = registry
 	run_start_config = config.get("run_start_config", {}).duplicate(true) if config.get("run_start_config", {}) is Dictionary else {}
 	profile_fields = config.get("profile_fields", {}).duplicate(true) if config.get("profile_fields", {}) is Dictionary else {}
 	profile_level = int(config.get("profile_level", profile_fields.get("profile_level", 1)))
@@ -212,6 +221,15 @@ func _initialize_run(config: Dictionary) -> void:
 	protocol_difficulty = int(config.get("protocol_difficulty", profile_fields.get("protocol_difficulty", 5)))
 	talent_interface = config.get("talent_interface", []).duplicate(true) if config.get("talent_interface", []) is Array else []
 	active_talent_effects = config.get("active_talent_effects", []).duplicate(true) if config.get("active_talent_effects", []) is Array else []
+	if tutorial and bool(Z2Talents.run_profile(profile_fields, []).enabled):
+		profile_fields = {"ruleset_id": "z2", "z2_progression_version": 1, "flag_unlocked": bool(profile_fields.get("flag_unlocked", false))}
+		active_talent_effects.clear()
+		run_start_config["profile_fields"] = profile_fields.duplicate(true)
+		run_start_config["active_talent_effects"] = []
+		run_start_config["max_hp"] = 100
+		config = config.duplicate(true)
+		config["active_talent_effects"] = []
+		config["max_hp"] = 100
 	asset_ledger = RunAssetLedger.new()
 	asset_ledger.setup(config)
 	query_facade = RunQueryFacade.new()
@@ -240,6 +258,14 @@ func _initialize_run(config: Dictionary) -> void:
 	reveal_on_move = bool(config.get("reveal_on_move", true))
 	tutorial_triggers = config.get("tutorial_triggers", {}).duplicate(true)
 	RunInventory.setup_stats(self)
+	var talent_profile := Z2Talents.from_context(self)
+	if bool(talent_profile.enabled):
+		power += Z2Talents.amount(talent_profile, "initial_power")
+		vitals_modifiers["z2_talents"] = talent_profile
+		if Z2Talents.amount(talent_profile, "first_pressure_waiver") > 0:
+			vitals_counters["z2_talent_05"] = 1
+		if Z2Talents.amount(talent_profile, "lethal_protection") > 0:
+			vitals_counters["z2_talent_10"] = 1
 	run_started = true
 	run_active = true
 	extracted = false
@@ -256,6 +282,7 @@ func _initialize_run(config: Dictionary) -> void:
 	if asset_ledger != null:
 		asset_ledger.sync_compat_fields(self)
 	record_event(RunEventLog.EVENT_RUN_STARTED, String(active_command.get("command_id", "")), StringName(active_command.get("actor_id", &"system")), "run_context", {"mode": mode, "position": player_pos})
+	return {"ok": true}
 
 
 func _register_run_modifiers(config: Dictionary) -> void:
@@ -336,7 +363,7 @@ func confirm_failure_salvage(selected_instance_ids: Array) -> Dictionary:
 
 
 func _settle_failure_salvage(selected_instance_ids: Array) -> Dictionary:
-	var settlement := RunRuleService.settle_failure(self, selected_instance_ids)
+	var settlement := RunRuleService.settle_success(self, selected_instance_ids, true) if extracted else RunRuleService.settle_failure(self, selected_instance_ids)
 	if not bool(settlement.get("ok", false)):
 		failure_salvage = settlement.duplicate(true)
 		last_message = "Salvage selection blocked: %s." % String(settlement.get("reason", "invalid_selection"))
@@ -361,6 +388,8 @@ func _apply_extract() -> void:
 	record_event(RunEventLog.EVENT_EXTRACTION_SUCCESS, String(active_command.get("command_id", "")), StringName(active_command.get("actor_id", &"player")), "command_bus", {"position": player_pos, "exit_id": exit_id})
 	var settlement := RunRuleService.settle_success(self)
 	settlement_result = settlement.duplicate(true)
+	if bool(settlement.get("requires_salvage_selection", false)):
+		failure_salvage = settlement.duplicate(true)
 	var extracted_pending := int(settlement.get("black_coin_converted", 0))
 	extracted = true
 	run_active = false

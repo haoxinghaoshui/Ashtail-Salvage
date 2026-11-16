@@ -1,0 +1,144 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/z2_overlays/z2_overlays_preview.gd" id="1_script"]
+[ext_resource type="Theme" path="res://scenes/components/z2_overlays/z2_overlay_theme.tres" id="2_theme"]
+[ext_resource type="Texture2D" path="res://assets/z1/event_rooms/shell.png" id="3_shell"]
+[ext_resource type="Texture2D" path="res://assets/z1/event_rooms/e21/wall.png" id="4_wall"]
+[ext_resource type="Texture2D" path="res://assets/z1/event_rooms/e21/floor.png" id="5_floor"]
+[ext_resource type="Texture2D" path="res://assets/z1/event_rooms/e21/station.png" id="6_station"]
+[ext_resource type="Texture2D" path="res://assets/art24/actors/player/up_idle_a.png" id="7_player"]
+[ext_resource type="PackedScene" path="res://scenes/components/z2_overlays/z2_event_dialogue.tscn" id="8_dialogue"]
+[ext_resource type="PackedScene" path="res://scenes/components/z2_overlays/z2_notification_queue.tscn" id="9_queue"]
+
+[node name="Z2OverlaysPreview" type="Control"]
+texture_filter = 1
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme = ExtResource("2_theme")
+script = ExtResource("1_script")
+
+[node name="Backdrop" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+color = Color(0.024, 0.048, 0.052, 1)
+
+[node name="RoomShell" type="TextureRect" parent="."]
+self_modulate = Color(0.77, 0.82, 0.81, 1)
+layout_mode = 1
+anchor_left = 0.077
+anchor_top = 0.06
+anchor_right = 0.923
+anchor_bottom = 0.96
+mouse_filter = 2
+texture = ExtResource("3_shell")
+expand_mode = 1
+
+[node name="WallMap" type="TextureRect" parent="."]
+self_modulate = Color(0.81, 0.79, 0.70, 1)
+layout_mode = 1
+anchor_left = 0.66
+anchor_top = 0.15
+anchor_right = 0.66
+anchor_bottom = 0.15
+offset_left = -94.0
+offset_top = -24.0
+offset_right = 94.0
+offset_bottom = 90.0
+mouse_filter = 2
+texture = ExtResource("4_wall")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Compass" type="TextureRect" parent="."]
+self_modulate = Color(0.55, 0.67, 0.64, 0.9)
+layout_mode = 1
+anchor_left = 0.48
+anchor_top = 0.52
+anchor_right = 0.48
+anchor_bottom = 0.52
+offset_left = -126.0
+offset_top = -116.0
+offset_right = 126.0
+offset_bottom = 102.0
+mouse_filter = 2
+texture = ExtResource("5_floor")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="RadarStation" type="TextureRect" parent="."]
+layout_mode = 1
+anchor_left = 0.48
+anchor_top = 0.37
+anchor_right = 0.48
+anchor_bottom = 0.37
+offset_left = -104.0
+offset_top = -71.0
+offset_right = 104.0
+offset_bottom = 111.0
+mouse_filter = 2
+texture = ExtResource("6_station")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Salvager" type="TextureRect" parent="."]
+layout_mode = 1
+anchor_left = 0.48
+anchor_top = 0.59
+anchor_right = 0.48
+anchor_bottom = 0.59
+offset_left = -52.0
+offset_top = -50.0
+offset_right = 52.0
+offset_bottom = 54.0
+mouse_filter = 2
+texture = ExtResource("7_player")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="PreviewControls" type="VBoxContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 0
+mouse_filter = 2
+
+[node name="FixtureLabel" type="Label" parent="PreviewControls"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.91, 0.79, 0.55, 1)
+text = "情报样例"
+
+[node name="Actions" type="HBoxContainer" parent="PreviewControls"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="TalkButton" type="Button" parent="PreviewControls/Actions"]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "与线报员交谈"
+
+[node name="ReplayNotifications" type="Button" parent="PreviewControls/Actions"]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "播放通知"
+
+[node name="ResetFixture" type="Button" parent="PreviewControls/Actions"]
+unique_name_in_owner = true
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "重置"
+
+[node name="EventDialogue" parent="." instance=ExtResource("8_dialogue")]
+layout_mode = 1
+
+[node name="NotificationQueue" parent="." instance=ExtResource("9_queue")]
+layout_mode = 1

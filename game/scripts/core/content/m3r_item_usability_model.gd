@@ -3,6 +3,7 @@ class_name M3RItemUsabilityModel
 
 const M3ItemCatalogScript := preload("res://scripts/core/content/m3_item_catalog.gd")
 const M7TalentCatalogScript := preload("res://scripts/core/progression/m7_talent_catalog.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
 
 const GROUP_EQUIPMENT := &"equipment"
 const GROUP_CONSUMABLE := &"consumable"
@@ -50,7 +51,8 @@ static func normalize_item(raw_item: Variant) -> Dictionary:
 	result["item_type"] = item_type
 	result["main_type"] = item_type
 	result["weight"] = maxi(0, int(result.get("weight", 0)))
-	result["base_value"] = maxi(0, int(result.get("base_value", result.get("value", 0))))
+	var base_value := int(result.get("base_value", result.get("value", 0)))
+	result["base_value"] = base_value if str(result.get("content_version", "")) == Z2Rules.CONTENT_VERSION else maxi(0, base_value)
 	result["collectible_level"] = int(result.get("collectible_level", 0))
 	result["source"] = str(result.get("source", "warehouse"))
 	result["source_label"] = str(result.get("source_label", result.get("source", "warehouse")))
@@ -216,6 +218,9 @@ static func build_equipment_effects(items: Array) -> Array[Dictionary]:
 	for raw_item in items:
 		var item := normalize_item(raw_item)
 		var effect_kind := str(item.get("effect_kind", ""))
+		var current_z2 := str(item.get("content_version", "")) == Z2Rules.CONTENT_VERSION
+		if current_z2 and effect_kind == "combat_power":
+			effect_kind = "power"
 		var amount := int(item.get("effect_amount", 0))
 		if effect_kind == "" or amount == 0:
 			continue
@@ -227,11 +232,21 @@ static func build_equipment_effects(items: Array) -> Array[Dictionary]:
 			"effect_amount": amount,
 			"source": "warehouse_loadout",
 		})
+		if current_z2:
+			var params: Dictionary = item.get("effect_params", {})
+			for field in ["max_hp", "backpack_capacity"]:
+				var extra := int(params.get(field + "_delta", 0))
+				if extra != 0:
+					var effect: Dictionary = effects.back().duplicate(true)
+					effect["effect_kind"] = field
+					effect["effect_amount"] = extra
+					effects.append(effect)
 	return effects
 
 
 static func build_profile_interfaces(meta_summary: Dictionary = {}) -> Dictionary:
-	var profile_level := maxi(1, int(meta_summary.get("profile_level", 1)))
+	var current_z2 := Z2Rules.applies_to(meta_summary)
+	var profile_level := maxi(0 if current_z2 else 1, int(meta_summary.get("profile_level", 1)))
 	var permit_level := maxi(1, int(meta_summary.get("permit_level", 1)))
 	var protocol_difficulty := maxi(1, int(meta_summary.get("protocol_difficulty", 5)))
 	var talents := M7TalentCatalogScript.projection(meta_summary)
@@ -241,9 +256,18 @@ static func build_profile_interfaces(meta_summary: Dictionary = {}) -> Dictionar
 	var pressure_reduce := 0
 	var search_reward_bonus := 0
 	var scan_hint_bonus := 0
+	var max_hp := 100
+	var equipment_capacity := BASE_EQUIPMENT_CAPACITY
+	var consumable_weight_reduce := 0
 	var active_talents := M7TalentCatalogScript.active_effects(meta_summary)
 	for talent in active_talents:
 		match str(talent.get("effect_kind", "")):
+			"max_hp":
+				max_hp += int(talent.get("effect_amount", 0))
+			"equipment_capacity":
+				equipment_capacity += int(talent.get("effect_amount", 0))
+			"consumable_weight_reduce":
+				consumable_weight_reduce += int(talent.get("effect_amount", 0))
 			"backpack_capacity":
 				backpack_capacity += int(talent.get("effect_amount", 0))
 			"salvage_capacity":
@@ -258,6 +282,11 @@ static func build_profile_interfaces(meta_summary: Dictionary = {}) -> Dictionar
 				scan_hint_bonus += int(talent.get("effect_amount", 0))
 	return {
 		"profile_id": str(meta_summary.get("profile_id", "default")),
+		"ruleset_id": str(meta_summary.get("ruleset_id", "")),
+		"z2_progression_version": int(meta_summary.get("z2_progression_version", 0)),
+		"flag_unlocked": current_z2 and meta_summary.get("talent_flags", []).has("z2_talent_01"),
+		"max_hp": max_hp,
+		"consumable_weight_reduce": consumable_weight_reduce,
 		"profile_level": profile_level,
 		"profile_exp": int(meta_summary.get("profile_exp", 0)),
 		"permit_level": permit_level,
@@ -265,7 +294,7 @@ static func build_profile_interfaces(meta_summary: Dictionary = {}) -> Dictionar
 		"talent_directions": talents,
 		"active_talent_effects": active_talents,
 		"backpack_capacity": backpack_capacity,
-		"equipment_capacity": BASE_EQUIPMENT_CAPACITY,
+		"equipment_capacity": equipment_capacity,
 		"failure_salvage_capacity": failure_salvage_capacity,
 		"mine_dmg_reduce": mine_dmg_reduce,
 		"protocol_pressure_reduce": pressure_reduce,
@@ -329,6 +358,7 @@ static func runtime_config_patch(run_start_config: Dictionary = {}) -> Dictionar
 		"equipment_capacity": int(run_start_config.get("equipment_capacity", BASE_EQUIPMENT_CAPACITY)),
 		"equipment_used": int(run_start_config.get("equipment_used", 0)),
 		"max_hp": int(run_start_config.get("max_hp", 100)),
+		"power": int(run_start_config.get("power", RunBalanceCatalog.DEFAULT_POWER)),
 		"failure_salvage_capacity": int(run_start_config.get("failure_salvage_capacity", BASE_FAILURE_SALVAGE_CAPACITY)),
 		"profile_fields": _dictionary_from(run_start_config.get("profile_fields", {})),
 		"profile_level": int(run_start_config.get("profile_level", 1)),

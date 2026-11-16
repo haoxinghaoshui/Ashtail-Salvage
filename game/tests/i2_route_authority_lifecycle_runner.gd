@@ -199,9 +199,10 @@ func _expect_production_run_scene_admission_wiring(failures: Array[String]) -> v
 		return
 	var context: Variant = run_scene.get("run_context")
 	_expect(context != null and not bool(context.run_active), "production route integration did not start inactive", failures)
+	_expect(bool(preload("res://tests/z2_legacy_main_fixture.gd").qualify(run_scene).get("ok", false)), "production route fixture did not earn teaching qualification", failures)
 	run_scene.call("_start_run_from_route", NavigationIntentScript.make_run(
 		&"i2_route_integration",
-		{"route_mode": &"demo_run", "entry_id": &"i2_route_integration", "uses_existing_route": true}
+		{"route_mode": &"standard_run", "entry_id": &"i2_route_integration", "uses_existing_route": true, "run_start_config": preload("res://tests/z2_legacy_main_fixture.gd").config()}
 	))
 	await _frames(3)
 	var admission: Dictionary = run_scene.get("last_combat_texture_preflight_report")

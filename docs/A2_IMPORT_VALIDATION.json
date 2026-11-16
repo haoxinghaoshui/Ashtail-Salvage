@@ -1,0 +1,63 @@
+{
+  "status": "PASS",
+  "source_commit": "960306b566a8feeb6f8e24a9a75c2df87af32605",
+  "target_game_tree": "6e1a6bc4ee969d25f579c56a224c589d94d3fd27",
+  "source_full_pass": true,
+  "compressed_pack_verified": true,
+  "main_new_pass": true,
+  "main_restore_pass": true,
+  "source_inventory_unchanged": true,
+  "current_ui_review_pass": true,
+  "t16_supplement_pass": true,
+  "research_result_sha256": "3da7164cbdd9e9a1ef6692076d94be0d6474549b3f4168e971eab6f28608c37b",
+  "observation_result_sha256": "b4a8ffcc2c785834ffba7bdce51f84779b1823fe6964a4dcf190b3e5af24641d",
+  "observed_run_rows": 130,
+  "pack_path": "D:\\AGAME2\\_worktrees\\z2-system-integration\\.tmp\\ashtail-a2-delivery-960306b-r2\\Ashtail-Salvage-A2.pck",
+  "pack_sha256": "299f8ba5ce0df3b7397bef6405dcf9da1cc3cd53d6e77c9f707f7729b57604a6",
+  "pack_bytes": 80794476,
+  "pack_identity": {
+    "content_hash": "05aa08d5835587eda620ae96076e7ad7fc494f6fc7b98c6d6285accf7650d5bc",
+    "definitions": 229,
+    "events": 22,
+    "goals": 50,
+    "items": 82,
+    "ok": true,
+    "raw_source_available": false,
+    "rule_sources": 82,
+    "source_fingerprint": "28ebf01e7c696890d23c567860adc84dcf4f97a1619883ad665f9c030ad639af",
+    "talents": 39
+  },
+  "full_report_sha256": "e59d4ba692918c87ed0bdd4d5e54a3bfb7d1872e7d0569443de3e75ca7134afc",
+  "ui_review_sha256": "296e096cdf48cd3281d244a391f1c1f9fbceba99b96694fb9643fcdfeb048558",
+  "build_job": "D:\\AGAME2\\_worktrees\\z2-system-integration\\.tmp\\a2-target-build-960306b\\20261116-192040-ff601da0",
+  "build_log_sha256": "e3c5f0bc6094493241e21e4dce4f9fdfc092fed68186b3db8d53788520bf0c39",
+  "target_project_sha256": "ef4d21291be37c2ef697bcf84e248c454aaa638fb437259edcfac4d0e777b960",
+  "target_input_files_verified": 1729,
+  "target_input_manifest_sha256": "bad278d76b6b498df49f5b3c7b021c02637b240f069651b0b3a15e1b90f39924",
+  "session_run_id": "classic_7x7_simple_3145_1_fedec7414b4b7219fe332a06c81a50b1",
+  "main_checks": [
+    10,
+    9
+  ],
+  "cleanup_diagnostic_runner_ids": [
+    "G37_COMMAND_SEQUENCE",
+    "G39_NAVIGATION_BOUNDARY",
+    "M2_LUA_UE_EFFECT_FIRST_LOOP",
+    "M3_MINIMUM_ITEM_DROP_LOOP",
+    "M3H_ITEM_LOOP_HARDENING",
+    "M3R_ITEM_USABILITY_COMPLETION",
+    "M5_ITEM_DROP_LOOP_FULL_CONTENT",
+    "M6_REAL_ASSET_DEPLOY_SETTLEMENT_LOOP",
+    "I1_RUNTIME_SAFETY",
+    "I1_TERMINAL_AUTHORITY",
+    "I1_COMMAND_MODULE",
+    "I1_PROJECT_METADATA",
+    "I2_TERMINAL_RESULT_AUTHORITY",
+    "I3_COMBAT_SPECIAL_RESULT_RUNTIME"
+  ],
+  "limits": [
+    "Windows demo; physical controllers, mobile, audio listening and long-term balancing not accepted.",
+    "Synchronous durable saving has measured spikes; CPU checks are not a universal60FPS claim.",
+    "Later opening-effect batches reserve purchased eligibility only, per approved scope."
+  ]
+}

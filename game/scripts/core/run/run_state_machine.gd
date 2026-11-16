@@ -36,7 +36,9 @@ func start_run(context: RunContext, config: Dictionary) -> Dictionary:
 		return _blocked(&"not_ready", "not_ready")
 	if context.phase not in STARTABLE_PHASES:
 		return _blocked_transition(&"active_run_exists", "active_run_exists", context.phase, PHASE_RUNNING, TRANSITION_START)
-	context._initialize_run(config)
+	var initialized := context._initialize_run(config)
+	if not initialized.get("ok", false):
+		return initialized
 	var transition_result := _write_phase(context, PHASE_RUNNING, TRANSITION_START, STARTABLE_PHASES)
 	if not bool(transition_result.get("ok", false)):
 		return transition_result
@@ -48,7 +50,9 @@ func restart_run(context: RunContext, config: Dictionary) -> Dictionary:
 		return _blocked(&"not_ready", "not_ready")
 	if context.phase not in ACTIVE_PHASES:
 		return _blocked_transition(&"restart_not_active", "restart_not_active", context.phase, PHASE_RUNNING, TRANSITION_RESTART)
-	context._initialize_run(config)
+	var initialized := context._initialize_run(config)
+	if not initialized.get("ok", false):
+		return initialized
 	var transition_result := _write_phase(context, PHASE_RUNNING, TRANSITION_RESTART, ACTIVE_PHASES, true)
 	if not bool(transition_result.get("ok", false)):
 		return transition_result
@@ -125,6 +129,9 @@ func confirm_extract(context: RunContext, can_extract: bool) -> Dictionary:
 	if not bool(transition_result.get("ok", false)):
 		return transition_result
 	context._apply_extract()
+	if bool(context.settlement_result.get("requires_salvage_selection", false)) and not bool(context.settlement_result.get("finalized", false)):
+		_write_phase(context, PHASE_FAILURE_SALVAGE, TRANSITION_CONFIRM_EXTRACT, [PHASE_EXTRACTED])
+		return {"ok": true, "status": &"retention_selection_pending", "transition": TRANSITION_CONFIRM_EXTRACT, "result_snapshot": context.result_snapshot.duplicate(true)}
 	context.last_message = "Extraction complete."
 	return {"ok": true, "status": &"extracted", "transition": TRANSITION_CONFIRM_EXTRACT, "result_snapshot": context.result_snapshot.duplicate(true)}
 
@@ -167,12 +174,13 @@ func fail_run(context: RunContext, reason: String = "forced_failure") -> Diction
 func confirm_failure_salvage(context: RunContext, selected_instance_ids: Array) -> Dictionary:
 	if context == null:
 		return _blocked(&"not_ready", "not_ready")
-	if context.phase != PHASE_FAILURE_SALVAGE or not context.failed:
+	if context.phase != PHASE_FAILURE_SALVAGE or (not context.failed and not context.abandoned and not context.extracted):
 		return _blocked_transition(&"not_awaiting_salvage", "failure_salvage_not_pending", context.phase, PHASE_FAILED, TRANSITION_CONFIRM_FAILURE, "reason")
 	var settlement := context._settle_failure_salvage(selected_instance_ids)
 	if not bool(settlement.get("ok", false)):
 		return settlement
-	var transition_result := _write_phase(context, PHASE_FAILED, TRANSITION_CONFIRM_FAILURE, [PHASE_FAILURE_SALVAGE])
+	var final_phase := PHASE_EXTRACTED if context.extracted else (PHASE_ABANDONED if context.abandoned else PHASE_FAILED)
+	var transition_result := _write_phase(context, final_phase, TRANSITION_CONFIRM_FAILURE, [PHASE_FAILURE_SALVAGE])
 	if not bool(transition_result.get("ok", false)):
 		return transition_result
 	context._finalize_failure_salvage(settlement)
@@ -186,6 +194,10 @@ func abandon_run(context: RunContext, reason: String = "player_abandoned") -> Di
 	if not bool(transition_result.get("ok", false)):
 		return transition_result
 	context._apply_abandon(reason)
+	if bool(context.settlement_result.get("requires_salvage_selection", false)) and not bool(context.settlement_result.get("finalized", false)):
+		context.failure_salvage = context.settlement_result.duplicate(true)
+		_write_phase(context, PHASE_FAILURE_SALVAGE, TRANSITION_ABANDON, [PHASE_ABANDONED])
+		return {"ok": true, "status": &"failure_salvage_pending", "transition": TRANSITION_ABANDON, "reason": reason, "result_snapshot": context.result_snapshot.duplicate(true)}
 	return {"ok": true, "status": &"abandoned", "transition": TRANSITION_ABANDON, "reason": reason, "result_snapshot": context.result_snapshot.duplicate(true)}
 
 
@@ -196,6 +208,9 @@ func complete_extract(context: RunContext) -> Dictionary:
 	if not bool(transition_result.get("ok", false)):
 		return transition_result
 	context._apply_extract()
+	if bool(context.settlement_result.get("requires_salvage_selection", false)) and not bool(context.settlement_result.get("finalized", false)):
+		_write_phase(context, PHASE_FAILURE_SALVAGE, TRANSITION_CONFIRM_EXTRACT, [PHASE_EXTRACTED])
+		return {"ok": true, "status": &"retention_selection_pending", "transition": TRANSITION_CONFIRM_EXTRACT, "result_snapshot": context.result_snapshot.duplicate(true)}
 	context.last_message = "Extraction complete."
 	return {"ok": true, "status": &"extracted", "transition": TRANSITION_CONFIRM_EXTRACT, "result_snapshot": context.result_snapshot.duplicate(true)}
 
@@ -207,6 +222,9 @@ func force_extract(context: RunContext) -> Dictionary:
 	if not bool(transition_result.get("ok", false)):
 		return transition_result
 	context._apply_extract()
+	if bool(context.settlement_result.get("requires_salvage_selection", false)) and not bool(context.settlement_result.get("finalized", false)):
+		_write_phase(context, PHASE_FAILURE_SALVAGE, TRANSITION_CONFIRM_EXTRACT, [PHASE_EXTRACTED])
+		return {"ok": true, "status": &"retention_selection_pending", "transition": TRANSITION_CONFIRM_EXTRACT, "result_snapshot": context.result_snapshot.duplicate(true)}
 	context.last_message = "Debug forced extraction through RunStateMachine."
 	return {"ok": true, "status": &"debug_forced_extract", "transition": TRANSITION_CONFIRM_EXTRACT, "result_snapshot": context.result_snapshot.duplicate(true)}
 

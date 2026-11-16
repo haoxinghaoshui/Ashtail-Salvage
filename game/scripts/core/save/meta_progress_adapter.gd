@@ -7,6 +7,8 @@ const RunStateSnapshotScript := preload("res://scripts/core/run/run_state_snapsh
 const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
 const M7ProgressionServiceScript := preload("res://scripts/core/progression/m7_progression_service.gd")
 const M7TalentCatalogScript := preload("res://scripts/core/progression/m7_talent_catalog.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
+const Z2OpeningOfferScript := preload("res://scripts/core/progression/z2_opening_offer.gd")
 
 const META_ACTION_RECEIPTS_KEY := "meta_action_receipts"
 const META_ACTION_RECEIPT_SCHEMA_VERSION := 1
@@ -131,11 +133,94 @@ func initialize_z2_profile(content_version: String = "z2") -> Dictionary:
 		"ruleset_id": "z2", "profile_id": active_profile_id, "content_version": content_version,
 		"admission": {}, "run_receipts": {}, "checkpoint_cleanup_run_id": "",
 	}, true)
+	if content_version == Z2Rules.CONTENT_VERSION:
+		data.merge(Z2Rules.default_fields(), true)
+		M7ProgressionServiceScript.sync_z2_quests(data)
 	if not save():
 		data = previous
 		return {"ok": false, "status": "save_failed", "error": last_error}
 	last_load_status = "loaded"
 	return {"ok": true, "status": "initialized", "profile_id": active_profile_id}
+
+
+func reset_as_current_z2_profile() -> Dictionary:
+	# Explicitly authorized reset for old game profiles; never reinterpret their old balances.
+	if not _ensure_writable("reset_z2_profile") or _meta_action_transaction_active:
+		return {"ok": false, "status": "write_blocked"}
+	if Z2Rules.applies_to(data):
+		return {"ok": true, "status": "already_current"}
+	var previous := data.duplicate(true)
+	data = save_adapter.default_meta_progress()
+	data.merge({"ruleset_id": "z2", "profile_id": active_profile_id, "content_version": Z2Rules.CONTENT_VERSION,
+		"admission": {}, "run_receipts": {}, "checkpoint_cleanup_run_id": ""}, true)
+	data.merge(Z2Rules.default_fields(), true)
+	M7ProgressionServiceScript.sync_z2_quests(data)
+	data["reset_checkpoint_pending"] = true
+	if not save():
+		data = previous
+		return {"ok": false, "status": "save_failed", "error": last_error}
+	last_load_status = "loaded"
+	return {"ok": true, "status": "reset_as_new_profile"}
+
+
+func begin_tutorial_training() -> Dictionary:
+	if not _ensure_writable("begin_tutorial_training") or not Z2Rules.applies_to(data):
+		return {"ok": false, "status": "current_profile_required"}
+	if data.get("tutorial_completed", false) or data.get("tutorial_purchase_available", false):
+		return {"ok": true, "status": "already_started"}
+	var previous := data.duplicate(true)
+	data["tutorial_purchase_available"] = true
+	if not save():
+		data = previous
+		return {"ok": false, "status": "save_failed", "error": last_error}
+	return {"ok": true, "status": "teaching_purchase_available"}
+
+
+func purchase_tutorial_flag() -> Dictionary:
+	if not Z2Rules.applies_to(data) or data.get("tutorial_completed", false):
+		return {"ok": false, "status": "teaching_profile_required"}
+	var previous := data.duplicate(true)
+	data["tutorial_purchase_available"] = true
+	var result := unlock_talent("z2_talent_01")
+	if not result.get("ok", false):
+		data = previous
+	return result
+
+
+func initial_supply_items() -> Array[Dictionary]:
+	# S4 rows 21/22; user selected the two cheapest tier-1 supplies on 2026-11-16.
+	var items: Array[Dictionary] = []
+	for item_id in ["con_ration", "con_tape_roll"]:
+		var item := Z2ItemCatalog.definition(item_id)
+		item["quantity"] = 1
+		items.append(item)
+	return items
+
+
+func claim_initial_supplies() -> Dictionary:
+	if not _ensure_writable("claim_initial_supplies") or not Z2Rules.applies_to(data):
+		return {"ok": false, "status": "current_profile_required"}
+	if not data.get("tutorial_completed", false) or int(data.get("profile_level", 0)) < 1:
+		return {"ok": false, "status": "tutorial_required"}
+	if not data.get("admission", {}).is_empty():
+		return {"ok": false, "status": "active_run_locked"}
+	if not data.get("initial_supply_receipt", {}).is_empty():
+		return {"ok": true, "status": "already_claimed", "duplicate": true}
+	var previous := data.duplicate(true)
+	var instance_ids: Array[String] = []
+	for definition in initial_supply_items():
+		var item := definition.duplicate(true)
+		item["instance_id"] = "z2_initial:%s:%s" % [active_profile_id, item.item_id]
+		item["source"] = "z2_initial_supplies"
+		item["source_label"] = "首次申领"
+		item["location_state"] = "warehouse"
+		(data.warehouse_items as Array).append(item)
+		instance_ids.append(item.instance_id)
+	data["initial_supply_receipt"] = {"id": "z2_initial_supplies", "instance_ids": instance_ids}
+	if not save():
+		data = previous
+		return {"ok": false, "status": "save_failed", "error": last_error, "rolled_back": true}
+	return {"ok": true, "status": "claimed", "instance_ids": instance_ids}
 
 
 func reserved_instance_ids() -> Array:
@@ -147,12 +232,51 @@ func commit_admission(admission: Dictionary) -> Dictionary:
 	if not _ensure_writable("commit_admission") or data.get("ruleset_id", "") != "z2" or _meta_action_transaction_active:
 		return {"ok": false, "status": "write_blocked", "error": last_error}
 	var previous := data.duplicate(true)
+	var prepared := prepare_run_admission(admission)
+	if not prepared.get("ok", false):
+		return prepared
+	data = prepared.meta
 	data["admission"] = admission.duplicate(true)
 	data["checkpoint_cleanup_run_id"] = ""
 	if not save():
 		data = previous
 		return {"ok": false, "status": "save_failed", "error": last_error}
-	return {"ok": true, "status": str(admission.get("phase", ""))}
+	return {"ok": true, "status": str(admission.get("phase", "")),
+		"departure_sequence": int(prepared.get("departure_sequence", 0)), "z2_fact_sequence_base": int(prepared.get("base", 0))}
+
+
+# Candidate only; commit_admission persists reservation and admission in one write.
+func prepare_run_admission(admission: Dictionary) -> Dictionary:
+	var candidate := data.duplicate(true)
+	if not Z2Rules.applies_to(data):
+		return {"ok": true, "meta": candidate}
+	var run_id := str(admission.get("run_id", ""))
+	var reservations: Dictionary = candidate.get("z2_quest_departures", {})
+	if reservations.has(run_id):
+		var prior: Dictionary = reservations[run_id]
+		if prior.get("initial_snapshot_hash", "") != admission.get("initial_snapshot_hash", ""):
+			return {"ok": false, "status": "quest_departure_receipt_conflict"}
+		return {"ok": true, "meta": candidate, "base": int(prior.base), "departure_sequence": int(prior.departure_sequence)}
+	var unpacked := RunStateSnapshotScript.unpack_checkpoint(admission.get("initial_snapshot", {}).get("state", {}))
+	if not unpacked.get("ok", false):
+		return {"ok": false, "status": "quest_departure_snapshot_missing"}
+	var context := _dictionary_from(unpacked.get("state", {}).get("context", {}).get("data", {}))
+	var start := _dictionary_from(context.get("run_start_config", {}))
+	if start.get("map_config_id", "") == "tutorial_5x5" or context.get("mode", "") == "tutorial":
+		return {"ok": true, "meta": candidate}
+	if run_id.is_empty() or admission.get("phase", "") != "prepared" or not data.get("admission", {}).is_empty():
+		return {"ok": false, "status": "quest_departure_admission_conflict"}
+	var profile := _dictionary_from(start.get("profile_fields", {}))
+	var base := int(data.get("z2_fact_sequence", 0))
+	if not profile.has("z2_fact_sequence_base") or int(profile.z2_fact_sequence_base) != base:
+		return {"ok": false, "status": "quest_departure_sequence_base_missing_or_stale"}
+	if start.has("departure_sequence") and int(start.departure_sequence) != base + 1:
+		return {"ok": false, "status": "quest_departure_sequence_conflict"}
+	reservations[run_id] = {"base": base, "departure_sequence": base + 1, "initial_snapshot_hash": str(admission.get("initial_snapshot_hash", ""))}
+	candidate["z2_quest_departures"] = reservations
+	candidate["z2_fact_sequence"] = base + 1
+	candidate["z2_goals"]["fact_sequence"] = base + 1
+	return {"ok": true, "meta": candidate, "base": base, "departure_sequence": base + 1}
 
 
 func save() -> bool:
@@ -252,7 +376,7 @@ func clear() -> Dictionary:
 
 func apply_settlement(result_snapshot: Dictionary) -> Dictionary:
 	if data.get("ruleset_id", "") == "z2":
-		return _apply_z2_settlement(result_snapshot)
+		return _quest_action_result(_apply_z2_settlement(result_snapshot))
 	return _apply_legacy_settlement(result_snapshot)
 
 
@@ -415,7 +539,8 @@ func _apply_legacy_settlement(result_snapshot: Dictionary) -> Dictionary:
 		data["abandon_count"] = int(data.get("abandon_count", 0)) + 1
 		data["gold"] = int(data.get("gold", 0)) + _settlement_gold(result_snapshot, settlement)
 		var event_delivery := _dictionary_from(settlement.get("event_item_delivery", {}))
-		for item in _array_from(event_delivery.get("delivered", settlement.get("warehouse_items", []))):
+		var delivered: Array = _array_from(settlement.get("warehouse_items", [])) if Z2Rules.applies_to(data) else _array_from(event_delivery.get("delivered", settlement.get("warehouse_items", [])))
+		for item in delivered:
 			_upsert_warehouse_item(warehouse_items, _minimal_item_record(item))
 		data["warehouse_items"] = warehouse_items
 	if is_success or is_failure or is_abandon:
@@ -425,6 +550,9 @@ func _apply_legacy_settlement(result_snapshot: Dictionary) -> Dictionary:
 			history_records.pop_front()
 		data["history_records"] = history_records
 	var m7_progression_delta := M7ProgressionServiceScript.apply_settlement(data, result_snapshot) if is_success or is_failure or is_abandon else {}
+	if Z2Rules.applies_to(data) and m7_progression_delta.has("ok") and not bool(m7_progression_delta.ok):
+		data = previous_data
+		return {"ok": false, "status": "quest_progression_rejected", "reason": str(m7_progression_delta.get("reason", "")), "rolled_back": true}
 	var run_debug_commands: Array = _array_from(result_snapshot.get("debug_commands", []))
 	if not run_debug_commands.is_empty():
 		for debug_entry in run_debug_commands:
@@ -454,6 +582,7 @@ func _apply_legacy_settlement(result_snapshot: Dictionary) -> Dictionary:
 func get_summary() -> Dictionary:
 	if data.is_empty():
 		load_or_create_default()
+	M7ProgressionServiceScript.sync_z2_quests(data)
 	var warehouse_items: Array = _array_from(data.get("warehouse_items", []))
 	var reserved_ids := reserved_instance_ids()
 	var reserved_items: Array = []
@@ -477,7 +606,7 @@ func get_summary() -> Dictionary:
 		"content_version": str(data.get("content_version", "")),
 		"history_records": _array_from(data.get("history_records", [])),
 		"history_record_count": _array_from(data.get("history_records", [])).size(),
-		"profile_level": maxi(1, int(data.get("profile_level", 1))),
+		"profile_level": maxi(0 if Z2Rules.applies_to(data) else 1, int(data.get("profile_level", 1))),
 		"profile_exp": maxi(0, int(data.get("profile_exp", 0))),
 		"permit_level": maxi(1, int(data.get("permit_level", 1))),
 		"protocol_difficulty": maxi(1, int(data.get("protocol_difficulty", 5))),
@@ -509,14 +638,24 @@ func get_summary() -> Dictionary:
 	]:
 		var value: Variant = data.get(key, [])
 		summary[key] = value.duplicate(true) if value is Array or value is Dictionary else value
+	for key in ["z2_progression_version", "talent_earned", "talent_spent"]:
+		summary[key] = int(data.get(key, 0))
+	summary["tutorial_purchase_available"] = bool(data.get("tutorial_purchase_available", false))
+	summary["initial_supply_receipt"] = _dictionary_from(data.get("initial_supply_receipt", {}))
 	summary["map_catalog"] = _m7_map_catalog()
 	summary["shop_catalog"] = _m7_shop_catalog()
 	summary["research_catalog"] = _m7_research_catalog()
 	summary["talent_catalog"] = M7TalentCatalogScript.projection(data)
 	summary["talent_summary"] = M7TalentCatalogScript.summary(data)
-	summary["task_definitions"] = M7ContentCatalogScript.task_definitions() + M7ContentCatalogScript.optional_task_definitions()
-	summary["achievement_definitions"] = M7ContentCatalogScript.achievement_definitions()
+	summary["task_definitions"] = M7ContentCatalogScript.task_definitions(data) + M7ContentCatalogScript.optional_task_definitions(data)
+	summary["achievement_definitions"] = M7ContentCatalogScript.achievement_definitions(data)
 	summary["collection_sets"] = M7ContentCatalogScript.collection_sets()
+	if Z2Rules.applies_to(data):
+		summary["initial_supply_items"] = initial_supply_items()
+		summary["z2_fact_sequence"] = int(data.get("z2_fact_sequence", 0))
+		summary["z2_fact_sequence_base"] = int(data.get("z2_fact_sequence", 0))
+		summary["z2_quest_fact_cursor"] = int(data.get("z2_goals", {}).get("fact_sequence", 0))
+		summary["z2_opening_offer"] = _dictionary_from(data.get("z2_opening_offer", {})).duplicate(true)
 	return summary
 
 
@@ -537,6 +676,8 @@ func purchase_items(
 ) -> Dictionary:
 	if not _ensure_writable("purchase_items"):
 		return {"ok": false, "status": "write_blocked", "reason": write_block_reason}
+	if _z2_quest_lobby_blocked():
+		return {"ok": false, "status": "active_run_lobby_action_blocked"}
 	if quantity < 1 or quantity > MAX_BATCH_PURCHASE_QUANTITY:
 		return {
 			"ok": false,
@@ -547,7 +688,7 @@ func purchase_items(
 			"maximum": MAX_BATCH_PURCHASE_QUANTITY,
 		}
 	var normalized := M7ProgressionServiceScript.normalize_meta(data)
-	var shop := M7ContentCatalogScript.shop_definition(item_id)
+	var shop := M7ContentCatalogScript.shop_definition(item_id, normalized)
 	if shop.is_empty():
 		return {"ok": false, "status": "unknown_shop_item", "item_id": item_id}
 	if not M7ContentCatalogScript.is_shop_unlocked(shop, normalized):
@@ -604,6 +745,11 @@ func purchase_items(
 		if not purchased.has(instance_id):
 			purchased.append(instance_id)
 	data["purchased_instance_ids"] = purchased
+	if Z2Rules.applies_to(data):
+		var fact := M7ProgressionServiceScript.record_z2_lobby_fact(data, "item_purchased", {"items": created_items}, "purchase:" + str(created_ids[0]))
+		if not bool(fact.ok):
+			data = previous_data
+			return fact
 	M7ProgressionServiceScript.refresh_red_dots(data)
 	if not save():
 		data = previous_data
@@ -635,12 +781,14 @@ func purchase_items(
 	if quantity == 1:
 		result["item"] = created_items[0].duplicate(true)
 		result["price"] = unit_price
-	return result
+	return _quest_action_result(result, previous_data)
 
 
 func sell_collectible(instance_id: String, blocked_instance_ids: Array = []) -> Dictionary:
 	if not _ensure_writable("sell_collectible"):
 		return {"ok": false, "status": "write_blocked", "reason": write_block_reason}
+	if _z2_quest_lobby_blocked():
+		return {"ok": false, "status": "active_run_lobby_action_blocked"}
 	if blocked_instance_ids.has(instance_id) or reserved_instance_ids().has(instance_id):
 		return {"ok": false, "status": "configured_item_blocked", "instance_id": instance_id}
 	var items: Array = _array_from(data.get("warehouse_items", []))
@@ -661,14 +809,21 @@ func sell_collectible(instance_id: String, blocked_instance_ids: Array = []) -> 
 	items.remove_at(index)
 	data["warehouse_items"] = items
 	data["gold"] = int(data.get("gold", 0)) + value
+	if Z2Rules.applies_to(data):
+		var fact := M7ProgressionServiceScript.record_z2_lobby_fact(data, "item_sold", {"items": [item]}, "sale:" + instance_id)
+		if not bool(fact.ok):
+			data = previous_data
+			return fact
 	M7ProgressionServiceScript.refresh_red_dots(data)
 	if not save():
 		data = previous_data
 		return {"ok": false, "status": "save_failed", "instance_id": instance_id, "error": last_error}
-	return {"ok": true, "status": "sold", "instance_id": instance_id, "gold_gained": value, "summary": get_summary()}
+	return _quest_action_result({"ok": true, "status": "sold", "instance_id": instance_id, "gold_gained": value, "summary": get_summary()}, previous_data)
 
 
 func sell_collectibles_batch(instance_ids: Array, blocked_instance_ids: Array = []) -> Dictionary:
+	if _z2_quest_lobby_blocked():
+		return {"ok": false, "status": "active_run_lobby_action_blocked"}
 	if not _ensure_writable("sell_collectibles_batch"):
 		return {
 			"ok": false,
@@ -752,6 +907,11 @@ func sell_collectibles_batch(instance_ids: Array, blocked_instance_ids: Array = 
 	var gold_before := int(data.get("gold", 0))
 	data["warehouse_items"] = remaining_items
 	data["gold"] = gold_before + total_value
+	if Z2Rules.applies_to(data):
+		var fact := M7ProgressionServiceScript.record_z2_lobby_fact(data, "item_sold", {"items": sale_items}, "sale:" + ",".join(requested_ids))
+		if not bool(fact.ok):
+			data = previous_data
+			return fact
 	M7ProgressionServiceScript.refresh_red_dots(data)
 	if not save():
 		data = previous_data
@@ -766,7 +926,7 @@ func sell_collectibles_batch(instance_ids: Array, blocked_instance_ids: Array = 
 			"error": last_error,
 			"summary": get_summary(),
 		}
-	return {
+	return _quest_action_result({
 		"ok": true,
 		"status": "batch_sold",
 		"atomicity": &"all_or_nothing",
@@ -778,10 +938,12 @@ func sell_collectibles_batch(instance_ids: Array, blocked_instance_ids: Array = 
 		"gold_gained": total_value,
 		"item_results": item_results,
 		"summary": get_summary(),
-	}
+	}, previous_data)
 
 
 func unlock_talent(talent_id: String) -> Dictionary:
+	if _z2_quest_lobby_blocked() and talent_id != "z2_talent_01":
+		return {"ok": false, "status": "active_run_lobby_action_blocked", "talent_id": talent_id}
 	if not _ensure_writable("unlock_talent"):
 		return {"ok": false, "status": "write_blocked", "reason": write_block_reason, "talent_id": talent_id}
 	var previous_data := data.duplicate(true)
@@ -798,10 +960,18 @@ func unlock_talent(talent_id: String) -> Dictionary:
 	var cost := maxi(1, int(evaluation.get("cost", 1)))
 	var flags: Array = _array_from(data.get("talent_flags", []))
 	data["talent_points"] = maxi(0, int(data.get("talent_points", 0)) - cost)
+	if Z2Rules.applies_to(data):
+		data["talent_spent"] = int(data.get("talent_spent", 0)) + cost
 	if not flags.has(talent_id):
 		flags.append(talent_id)
 	data["talent_flags"] = flags
 	M7TalentCatalogScript.sync_progress(data)
+	if Z2Rules.applies_to(data) and talent_id != "z2_talent_01":
+		var fact := M7ProgressionServiceScript.record_z2_lobby_fact(data, "talent_unlocked", {"talent_id": talent_id}, "talent:" + talent_id)
+		if not bool(fact.ok):
+			data = previous_data
+			return fact
+	M7ProgressionServiceScript.sync_z2_quests(data)
 	M7ProgressionServiceScript.refresh_red_dots(data)
 	if not save():
 		data = previous_data
@@ -814,7 +984,7 @@ func unlock_talent(talent_id: String) -> Dictionary:
 			"error": last_error,
 			"summary": get_summary(),
 		}
-	return {
+	return _quest_action_result({
 		"ok": true,
 		"status": "talent_unlocked",
 		"talent_id": talent_id,
@@ -822,19 +992,24 @@ func unlock_talent(talent_id: String) -> Dictionary:
 		"talent_points_remaining": maxi(0, int(data.get("talent_points", 0))),
 		"active_effects": M7TalentCatalogScript.active_effects(data),
 		"summary": get_summary(),
-	}
+	}, previous_data)
 
 
 func complete_research(research_id: String, blocked_instance_ids: Array = []) -> Dictionary:
+	if _z2_quest_lobby_blocked():
+		return {"ok": false, "status": "active_run_lobby_action_blocked", "research_id": research_id}
 	if not _ensure_writable("complete_research"):
 		return {"ok": false, "status": "write_blocked", "reason": write_block_reason}
 	var normalized := M7ProgressionServiceScript.normalize_meta(data)
-	var definition := M7ContentCatalogScript.research_definition(research_id)
+	var definition := M7ContentCatalogScript.research_definition(research_id, normalized)
 	if definition.is_empty():
 		return {"ok": false, "status": "unknown_research", "research_id": research_id}
 	var completed: Array = normalized.get("research_completed_ids", [])
-	if completed.has(research_id):
+	var repeatable := bool(definition.get("repeatable", false))
+	if completed.has(research_id) and not repeatable:
 		return {"ok": true, "status": "duplicate_ignored", "research_id": research_id}
+	if Z2Rules.applies_to(data) and (int(data.get("profile_level", 0)) < 1 or not data.get("tutorial_completed", false)):
+		return {"ok": false, "status": "tutorial_required"}
 	var prerequisite := str(definition.get("prerequisite", ""))
 	if prerequisite != "" and not completed.has(prerequisite):
 		return {"ok": false, "status": "prerequisite_missing", "research_id": research_id, "prerequisite": prerequisite}
@@ -862,7 +1037,17 @@ func complete_research(research_id: String, blocked_instance_ids: Array = []) ->
 	items.remove_at(material_index)
 	data["warehouse_items"] = items
 	data["gold"] = int(data.get("gold", 0)) - gold_cost
-	completed.append(research_id)
+	if not completed.has(research_id):
+		completed.append(research_id)
+	var product: Dictionary = {}
+	if Z2Rules.applies_to(data):
+		product = M7ProgressionServiceScript.add_item_instance(data, str(definition.get("unlock_item_id", "")), "research_craft")
+		if product.is_empty():
+			data = previous_data
+			return {"ok": false, "status": "invalid_research_product"}
+		var counts: Dictionary = data.get("research_craft_counts", {}).duplicate(true)
+		counts[research_id] = int(counts.get(research_id, 0)) + 1
+		data["research_craft_counts"] = counts
 	if research_id == "research_anomaly_structure":
 		for monster_id in ["slime", "slimeling", "bat", "drone"]:
 			_append_codex_discovery(data, "monster:%s" % monster_id)
@@ -870,26 +1055,90 @@ func complete_research(research_id: String, blocked_instance_ids: Array = []) ->
 		_append_codex_discovery(data, "rule:protocol_pressure")
 	if research_id == "research_extraction_signal":
 		_append_codex_discovery(data, "rule:extraction_right")
+	if Z2Rules.applies_to(data):
+		var receipt_id := "research:%s:%s" % [research_id, str(product.get("instance_id", material_instance_id))]
+		var fact := M7ProgressionServiceScript.record_z2_lobby_fact(data, "research_completed", {"research_id": research_id, "product_instance_id": str(product.get("instance_id", ""))}, receipt_id)
+		if not bool(fact.ok):
+			data = previous_data
+			return fact
 	M7ProgressionServiceScript.refresh_map_unlocks(data)
 	M7ProgressionServiceScript.refresh_red_dots(data)
 	if not save():
 		data = previous_data
 		return {"ok": false, "status": "save_failed", "research_id": research_id, "error": last_error}
-	return {"ok": true, "status": "completed", "research_id": research_id, "gold_spent": gold_cost, "material_instance_id": material_instance_id, "summary": get_summary()}
+	return _quest_action_result({"ok": true, "status": "crafted" if repeatable else "completed", "research_id": research_id, "gold_spent": gold_cost, "material_instance_id": material_instance_id, "crafted_item": product, "summary": get_summary()}, previous_data)
 
 
-func claim_goal_reward(goal_kind: String, goal_id: String) -> Dictionary:
+func claim_goal_reward(goal_kind: String, goal_id: String, tier: int = 1) -> Dictionary:
 	if not _ensure_writable("claim_goal_reward"):
-		return {"ok": false, "status": "write_blocked", "reason": write_block_reason}
+		return {"ok": false, "status": "write_blocked", "reason": write_block_reason, "goal_id": goal_id, "tier": tier}
 	var previous_data := data.duplicate(true)
-	var result := M7ProgressionServiceScript.claim_goal_reward(data, goal_kind, goal_id)
-	if not bool(result.get("ok", false)) or str(result.get("status", "")) == "duplicate_ignored":
-		return result
+	var result := M7ProgressionServiceScript.claim_goal_reward(data, goal_kind, goal_id, tier)
+	var identity := {"action": "claim_goal", "goal_kind": goal_kind, "goal_id": goal_id, "tier": tier}
+	result["fingerprint"] = _meta_action_fingerprint(identity)
+	result["request_payload"] = identity
+	if not result.get("ok", false) or result.get("status", "") == "duplicate_ignored":
+		return _quest_action_result(result)
 	if not save():
 		data = previous_data
-		return {"ok": false, "status": "save_failed", "goal_id": goal_id, "error": last_error}
+		result.merge({"ok": false, "status": "save_failed", "reward": {}, "rolled_back": true, "error": last_error}, true)
+		return _quest_action_result(result)
 	result["summary"] = get_summary()
-	return result
+	return _quest_action_result(result, previous_data)
+
+
+func apply_z2_opening_action(action: String, payload: Dictionary) -> Dictionary:
+	if not _ensure_writable("apply_z2_opening_action"):
+		return {"ok": false, "status": "write_blocked", "reason": write_block_reason}
+	if not data.get("admission", {}).is_empty():
+		return {"ok": false, "status": "departure_in_progress"}
+	var previous := data.duplicate(true)
+	var evaluation := Z2OpeningOfferScript.execute(data, action, payload)
+	var response := evaluation.duplicate(true)
+	response.erase("meta")
+	response["status"] = str(evaluation.get("reason", "duplicate_ignored" if evaluation.get("duplicate", false) else "applied"))
+	if not evaluation.get("ok", false) or evaluation.get("duplicate", false):
+		return response
+	data = evaluation.meta
+	# Candidate gold already includes the expense. Do not debit or draw again.
+	if not save():
+		data = previous
+		return {"ok": false, "status": "save_failed", "rolled_back": true, "error": last_error}
+	response["summary"] = get_summary()
+	return response
+
+
+# Called after the ordinary save, or after the outer meta transaction has saved.
+# Candidate receipts remain uncommitted while save() is deferred.
+func _quest_action_result(result: Dictionary, previous: Dictionary = {}) -> Dictionary:
+	if not Z2Rules.applies_to(data):
+		return result
+	var response := result.duplicate(true)
+	var committed := bool(response.get("ok", false)) and not _meta_action_transaction_active
+	var notices: Array = _array_from(response.get("completions", response.get("m7_progression_delta", {}).get("completions", []))).duplicate(true)
+	if not previous.is_empty() and response.get("ok", false):
+		for key in data.get("z2_quest_notices", {}):
+			if not previous.get("z2_quest_notices", {}).has(key):
+				var notice: Dictionary = data.z2_quest_notices[key]
+				if not notices.any(func(entry: Dictionary) -> bool: return entry.goal_id == notice.goal_id and int(entry.tier) == int(notice.tier)):
+					notices.append(notice.duplicate(true))
+	if not response.get("ok", false):
+		notices.clear()
+	var notifications: Array = []
+	for notice: Dictionary in notices:
+		notice["committed"] = committed
+		notifications.append({"receipt": {"ok": committed, "committed": committed, "receipt_id": str(notice.receipt_id)}, "notice": notice.duplicate(true)})
+	response["completions"] = notices
+	response["quest_notifications"] = notifications
+	response["quest_receipt"] = {"ok": committed, "committed": committed,
+		"receipt_id": str(notices[0].receipt_id) if not notices.is_empty() else str(response.get("reward_id", response.get("result_id", "")))}
+	return response
+
+
+func _z2_quest_lobby_blocked() -> bool:
+	# The active run owns base+local event sequences until its finalized settlement.
+	# Lobby writers cannot allocate overlapping sequence IDs during that interval.
+	return Z2Rules.applies_to(data) and not _dictionary_from(data.get("admission", {})).is_empty()
 
 
 func mark_long_term_viewed(view_kind: String) -> Dictionary:
@@ -1009,6 +1258,8 @@ func _m7_map_catalog() -> Array[Dictionary]:
 	for raw_definition in M7ContentCatalogScript.map_definitions():
 		var definition := raw_definition.duplicate(true)
 		var map_id := str(definition.get("id", ""))
+		if Z2Rules.applies_to(data):
+			definition.merge(Z2Rules.map_overrides(map_id), true)
 		definition["unlocked"] = unlocked.has(map_id)
 		definition["lock_reason"] = "" if definition["unlocked"] else " · ".join(M7ProgressionServiceScript.map_unlock_blockers(data, definition))
 		definition["success_count"] = 0 if map_id == "tutorial_5x5" else int(success_counts.get(map_id, 0))
@@ -1021,7 +1272,7 @@ func _m7_map_catalog() -> Array[Dictionary]:
 
 func _m7_shop_catalog() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	for raw_definition in M7ContentCatalogScript.shop_definitions():
+	for raw_definition in M7ContentCatalogScript.shop_definitions(data):
 		var definition := raw_definition.duplicate(true)
 		definition["unlocked"] = M7ContentCatalogScript.is_shop_unlocked(definition, data)
 		definition["affordable"] = int(data.get("gold", 0)) >= int(definition.get("price", 0))
@@ -1033,7 +1284,7 @@ func _m7_research_catalog() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var completed: Array = data.get("research_completed_ids", [])
 	var warehouse_items: Array = data.get("warehouse_items", [])
-	for raw_definition in M7ContentCatalogScript.research_definitions():
+	for raw_definition in M7ContentCatalogScript.research_definitions(data):
 		var definition := raw_definition.duplicate(true)
 		var research_id := str(definition.get("id", ""))
 		var prerequisite := str(definition.get("prerequisite", ""))
@@ -1046,7 +1297,7 @@ func _m7_research_catalog() -> Array[Dictionary]:
 		definition["prerequisite_met"] = prerequisite == "" or completed.has(prerequisite)
 		definition["has_material"] = has_material
 		definition["affordable"] = int(data.get("gold", 0)) >= int(definition.get("gold_cost", 0))
-		definition["can_complete"] = not bool(definition["completed"]) and bool(definition["prerequisite_met"]) and has_material and bool(definition["affordable"])
+		definition["can_complete"] = (not bool(definition["completed"]) or bool(definition.get("repeatable", false))) and bool(definition["prerequisite_met"]) and has_material and bool(definition["affordable"])
 		result.append(definition)
 	return result
 
@@ -1090,6 +1341,13 @@ func _apply_tutorial_settlement(result_snapshot: Dictionary, result_id: String) 
 		return last_commit.duplicate(true)
 	var previous_data := data.duplicate(true)
 	data["tutorial_completed"] = true
+	if Z2Rules.applies_to(data):
+		if not data.get("talent_flags", []).has("z2_talent_01"):
+			data = previous_data
+			return {"ok": false, "status": "teaching_purchase_required"}
+		data["profile_level"] = 1
+		data["tutorial_purchase_available"] = false
+		data["tutorial_completion_receipt"] = {"result_id": result_id}
 	var new_unlocks := M7ProgressionServiceScript.refresh_map_unlocks(data)
 	var saved := save()
 	if not saved:
@@ -1165,6 +1423,14 @@ func _minimal_item_record(item: Variant) -> Dictionary:
 	var source := _dictionary_from(item)
 	if source.is_empty():
 		return {}
+	if str(source.get("content_version", "")) == Z2Rules.CONTENT_VERSION:
+		# Z2 instances freeze the catalog values and instance counters. The legacy
+		# projection omits those fields and would silently restore older effects.
+		var frozen := _dictionary_from(_json_safe(source))
+		frozen["location_state"] = "warehouse"
+		if frozen.has("base_weight"):
+			frozen["weight"] = int(frozen.base_weight)
+		return frozen
 	return {
 		"instance_id": str(source.get("instance_id", source.get("item_id", "item"))),
 		"item_id": str(source.get("item_id", source.get("id", "item"))),
@@ -1354,7 +1620,7 @@ func _meta_action_transaction_result(
 ) -> Dictionary:
 	return {
 		"idempotency_status": idempotency_status,
-		"adapter_result": adapter_result.duplicate(true),
+		"adapter_result": _quest_action_result(adapter_result) if idempotency_status in [&"executed", &"duplicate"] else adapter_result.duplicate(true),
 	}
 
 

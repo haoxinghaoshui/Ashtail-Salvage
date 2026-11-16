@@ -167,6 +167,8 @@ func _exercise_abandon_branch() -> void:
 	_require(StringName(result_snapshot.get("outcome", &"")) == &"Abandoned", "abandon branch settled with the wrong outcome")
 	_require(StringName(result_snapshot.get("terminal_reason_code", &"")) == &"player_pause_exit_current_run", "abandon result did not explain the player-initiated reason")
 	await _checkpoint("abandon_04_result", "abandon reason and consequences visible")
+	_require(bool(result_panel.call("requires_salvage_confirmation")), "Z2 abandon skipped its explicit retention decision")
+	await _confirm_terminal_selection_via_input(result_panel, "abandon")
 	var return_main := result_panel.get("return_main_button") as Button
 	_require(return_main != null and return_main.visible and not return_main.disabled, "committed abandon result did not expose return to main")
 	await _click_control(return_main, "abandon.return_main")

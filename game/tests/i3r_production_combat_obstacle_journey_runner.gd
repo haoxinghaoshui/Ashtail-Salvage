@@ -37,10 +37,7 @@ func _run() -> void:
 		_finish()
 		return
 
-	var adapter = run_scene.get("runtime_controller").get("meta_progress_adapter")
-	adapter.data["tutorial_completed"] = true
-	adapter.data["unlocked_map_ids"] = ["tutorial_5x5", "classic_7x7_simple"]
-	_require(adapter.save(), "post-tutorial combat fixture did not save")
+	_require(bool(preload("res://tests/z2_legacy_main_fixture.gd").qualify(run_scene).get("ok", false)), "post-tutorial combat fixture did not earn and save qualification")
 	await _tap_key(KEY_ENTER)
 	_require(await _wait_screen(&"deploy_shell", 6.0), "real Enter input did not reach the production deploy page")
 	var deploy_page := _deploy_page()

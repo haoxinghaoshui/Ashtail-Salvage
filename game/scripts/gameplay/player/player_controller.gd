@@ -21,6 +21,7 @@ const PLAYER_ART_GROUND_OFFSET := Vector2(0, -37)
 const Art24MotionSettingsScript := preload("res://scripts/presentation/art24/art24_motion_settings.gd")
 const RuntimeAnimationCatalog := preload("res://scripts/presentation/art24/art24_runtime_animation_catalog.gd")
 const TextureCache := preload("res://scripts/presentation/runtime_texture_cache.gd")
+const Z2Talents := preload("res://scripts/core/progression/z2_talent_runtime.gd")
 const CONTACT_SHADOW := preload("res://assets/ui/art21/main_menu/scene/character/shadow.png")
 
 var input_enabled := true
@@ -31,6 +32,7 @@ var animation_set_id: StringName = RuntimeAnimationCatalog.DEFAULT_PLAYER_ANIMAT
 var animation_set: Dictionary = {}
 var local_pos := Vector2(0.30, 0.5)
 var local_velocity := Vector2.ZERO
+var local_move_speed_multiplier := 1.0
 var facing_vector := Vector2.RIGHT
 var visual_state: StringName = &"idle"
 var logical_obstacles: Array[Rect2] = []
@@ -45,6 +47,13 @@ var last_texture_path := ""
 var pending_visual_state: StringName = &""
 var transient_state_remaining := 0.0
 var authoritative_combat_facing_locked := false
+
+
+func set_talent_runtime_profile(profile: Dictionary) -> void:
+	local_move_speed_multiplier = (
+		Z2Talents.speed_multiplier(profile, "movement_speed_percent")
+		if Z2Talents.valid_profile(profile) else 1.0
+	)
 
 
 func set_input_enabled(enabled: bool) -> void:
@@ -310,7 +319,7 @@ func move_local(move_vector: Vector2, delta: float) -> Dictionary:
 	var direction := move_vector.limit_length(1.0)
 	if direction.length_squared() > 0.0001:
 		_set_facing_from_vector(direction)
-	var target_velocity := direction * LOCAL_MOVE_SPEED
+	var target_velocity := direction * LOCAL_MOVE_SPEED * local_move_speed_multiplier
 	var acceleration := LOCAL_ACCELERATION if direction.length_squared() > 0.0001 else LOCAL_DECELERATION
 	var integration := _integrate_velocity(local_velocity, target_velocity, acceleration, maxf(0.0, delta))
 	local_velocity = integration.get("velocity", Vector2.ZERO)

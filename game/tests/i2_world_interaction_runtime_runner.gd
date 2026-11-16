@@ -227,7 +227,8 @@ func _check_production_run_scene() -> void:
 	if run_scene == null:
 		main.free()
 		return
-	run_scene.call("_start_standard_from_ui")
+	_check(bool(preload("res://tests/z2_legacy_main_fixture.gd").start(run_scene).get("ok", false)), "Production Chest fixture did not earn and admit ordinary exploration")
+	run_scene.call("_show_run_screen")
 	await _frames(10)
 	run_scene.call("_debug_teleport_to_room_type", &"Chest")
 	await _frames(8)
@@ -251,7 +252,12 @@ func _check_production_run_scene() -> void:
 	if run_scene != null:
 		run_scene.call("_handle_interact_pressed")
 	_check(bus.command_sequence == command_before + 1, "Explicit production Chest input did not submit search exactly once")
-	_check(context.searched_cells.has(context.cell_key(context.get_current_pos())), "Production Chest search waited for animation before committing")
+	_check(not context.searched_cells.has(context.cell_key(context.get_current_pos())), "Z2 Chest search committed before its timer completed")
+	for _tick in range(120):
+		if context.searched_cells.has(context.cell_key(context.get_current_pos())):
+			break
+		await create_timer(0.05).timeout
+	_check(context.searched_cells.has(context.cell_key(context.get_current_pos())), "Production Chest timer did not commit its search")
 	var floor_after_open: Array = context.asset_ledger.get_room_floor_items(context.get_current_pos())
 	_check(not floor_after_open.is_empty(), "Production Chest search produced no ledger contents")
 	_check(room_view.context_popup.visible and room_view.context_popup.context_items.size() == floor_after_open.size(), "First successful Chest input did not immediately reveal exact contents")

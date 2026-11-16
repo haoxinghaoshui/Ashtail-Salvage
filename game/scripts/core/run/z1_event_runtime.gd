@@ -6,6 +6,7 @@ const ItemModel := preload("res://scripts/core/content/m3r_item_usability_model.
 const MetaCatalog := preload("res://scripts/core/content/m7_content_catalog.gd")
 const RunContent := preload("res://scripts/core/run/run_content_catalog.gd")
 const SupplyRules := preload("res://scripts/core/run/z1_supply_rule_service.gd")
+const Z2Events := preload("res://scripts/core/run/z2_event_runtime.gd")
 const SEAL_ID := "con_salvage_seal"
 const SAMPLE_ID := "sp_inspection_calibration_plate"
 const TRANSIT_SEAL_ID := "sp_transit_lead_seal"
@@ -17,6 +18,8 @@ const HAND_NAMES := {&"rock": "石头", &"paper": "布", &"scissors": "剪刀"}
 
 
 static func room_state(context: RunContext, pos: Vector2i, event_id: StringName, persist: bool = false) -> Dictionary:
+	if Z2Events.applies_to(context):
+		return Z2Events.public_state(context, pos, str(event_id))
 	var key := context.cell_key(pos)
 	var state: Dictionary = context.z1_event_rooms.get(key, {"event_type": event_id})
 	state["event_type"] = event_id
@@ -31,6 +34,8 @@ static func room_state(context: RunContext, pos: Vector2i, event_id: StringName,
 
 
 static func public_state(context: RunContext, pos: Vector2i, event_id: StringName) -> Dictionary:
+	if Z2Events.applies_to(context):
+		return Z2Events.public_state(context, pos, str(event_id))
 	var state := room_state(context, pos, event_id)
 	var result := Catalog.definition(event_id)
 	result["completed"] = bool(state.get("completed", false)) and Catalog.number(event_id) != 25
@@ -59,6 +64,8 @@ static func public_state(context: RunContext, pos: Vector2i, event_id: StringNam
 
 
 static func options(context: RunContext, pos: Vector2i, event_id: StringName) -> Array[Dictionary]:
+	if Z2Events.applies_to(context):
+		return Z2Events.public_state(context, pos, str(event_id)).get("options", [])
 	var state := room_state(context, pos, event_id)
 	var choices: Array[Dictionary] = []
 	var number := Catalog.number(event_id)
@@ -155,6 +162,8 @@ static func options(context: RunContext, pos: Vector2i, event_id: StringName) ->
 
 
 static func execute(context: RunContext, pos: Vector2i, event_id: StringName, option_id: StringName, payload: Dictionary = {}, fail_authority = null) -> Dictionary:
+	if Z2Events.applies_to(context):
+		return Z2Events.choose(context, pos, str(event_id), str(option_id), payload, Z2Events.hooks_for(fail_authority, context, pos, str(event_id)))
 	var state := room_state(context, pos, event_id, true)
 	var number := Catalog.number(event_id)
 	if option_id == &"leave":
@@ -397,6 +406,9 @@ static func _execute_work(context: RunContext, pos: Vector2i, event_id: StringNa
 
 
 static func record_entry(context: RunContext, pos: Vector2i) -> void:
+	if Z2Events.applies_to(context):
+		# Z2 records real visited rooms through the parent's post-entry hook.
+		return
 	var work: Dictionary = context.z1_event_flags.get("work_order", {})
 	if work.is_empty() or bool(work.get("claimed", false)):
 		return
@@ -440,12 +452,16 @@ static func _execute_shop(context: RunContext, pos: Vector2i, event_id: StringNa
 
 
 static func cage_state(context: RunContext, pos: Vector2i) -> Dictionary:
+	if Z2Events.applies_to(context):
+		return Z2Events.cage_state(context, pos)
 	if context == null:
 		return {}
 	return context.z1_event_rooms.get(context.cell_key(pos), {}).get("cage", {}).duplicate(true)
 
 
 static func resolve_cage(context: RunContext, pos: Vector2i, won: bool) -> Dictionary:
+	if Z2Events.applies_to(context):
+		return {"ok": false, "reason": "actual_combat_receipt_required"}
 	if context == null or not context.run_active:
 		return _blocked("run_not_active", "当前没有进行中的回收。")
 	var event_id := &"z1_event_e24"

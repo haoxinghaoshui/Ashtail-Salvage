@@ -54,8 +54,8 @@ func _run() -> void:
 	run_scene.call("_apply_room_entry_result", revisit_exit_notice)
 	_require(StringName(revisit_exit_notice.get("status", &"")) == &"moved" and not revisit_exit_notice.has("message"), "production RunScene repeated the first Exit notice on revisit")
 	bus.command_requested.connect(_on_command_requested)
-	var start_result: Dictionary = bus.dispatch(&"start_demo_run", {"source": "i2_combat_room_experience"})
-	_require(bool(start_result.get("ok", false)), "demo run could not be started")
+	var start_result: Dictionary = preload("res://tests/z2_legacy_main_fixture.gd").start(run_scene)
+	_require(bool(start_result.get("ok", false)), "qualified standard run could not be started")
 	run_scene.call("_show_run_screen")
 
 	var source := Vector2i(1, 1)
@@ -115,11 +115,14 @@ func _run() -> void:
 	_require(_count(&"flee_runtime_combat") == 1, "confirmed flee did not submit exactly one flee command")
 	_require(_count(&"attempt_room_transition") == 1, "confirmed flee did not submit exactly one transition command")
 	_require(context.get_current_pos() == source, "injected transition failure changed the authoritative room")
-	var expected_black := black_before - int(floor(float(black_before) * 0.10))
-	_require(int(context.asset_ledger.get_currency(RunAssetLedger.CURRENCY_BLACK)) == expected_black, "confirmed flee did not apply the existing ten-percent rule exactly once")
+	var expected_black := black_before
+	_require(int(context.asset_ledger.get_currency(RunAssetLedger.CURRENCY_BLACK)) == expected_black, "Z2 confirmed retreat must preserve all carried black coin")
 	_require(in_run_runtime.flee_authorized and not in_run_runtime.has_active_combat(), "failed transition did not preserve paid flee authorization")
 	in_run_runtime.sync_room(player.get_local_position())
 	_require(not in_run_runtime.has_active_combat(), "same-room sync restarted combat after paid flee")
+	_require(str(context.tutorial_popup.get("id", "")) == "flag_entry_confirm", "Z2 flagged transition did not require an explicit risk decision")
+	_require(bool(bus.dispatch(&"cancel_flag_entry", {}).get("ok", false)), "flag-entry cancellation did not release the pending transition decision")
+	_require(context.get_current_pos() == source and in_run_runtime.flee_authorized and not context.has_blocking_tutorial_popup(), "cancelling the flagged transition changed the room or revoked retreat permission")
 	if context.intel_map.is_flagged(target):
 		context.intel_map.toggle_flag(target)
 	run_scene.call("_apply_full_view_models")
@@ -127,7 +130,7 @@ func _run() -> void:
 	_press_button(extract_button)
 	_require(_count(&"flee_runtime_combat") == 1, "mouse retry charged flee a second time")
 	_require(_count(&"attempt_room_transition") == 2, "mouse retry did not submit exactly one additional transition")
-	_require(context.get_current_pos() == target, "mouse retry did not enter the selected adjacent room")
+	_require(context.get_current_pos() == target, "mouse retry did not enter the selected adjacent room: %s" % run_scene.get("last_command_result"))
 	_require(int(context.asset_ledger.get_currency(RunAssetLedger.CURRENCY_BLACK)) == expected_black, "mouse retry charged the flee cost a second time")
 	_require(not in_run_runtime.flee_authorized, "successful authoritative room change retained flee authorization")
 

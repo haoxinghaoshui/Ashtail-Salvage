@@ -4,6 +4,9 @@ class_name G41InRunRuntime
 const CombatSimulationScript := preload("res://scripts/gameplay/combat/g41_combat_simulation.gd")
 const DeterministicRngScript := preload("res://scripts/gameplay/combat/g41_deterministic_rng.gd")
 const MonsterCatalogScript := preload("res://scripts/gameplay/combat/g41_monster_catalog.gd")
+const Z2Talents := preload("res://scripts/core/progression/z2_talent_runtime.gd")
+const Supplies := preload("res://scripts/core/run/z2_supply_runtime.gd")
+const Opening := preload("res://scripts/core/run/z2_opening_runtime.gd")
 
 var runtime_controller
 var context: RunContext
@@ -13,7 +16,15 @@ var current_room_key: String = ""
 var encounter_ordinals: Dictionary = {}
 var recent_domain_events: Array[Dictionary] = []
 var paused: bool = false
-var flee_authorized: bool = false
+var _flee_authorized: bool = false
+var flee_authorized: bool:
+	get:
+		return _flee_authorized
+	set(value):
+		# The parent sets this inside the durable flee action, before capture.
+		if value and not _flee_authorized:
+			_supply_lifecycle("retreat")
+		_flee_authorized = value
 
 
 func export_transaction_state() -> Dictionary:
@@ -32,7 +43,8 @@ func import_transaction_state(state: Dictionary) -> void:
 	encounter_ordinals = state.get("encounter_ordinals", {}).duplicate(true)
 	recent_domain_events.assign(state.get("recent_domain_events", []).duplicate(true))
 	paused = bool(state.get("paused", false))
-	flee_authorized = bool(state.get("flee_authorized", false))
+	# Context already contains the saved statuses; installation is not a retreat.
+	_flee_authorized = bool(state.get("flee_authorized", false))
 	if state.get("simulation") == null:
 		simulation = null
 	else:
@@ -72,6 +84,8 @@ func bind(next_runtime_controller) -> void:
 
 
 func reset() -> void:
+	if _z2_supply_enabled() and bool(Supplies.snapshot(context).state.combat_active):
+		_supply_lifecycle("combat_ended")
 	simulation = null
 	current_room_key = ""
 	encounter_ordinals.clear()
@@ -166,12 +180,17 @@ func _run_fixed_step(stepping: G41CombatSimulation, payload: Dictionary) -> Dict
 
 func _advance_step_time(stepping: G41CombatSimulation, payload: Dictionary) -> Dictionary:
 	if stepping.tick_index == 1:
+		var supply_started := _supply_lifecycle("combat_started")
+		if not bool(supply_started.get("ok", false)):
+			return supply_started
+		payload["durability_required"] = bool(payload["durability_required"]) or bool(supply_started.get("durability_required", false))
 		var started: Dictionary = runtime_controller.advance_simulation_time(0.0, {"kind": "combat_start", "encounter_id": stepping.encounter_id})
 		if not bool(started.get("ok", false)):
 			return started
 		payload["durability_required"] = bool(payload["durability_required"]) or bool(started.get("durability_required", false))
 	var begins_attack := (
 		stepping.attack_queued
+		and stepping.is_player_attack_allowed()
 		and StringName(stepping.player.get("state", &"idle")) in [&"idle", &"move"]
 		and float(stepping.player.get("attack_cooldown", 0.0)) <= stepping.FIXED_STEP + stepping.EPSILON
 	)
@@ -187,6 +206,35 @@ func _advance_step_time(stepping: G41CombatSimulation, payload: Dictionary) -> D
 func _bind_hit_resolver() -> void:
 	if simulation != null:
 		simulation.hit_resolver = Callable(self, "_resolve_combat_hit") if runtime_controller != null else Callable()
+		simulation.attack_allowed_query = Callable(self, "_opening_attack_allowed") if context != null else Callable()
+		var supply_enabled := runtime_controller != null and _z2_supply_enabled()
+		simulation.attack_started_resolver = Callable(self, "_on_actual_attack_started") if supply_enabled else Callable()
+		simulation.attack_power_resolver = Callable(self, "_resolve_attack_power") if supply_enabled else Callable()
+
+
+func _z2_supply_enabled() -> bool:
+	return context != null and str(context.profile_fields.get("ruleset_id", "")) == "z2" and context.profile_fields.get("z2_progression_version") == 1
+
+
+func _supply_lifecycle(kind: String) -> Dictionary:
+	if not _z2_supply_enabled():
+		return {"ok": true, "durability_required": false}
+	var before := Supplies.snapshot(context)
+	var result := Supplies.on_event(context, Supplies.equipped_items(context), {"kind": kind, "actual": true})
+	result["durability_required"] = Supplies.snapshot(context) != before
+	return result
+
+
+func _on_actual_attack_started() -> Dictionary:
+	return _supply_lifecycle("first_attack")
+
+
+func _opening_attack_allowed() -> bool:
+	return bool(Opening.public_state(context).attack_allowed)
+
+
+func _resolve_attack_power(base_power: int) -> int:
+	return Supplies.attack_power(context, base_power)
 
 
 func _resolve_combat_hit(packet: Dictionary) -> Dictionary:
@@ -203,6 +251,8 @@ func _context_shield() -> int:
 func request_attack(requested_facing: Vector2 = Vector2.ZERO) -> Dictionary:
 	if simulation == null or not simulation.active:
 		return {"ok": false, "reason": &"combat_not_active"}
+	if not _opening_attack_allowed():
+		return {"ok": false, "reason": &"opening_attack_blocked", "status": &"attack_blocked", "message": "避战蓄势期间无法攻击，请先结束蓄势。"}
 	var player_state := StringName(simulation.player.get("state", &"idle"))
 	var cooldown_before := float(simulation.player.get("attack_cooldown", 0.0))
 	var immediate := player_state in [&"idle", &"move"] and cooldown_before <= simulation.EPSILON
@@ -337,6 +387,7 @@ func _start_current_encounter(player_local_pos: Vector2) -> void:
 		"player_max_hp": context.max_hp,
 		"player_power": context.power,
 		"player_shield": _context_shield(),
+		"z2_talents": Z2Talents.from_context(context),
 		"monster_types": monster_types,
 		"enemy_profiles": [mother_profile],
 		"arena_obstacles": G41WorldObjectProjection.room_solid_rects(context.current_room_type, event_type),
@@ -379,6 +430,9 @@ func _commit_combat_cleared(event: Dictionary) -> Dictionary:
 		return {"ok": false, "reason": "combat_runtime_unavailable"}
 	if completed_simulation.reward_emitted:
 		return {"ok": true}
+	var ended := _supply_lifecycle("combat_ended")
+	if not bool(ended.get("ok", false)):
+		return ended
 	var result: Dictionary = command_bus.dispatch(&"resolve_runtime_combat", {
 		"source": "g41_combat_simulation",
 		"combat_tick": int(event.get("tick", completed_simulation.tick_index)),
@@ -396,6 +450,9 @@ func _commit_combat_cleared(event: Dictionary) -> Dictionary:
 func _commit_player_defeated(event: Dictionary) -> Dictionary:
 	if context == null or command_bus == null:
 		return {"ok": false, "reason": "combat_runtime_unavailable"}
+	var ended := _supply_lifecycle("combat_ended")
+	if not bool(ended.get("ok", false)):
+		return ended
 	if context.failed:
 		return {"ok": true}
 	# Damage is committed first. This fallback covers zero-HP projections that

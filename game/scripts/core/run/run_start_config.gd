@@ -4,6 +4,7 @@ class_name RunStartConfig
 const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
 const M3RItemUsabilityModelScript := preload("res://scripts/core/content/m3r_item_usability_model.gd")
 const PlayerAppearanceConfigScript := preload("res://scripts/core/content/player_appearance_config.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
 
 const SUPPORTED_ROUTE_MODES := [&"standard_run", &"demo_run"]
 const SUPPORTED_PREVIEW_FIELDS := [
@@ -234,7 +235,8 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 			issues.append("unknown_map_config_id")
 	else:
 		var unlocked_map_ids := _array_from(meta_summary.get("unlocked_map_ids", []))
-		if not unlocked_map_ids.has(map_id):
+		var allowed := Z2Rules.map_blockers(meta_summary, map_id).is_empty() if Z2Rules.applies_to(meta_summary) else unlocked_map_ids.has(map_id)
+		if not allowed:
 			issues.append("map_not_unlocked")
 		var expected_difficulty := StringName(map_definition.get("difficulty", &""))
 		var requested_difficulty := StringName(normalized.get("difficulty", &""))
@@ -320,8 +322,8 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 	for item in selected_equipment:
 		selected_equipment_weight += maxi(0, int(item.get("weight", 0)))
 	var equipment_effects := M3RItemUsabilityModelScript.build_equipment_effects(selected_equipment)
-	var equipment_capacity := M3RItemUsabilityModelScript.BASE_EQUIPMENT_CAPACITY
-	var max_hp := 100
+	var equipment_capacity := int(profile.get("equipment_capacity", M3RItemUsabilityModelScript.BASE_EQUIPMENT_CAPACITY))
+	var max_hp := int(profile.get("max_hp", 100))
 	var backpack_capacity := int(profile.get(
 		"backpack_capacity",
 		M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY
@@ -334,8 +336,11 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 	var protocol_pressure_reduce := int(profile.get("protocol_pressure_reduce", 0))
 	var search_reward_bonus := int(profile.get("search_reward_bonus", 0))
 	var scan_hint_bonus := int(profile.get("scan_hint_bonus", 0))
+	var power := RunBalanceCatalog.DEFAULT_POWER
 	for effect in equipment_effects:
 		match str(effect.get("effect_kind", "")):
+			"power":
+				power += int(effect.get("effect_amount", 0))
 			"max_hp":
 				max_hp += int(effect.get("effect_amount", 0))
 			"equipment_capacity":
@@ -354,6 +359,9 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 				scan_hint_bonus += int(effect.get("effect_amount", 0))
 	var carried_weight := 0
 	for item in selected_consumables:
+		var original_weight := maxi(1, int(item.get("base_weight", item.get("weight", 1))))
+		item["base_weight"] = original_weight
+		item["weight"] = maxi(1, original_weight - int(profile.get("consumable_weight_reduce", 0)))
 		carried_weight += maxi(0, int(item.get("weight", 0)))
 	if selected_equipment_weight + carried_weight > equipment_capacity:
 		issues.append("shared_weight_exceeds_authoritative_capacity")
@@ -404,8 +412,13 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 	normalized["equipment_capacity"] = equipment_capacity
 	normalized["equipment_used"] = selected_equipment_weight + carried_weight
 	normalized["max_hp"] = maxi(1, max_hp)
+	normalized["power"] = power
 	normalized["failure_salvage_capacity"] = failure_salvage_capacity
 	normalized["profile_fields"] = profile.duplicate(true)
+	if Z2Rules.applies_to(meta_summary):
+		normalized["profile_fields"]["content_eligibility"] = Z2ContentEligibility.freeze_profile(meta_summary)
+		normalized["profile_fields"]["z2_fact_sequence_base"] = int(meta_summary.get("z2_fact_sequence", 0))
+		normalized["z2_opening_offer"] = _dictionary_from(meta_summary.get("z2_opening_offer", {}))
 	normalized["talent_interface"] = _array_from(profile.get("talent_directions", []))
 	normalized["active_talent_effects"] = _array_from(profile.get("active_talent_effects", []))
 	normalized["profile_id"] = str(meta_summary.get("profile_id", normalized.get("profile_id", "default")))
@@ -432,6 +445,12 @@ static func authorize_with_meta(config: Dictionary, meta_summary: Dictionary) ->
 		normalized["commission_candidate_seed"] = commission_offer_seed
 		normalized["commission_candidates"] = commission_candidates.duplicate(true)
 	normalized["authority"] = &"meta_progress"
+	# Content configuration errors must be found before the runtime reserves
+	# instances, charges admission or enters a run. Tutorial has no ordinary pool.
+	if Z2Rules.applies_to(meta_summary) and not bool(map_definition.get("tutorial_map", false)):
+		var loot_preflight := Z2LootCatalog.preflight_config(normalized)
+		if not loot_preflight.get("ok", false):
+			return {"ok": false, "issues": ["invalid_monster_loot:" + str(loot_preflight.get("reason", "invalid_pool"))], "config": normalized}
 	return {
 		"ok": true,
 		"issues": [],

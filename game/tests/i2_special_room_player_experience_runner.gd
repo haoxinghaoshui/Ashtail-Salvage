@@ -388,7 +388,7 @@ func _check_production_proximity_authority() -> void:
 		main.queue_free()
 		await _frames(4)
 		return
-	var started: Dictionary = bus.dispatch(&"start_demo_run", {"source": "i2_special_proximity"})
+	var started: Dictionary = preload("res://tests/z2_legacy_main_fixture.gd").start(run_scene)
 	_check(bool(started.get("ok", false)), "Production proximity fixture could not start")
 	run_scene.call("_show_run_screen")
 	production_command_counts.clear()
@@ -426,21 +426,22 @@ func _check_production_proximity_authority() -> void:
 	await process_frame
 	_check(event_opened and bool(run_scene.call("_runtime_modal_is_top", &"event")), "Near Event world context did not open its focused modal")
 	_check(_production_count(&"select_encounter_option") == 0 and _production_count(&"select_event_option") == 0, "Opening Event modal submitted a decision")
-	var event_options_box = run_scene.get("event_options_box") as Control
-	var event_modal_buttons: Array[Button] = []
-	if event_options_box != null:
-		for child in event_options_box.find_children("*", "Button", true, false):
-			if child is Button:
-				event_modal_buttons.append(child as Button)
+	var event_modal_buttons: Array[Button] = preload("res://tests/z2_legacy_main_fixture.gd").event_choices(run_scene)
 	var expected_event_options: Array = (context.event_state as Dictionary).get("options", [])
 	_check(
 		event_modal_buttons.size() == expected_event_options.size(),
 		"Event modal did not preserve all authoritative options: expected=%d actual=%d"
 		% [expected_event_options.size(), event_modal_buttons.size()]
 	)
-	var leave_button: Button = event_modal_buttons.back() if not event_modal_buttons.is_empty() else null
+	var leave_button: Button = null
+	var leave_label := ""
+	for index in expected_event_options.size():
+		var option: Dictionary = expected_event_options[index]
+		if str(option.get("id", "")) == "leave" and index < event_modal_buttons.size():
+			leave_button = event_modal_buttons[index]
+			leave_label = str(option.get("player_title", option.get("label", "")))
 	_check(
-		leave_button != null and not leave_button.disabled and String(leave_button.text).contains("离开"),
+		leave_button != null and not leave_button.disabled and not leave_label.is_empty() and String(leave_button.accessibility_name) == leave_label,
 		"Event modal did not retain its legal leave decision"
 	)
 	if leave_button != null and not leave_button.disabled:

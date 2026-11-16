@@ -53,6 +53,16 @@ static func runtime_config(run_start_config: Dictionary = {}) -> Dictionary:
 	sanitized_start["protocol_pressure_reduce"] = 0
 	sanitized_start["search_reward_bonus"] = 0
 	sanitized_start["scan_hint_bonus"] = 0
+	sanitized_start["max_hp"] = 100
+	var teaching_profile: Dictionary = sanitized_start.get("profile_fields", {}).duplicate(true)
+	for key in ["talent_directions", "active_talent_effects"]:
+		teaching_profile[key] = []
+	teaching_profile["max_hp"] = 100
+	teaching_profile["equipment_capacity"] = SupplyCatalog.BASE_EQUIPMENT_CAPACITY
+	teaching_profile["backpack_capacity"] = SupplyCatalog.BASE_BACKPACK_CAPACITY
+	teaching_profile["failure_salvage_capacity"] = SupplyCatalog.BASE_FAILURE_SALVAGE_CAPACITY
+	teaching_profile["consumable_weight_reduce"] = 0
+	sanitized_start["profile_fields"] = teaching_profile
 	return {
 		"id": StringName(MAP_ID),
 		"mode": &"tutorial",
@@ -76,6 +86,9 @@ static func runtime_config(run_start_config: Dictionary = {}) -> Dictionary:
 		"backpack_capacity": SupplyCatalog.BASE_BACKPACK_CAPACITY,
 		"equipment_capacity": SupplyCatalog.BASE_EQUIPMENT_CAPACITY,
 		"failure_salvage_capacity": SupplyCatalog.BASE_FAILURE_SALVAGE_CAPACITY,
+		"profile_fields": teaching_profile,
+		"profile_level": int(sanitized_start.get("profile_level", 0)),
+		"max_hp": 100,
 		"talent_interface": [],
 		"active_talent_effects": [],
 		"mine_dmg_reduce": 0,

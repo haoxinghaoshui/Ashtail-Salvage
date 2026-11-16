@@ -7,6 +7,8 @@ const WarehouseViewSchemaScript := preload("res://scripts/core/asset/warehouse_v
 const WarehouseViewContentSchemaScript := preload("res://scripts/core/asset/warehouse_view_content_schema.gd")
 const M3RItemUsabilityModelScript := preload("res://scripts/core/content/m3r_item_usability_model.gd")
 const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
+const DeployMapProjectionScript := preload("res://scripts/ui/deploy_prep/deploy_map_projection.gd")
 
 const CONFIG_VERSION := 6
 const START_MODE_STANDARD_PREVIEW := &"standard_preview"
@@ -58,6 +60,11 @@ const ACTIVE_RUN_CANONICAL_FIELDS := [
 static func default_config(sequence: int = 1, meta_summary: Dictionary = {}) -> Dictionary:
 	var m3r_fields: Dictionary = M3RItemUsabilityModelScript.build_run_start_fields(meta_summary)
 	var unlocked_maps: Array = _array_copy(meta_summary.get("unlocked_map_ids", M7ContentCatalogScript.DEFAULT_UNLOCKED_MAPS))
+	if Z2Rules.applies_to(meta_summary):
+		unlocked_maps.clear()
+		for map in DeployMapProjectionScript.project_catalog([], meta_summary):
+			if bool(map.get("unlocked", false)):
+				unlocked_maps.append(str(map.get("map_config_id", "")))
 	if not unlocked_maps.has("tutorial_5x5"):
 		unlocked_maps.push_front("tutorial_5x5")
 	var default_map_id := _default_map_id(unlocked_maps)
@@ -129,6 +136,9 @@ static func default_config(sequence: int = 1, meta_summary: Dictionary = {}) -> 
 	}
 	for key in m3r_fields.keys():
 		config[key] = m3r_fields[key]
+	if Z2Rules.applies_to(meta_summary):
+		config["profile_level"] = maxi(0, int(meta_summary.get("profile_level", 0)))
+		config["profile_fields"]["profile_level"] = config["profile_level"]
 	config["config_validity_preview"] = _config_validity_for(config)
 	config["initial_bag_summary"] = {
 		"used": int(config.get("bag_used", 0)),
@@ -232,7 +242,18 @@ static func apply_card_action(config: Dictionary, tab_id: StringName, card_id: S
 		}
 	if tab_id == &"warehouse" and String(card_id).begins_with("m3r_") and card_id != &"m3r_warehouse_status":
 		return _toggle_warehouse_item(config, String(card_id).trim_prefix("m3r_"))
+	if tab_id == &"claim" and card_id == &"claim_initial_supplies":
+		var state := initial_supply_claim_state(config)
+		var result := {
+			"config": config.duplicate(true), "changed": false,
+			"reason_code": state["reason_code"], "message": state["message"],
+		}
+		if bool(state["enabled"]):
+			result["meta_action"] = {"action": &"claim_initial_supplies", "target_id": "initial_supplies"}
+		return result
 	if tab_id == &"claim" and card_id == &"claim_emergency_ration":
+		if Z2Rules.applies_to(_dictionary_copy(config.get("meta_progress_summary", {}))):
+			return {"config": config.duplicate(true), "changed": false, "message": "请在首次补给卡中领取物资。"}
 		return _toggle_emergency_claim(config)
 	return {
 		"config": config.duplicate(true),
@@ -248,9 +269,32 @@ static func _mutates_active_run_projection(tab_id: StringName, card_id: StringNa
 		return true
 	if tab_id == &"warehouse" and String(card_id).begins_with("m3r_") and card_id != &"m3r_warehouse_status":
 		return true
-	if tab_id == &"claim" and (String(card_id).begins_with("m7_shop_") or card_id == &"claim_emergency_ration"):
+	if tab_id == &"claim" and (String(card_id).begins_with("m7_shop_") or card_id in [&"claim_emergency_ration", &"claim_initial_supplies"]):
 		return true
 	return false
+
+
+static func initial_supply_claim_state(config: Dictionary) -> Dictionary:
+	var meta := _dictionary_copy(config.get("meta_progress_summary", {}))
+	var claimed := not _dictionary_copy(meta.get("initial_supply_receipt", {})).is_empty()
+	var reason := &"ok"
+	var message := "领取后进入仓库，请自行选择携带。"
+	if not Z2Rules.applies_to(meta):
+		reason = &"z2_profile_required"
+		message = "当前档案不支持首次补给。"
+	elif bool(config.get("active_run_locked", false)):
+		reason = &"active_run_locked"
+		message = "探索进行中，暂不可领取首次补给。"
+	elif claimed:
+		reason = &"already_claimed"
+		message = "首次补给已领取，每份档案仅限一次。"
+	elif int(meta.get("profile_level", 0)) < 1 or not bool(meta.get("tutorial_completed", false)):
+		reason = &"tutorial_required"
+		message = "完成教学并达到 Lv.1 后可领取。"
+	elif _array_copy(meta.get("initial_supply_items", [])).is_empty():
+		reason = &"initial_supplies_unavailable"
+		message = "补给清单暂不可用，请稍后重试。"
+	return {"enabled": reason == &"ok", "claimed": claimed, "reason_code": reason, "message": message}
 
 
 static func purchase_quantity(config: Dictionary, item_id: String) -> int:
@@ -269,7 +313,8 @@ static func adjust_purchase_quantity(
 			"changed": false,
 			"message": "探索进行中，基地购买暂不可用。",
 		}
-	var shop := M7ContentCatalogScript.shop_definition(item_id)
+	var meta := _dictionary_copy(config.get("meta_progress_summary", {}))
+	var shop := M7ContentCatalogScript.shop_definition(item_id, meta)
 	if shop.is_empty():
 		return {
 			"config": config.duplicate(true),
@@ -281,7 +326,6 @@ static func adjust_purchase_quantity(
 	var previous := purchase_quantity(result, item_id)
 	var next := clampi(previous + signi(delta), 1, 99)
 	var unit_price := maxi(0, int(shop.get("price", 0)))
-	var meta := _dictionary_copy(result.get("meta_progress_summary", {}))
 	if meta.has("gold") and unit_price > 0:
 		next = mini(next, maxi(1, int(meta.get("gold", 0)) / unit_price))
 	quantities[item_id] = next
@@ -349,7 +393,7 @@ static func select_map(config: Dictionary, map_id: String) -> Dictionary:
 			known_unlocked_count += 1
 	if known_unlocked_count == 0:
 		return _map_selection_rejected(config, &"no_maps_available", "当前没有可选择的已解锁地图。")
-	if not unlocked.has(map_id):
+	if not bool(DeployMapProjectionScript.project_map(map_id, unlocked, _dictionary_copy(config.get("meta_progress_summary", {}))).get("unlocked", false)):
 		return _map_selection_rejected(config, &"map_locked", "该地图尚未解锁。")
 	var result := config.duplicate(true)
 	result["map_config_id"] = map_id
@@ -949,6 +993,19 @@ static func config_validity(config: Dictionary) -> Dictionary:
 	return _config_validity_for(config)
 
 
+static func opening_offer_state(config: Dictionary) -> Dictionary:
+	var meta := _dictionary_copy(config.get("meta_progress_summary", {}))
+	var qualified := Z2Rules.applies_to(meta) and _array_copy(meta.get("talent_flags", [])).has("z2_talent_15")
+	var offer := _dictionary_copy(meta.get("z2_opening_offer", {}))
+	var key := "%s:opening:%d" % [str(meta.get("profile_id", "")), int(meta.get("run_count", 0))]
+	if str(offer.get("offer_key", "")) != key:
+		offer = {}
+	var closed := str(offer.get("status", "")) in ["selected", "skipped"]
+	var locked := bool(config.get("active_run_locked", false)) or not _dictionary_copy(meta.get("admission", {})).is_empty()
+	return {"qualified": qualified, "offer": offer, "closed": closed, "locked": locked,
+		"refresh_cost": (int(offer.get("refresh_count", 0)) + 1) * 5, "gold": int(meta.get("gold", 0))}
+
+
 static func _config_validity_for(config: Dictionary) -> Dictionary:
 	var used := int(config.get("bag_used", 0))
 	var limit := int(config.get("bag_limit", M3RItemUsabilityModelScript.BASE_BACKPACK_CAPACITY))
@@ -962,7 +1019,7 @@ static func _config_validity_for(config: Dictionary) -> Dictionary:
 	for raw_unlocked_id in unlocked_map_ids:
 		if not M7ContentCatalogScript.map_definition_exact(str(raw_unlocked_id)).is_empty():
 			known_unlocked_count += 1
-	var unlocked := exact and unlocked_map_ids.has(map_id)
+	var unlocked := exact and bool(DeployMapProjectionScript.project_map(map_id, unlocked_map_ids, _dictionary_copy(config.get("meta_progress_summary", {}))).get("unlocked", false))
 	var expected_difficulty := StringName(definition.get("difficulty", &""))
 	var difficulty_matches := (
 		exact
@@ -985,6 +1042,10 @@ static func _config_validity_for(config: Dictionary) -> Dictionary:
 		reason_code = &"equipment_overweight"
 	elif used > limit:
 		reason_code = &"backpack_overweight"
+	var opening := opening_offer_state(config)
+	if valid and map_id != "tutorial_5x5" and opening.qualified and not opening.closed and not bool(config.get("active_run_locked", false)):
+		valid = false
+		reason_code = &"opening_selection_required"
 	return {
 		"label": "M6 出勤配置合法" if valid else "出勤配置需要调整",
 		"checks": [

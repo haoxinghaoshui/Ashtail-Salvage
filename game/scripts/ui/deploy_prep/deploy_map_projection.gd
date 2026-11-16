@@ -2,6 +2,7 @@ extends RefCounted
 class_name DeployMapProjection
 
 const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
 
 const PAGE_ID := &"deploy_prep"
 const TAB_ID := &"map"
@@ -19,18 +20,14 @@ static func project(config: Dictionary) -> Dictionary:
 	var selected_scale := scale_for_map(selected_map_id)
 	var selected_scale_id := StringName(selected_scale.get("scale_id", &""))
 	var meta: Dictionary = config.get("meta_progress_summary", {})
-	var lock_reasons := {}
-	for raw_map in _array_copy(meta.get("map_catalog", [])):
-		if raw_map is Dictionary:
-			lock_reasons[str(raw_map.get("id", ""))] = str(raw_map.get("lock_reason", ""))
 	var known_unlocked_count := 0
-	for raw_map_id in unlocked_map_ids:
-		if not M7ContentCatalogScript.map_definition_exact(str(raw_map_id)).is_empty():
+	for map in project_catalog(unlocked_map_ids, meta):
+		if bool(map.get("unlocked", false)):
 			known_unlocked_count += 1
 	var scale_options: Array[Dictionary] = []
 	var difficulty_options: Array[Dictionary] = []
 	var selected_detail: Dictionary = {}
-	for raw_group in scale_groups(unlocked_map_ids):
+	for raw_group in scale_groups(unlocked_map_ids, meta):
 		var group := raw_group.duplicate(true)
 		var maps: Array[Dictionary] = []
 		var unlocked_count := 0
@@ -44,7 +41,6 @@ static func project(config: Dictionary) -> Dictionary:
 			var is_selected := map_id == selected_map_id
 			if is_unlocked:
 				unlocked_count += 1
-			map_projection["lock_reason"] = "" if is_unlocked else str(lock_reasons.get(map_id, ""))
 			var reason_code := &"ok"
 			if active_run_locked:
 				reason_code = &"active_run_locked"
@@ -83,7 +79,7 @@ static func project(config: Dictionary) -> Dictionary:
 		"selected_map_id": selected_map_id,
 		"selected_scale_id": selected_scale_id,
 		"selection_exact": not selected_definition.is_empty(),
-		"selection_unlocked": not selected_definition.is_empty() and unlocked_map_ids.has(selected_map_id),
+		"selection_unlocked": bool(selected_detail.get("unlocked", false)),
 		"difficulty_matches": not selected_definition.is_empty() and configured_difficulty == expected_difficulty and selected_difficulty == expected_difficulty,
 		"active_run_locked": active_run_locked,
 		"scale_options": scale_options,
@@ -96,20 +92,33 @@ static func build(config: Dictionary) -> Dictionary:
 	return project(config)
 
 
-static func project_catalog(unlocked_map_ids: Array = []) -> Array[Dictionary]:
+static func project_catalog(unlocked_map_ids: Array = [], meta: Dictionary = {}) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for definition in M7ContentCatalogScript.map_definitions():
 		var map_id := str(definition.get("id", ""))
-		var projection := project_map(map_id, unlocked_map_ids)
+		var projection := project_map(map_id, unlocked_map_ids, meta)
 		if not projection.is_empty():
 			result.append(projection)
 	return result
 
 
-static func project_map(map_id: String, unlocked_map_ids: Array = []) -> Dictionary:
+static func project_map(map_id: String, unlocked_map_ids: Array = [], meta: Dictionary = {}) -> Dictionary:
 	var definition := M7ContentCatalogScript.map_definition_exact(map_id)
 	if definition.is_empty():
 		return {}
+	definition = definition.duplicate(true)
+	if Z2Rules.applies_to(meta):
+		definition.merge(Z2Rules.map_overrides(map_id), true)
+	for raw_map in _array_copy(meta.get("map_catalog", [])):
+		if raw_map is Dictionary and str(raw_map.get("id", "")) == map_id:
+			definition.merge(raw_map, true)
+			break
+	var unlocked := unlocked_map_ids.has(map_id)
+	var lock_reason := str(definition.get("lock_reason", ""))
+	if Z2Rules.applies_to(meta):
+		var blockers := Z2Rules.map_blockers(meta, map_id)
+		unlocked = blockers.is_empty()
+		lock_reason = " · ".join(blockers)
 	var scale := scale_for_map(map_id)
 	if scale.is_empty():
 		return {}
@@ -137,17 +146,19 @@ static func project_map(map_id: String, unlocked_map_ids: Array = []) -> Diction
 		"visible_exit_position_known": bool(definition.get("visible_exit_position_known", false)),
 		"experience_percent": int(definition.get("experience_percent", 0)),
 		"experience_cap": int(definition.get("experience_cap", 0)),
+		"talent_cap": int(definition.get("talent_cap", 0)),
 		"min_profile_level": int(definition.get("min_profile_level", 0)),
 		"mode": StringName(definition.get("mode", &"standard")),
 		"map_mode": StringName(definition.get("map_mode", &"classic_minesweeper")),
 		"tutorial_map": bool(definition.get("tutorial_map", false)),
 		"persistent_progression": bool(definition.get("persistent_progression", true)),
-		"unlocked": unlocked_map_ids.has(map_id),
+		"unlocked": unlocked,
+		"lock_reason": "" if unlocked else lock_reason,
 	}
 
 
-static func scale_groups(unlocked_map_ids: Array = []) -> Array[Dictionary]:
-	var catalog := project_catalog(unlocked_map_ids)
+static func scale_groups(unlocked_map_ids: Array = [], meta: Dictionary = {}) -> Array[Dictionary]:
+	var catalog := project_catalog(unlocked_map_ids, meta)
 	var result: Array[Dictionary] = []
 	for scale_id in SCALE_IDS:
 		var scale := _scale_definition(scale_id)

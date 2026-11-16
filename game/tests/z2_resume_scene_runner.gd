@@ -65,8 +65,8 @@ func _run() -> void:
 	var parent_ready: bool = runtime.has_method("initialize_z2_session") and runtime.has_method("advance_idle_frame") and runtime.has_method("save_current_checkpoint")
 	_check(parent_ready, "parent dependency: initialize_z2_session/advance_idle_frame/save_current_checkpoint")
 	_check(not auto_accept_quit, "OS close must be intercepted until checkpoint succeeds")
-	var started: Dictionary = scene.command_bus.dispatch(&"start_demo_run")
-	_check(bool(started.get("ok", false)), "real scene starts an admitted demo fixture")
+	var started := _start_formal_fixture(scene)
+	_check(bool(started.get("ok", false)), "real scene starts an admitted standard fixture")
 	if bool(started.get("ok", false)):
 		scene._show_run_screen()
 		_test_modal_combat(scene)
@@ -291,10 +291,12 @@ func _test_close_failure(scene) -> void:
 func _run_close_probe(scene, mode: String) -> void:
 	var runtime = scene.runtime_controller
 	if mode == "terminal":
-		var started: Dictionary = scene.command_bus.dispatch(&"start_demo_run")
+		var started := _start_formal_fixture(scene)
 		_check(bool(started.get("ok", false)), "terminal close fixture starts a new admitted run")
 		scene.meta_progress_adapter.save_adapter = SettlementWriteFailure.new()
 		var abandoned: Dictionary = scene.command_bus.dispatch(&"abandon_run", {"confirmed": true})
+		if scene.run_context.phase == &"failure_salvage":
+			abandoned = scene.command_bus.dispatch(&"confirm_failure_salvage", {"selected_instance_ids": []})
 		_check(bool(abandoned.get("ok", false)), "terminal action commits its checkpoint before settlement")
 		_check(not bool(runtime.last_meta_commit.get("ok", true)) and bool(runtime.last_meta_commit.get("durable_checkpoint", false)), "terminal meta failure retains durable checkpoint authority")
 		_check(FileAccess.file_exists(runtime.checkpoint_service.checkpoint_path), "failed terminal remains on disk before exit")
@@ -376,6 +378,8 @@ func _test_pending_terminal(main: Node) -> Node:
 	# Simulate interruption after durable terminal checkpoint, before meta settlement.
 	scene.command_bus.result_available.disconnect(Callable(scene.runtime_controller, "_on_terminal_result_available"))
 	var abandoned: Dictionary = scene.command_bus.dispatch(&"abandon_run", {"confirmed": true, "source": "z2_terminal_cutpoint"})
+	if scene.run_context.phase == &"failure_salvage":
+		abandoned = scene.command_bus.dispatch(&"confirm_failure_salvage", {"selected_instance_ids": []})
 	_check(bool(abandoned.get("ok", false)), "terminal cutpoint persists pending result")
 	var result_id := String(scene.run_context.result_snapshot.get("result_id", ""))
 	_release_main(interrupted)
@@ -531,6 +535,8 @@ func _test_extract_confirmation_recovery() -> void:
 		# Finish only for fixture isolation; exercise the normal cancel above first.
 		if scene.run_context.run_active:
 			scene.command_bus.dispatch(&"abandon_run", {"confirmed": true})
+			if scene.run_context.phase == &"failure_salvage":
+				scene.command_bus.dispatch(&"confirm_failure_salvage", {"selected_instance_ids": []})
 		await _drain_terminal_audio(scene)
 		_release_main(main)
 		await process_frame
@@ -543,7 +549,7 @@ func _make_extract_confirmation_scene(label: String) -> Node:
 	var scene = main.get_node("RunScene")
 	scene.set_process(false)
 	await process_frame
-	var started: Dictionary = scene.command_bus.dispatch(&"start_demo_run")
+	var started := _start_formal_fixture(scene)
 	_check(bool(started.get("ok", false)), label + ": admitted exit fixture starts")
 	scene.run_context.tutorial_popup.clear()
 	scene._show_run_screen()
@@ -576,11 +582,12 @@ func _test_event_preview_button_conditions() -> void:
 	scene.set_process(false)
 	await process_frame
 	var runtime = scene.runtime_controller
-	var started: Dictionary = scene.command_bus.dispatch(&"start_demo_run")
+	var started := _start_formal_fixture(scene)
 	_check(bool(started.get("ok", false)), "event UI fixture starts an admitted run")
 	var context = scene.run_context
 	context.tutorial_popup.clear()
 	var event_room := Vector2i(5, 1)
+	context.truth_map.set_room_type(event_room, &"Event")
 	context.player_pos = event_room
 	context.current_pos = event_room
 	context.z1_event_rooms[context.cell_key(event_room)] = {"event_type": &"z1_event_e10", "completed": false}
@@ -588,17 +595,18 @@ func _test_event_preview_button_conditions() -> void:
 	context.asset_ledger.add_currency(&"black_coin", 100)
 	context.intel_map.reveal_cell(event_room, context.truth_map)
 	scene.command_bus.room_resolver.enter_room(context)
+	_check(scene.command_bus.dispatch(&"select_event_option", {"option_id": &"prepare"}).get("ok", false), "event UI fixture prepares its real four-coin quote")
 	scene._show_run_screen()
 	var projection: Dictionary = WorldProjectionScript.build(context.get_status_snapshot()).get("event_room", {})
 	scene.player_controller.set_local_position(Vector2(projection.get("interaction_pos", WorldProjectionScript.EVENT_LOCAL_POS)))
 	scene._process(0.0)
 	var selected: Array[Dictionary] = []
-	scene.event_choice_panel.option_selected.connect(func(option: Dictionary) -> void: selected.append(option.duplicate(true)))
+	scene.z2_event_adapter.choice_requested.connect(func(_request: Dictionary, option: Dictionary) -> void: selected.append(option.duplicate(true)))
 	scene._on_world_context_action_requested(&"event_open", {})
 	await process_frame
-	var old_button := scene.event_options_box.find_child("EventOption_0", true, false) as Button
-	var old_cost := scene.event_options_box.find_child("EventOptionDetail_0", true, false) as Label
-	_check(scene._runtime_modal_is_top(&"event") and old_button != null and not old_button.disabled and old_button.text.contains("急救贴"), "actual Event e10 panel exposes the purchase button")
+	var old_button := _event_option_button(scene, 0)
+	var old_cost := old_button.find_child("OptionCost", true, false) as Label if old_button != null else null
+	_check(scene._runtime_modal_is_top(&"event") and old_button != null and not old_button.disabled and old_button.accessibility_name.contains("急救贴"), "actual Event e10 panel exposes the purchase button")
 	_check(old_cost != null and old_cost.is_visible_in_tree() and old_cost.text.contains("4"), "actual initial event option displays four-coin cost")
 	var previous_revision: int = runtime.transaction_revision
 	var changed: Dictionary = runtime.execute_atomic_operation(&"scene_event_pressure_change", {}, func() -> Dictionary:
@@ -616,20 +624,56 @@ func _test_event_preview_button_conditions() -> void:
 	_check(str(scene.last_command_result.get("reason", "")) == "stale_preview", "actual old button rejects changed price with stale_preview")
 	_check(runtime.capture_authoritative_state() == before, "stale event button cannot spend or mutate authority")
 	_check(FileAccess.get_sha256(runtime.checkpoint_service.checkpoint_path) == disk_hash, "stale event button cannot write a checkpoint")
-	var refreshed_button := scene.event_options_box.find_child("EventOption_0", true, false) as Button
-	var refreshed_cost := scene.event_options_box.find_child("EventOptionDetail_0", true, false) as Label
-	_check(scene._runtime_modal_is_top(&"event") and refreshed_button != null and not refreshed_button.disabled and refreshed_button.text.contains("急救贴") and refreshed_cost != null and refreshed_cost.is_visible_in_tree() and refreshed_cost.text.contains("9"), "reopened event panel displays the new nine-coin purchase")
+	# Current Z2 quotes are refreshed by a separate, real prepare action.
+	var prepare_button := _event_option_button(scene, 0)
+	_check(prepare_button != null and not prepare_button.disabled and prepare_button.accessibility_name.contains("查看服务"), "stale quote exposes the real refresh action")
+	if prepare_button != null:
+		prepare_button.pressed.emit()
+	await process_frame
+	var refreshed_button := _event_option_button(scene, 0)
+	var refreshed_cost := refreshed_button.find_child("OptionCost", true, false) as Label if refreshed_button != null else null
+	_check(scene._runtime_modal_is_top(&"event") and refreshed_button != null and not refreshed_button.disabled and refreshed_button.accessibility_name.contains("急救贴") and refreshed_cost != null and refreshed_cost.is_visible_in_tree() and refreshed_cost.text.contains("9"), "reopened event panel displays the new nine-coin purchase")
 	var coins_before: int = context.asset_ledger.get_currency(&"black_coin")
 	var items_before: int = context.asset_ledger.item_instances.size()
 	var receipts_before: int = runtime.action_receipts.size()
-	if refreshed_button != null and refreshed_button.text.contains("急救贴"):
+	if refreshed_button != null and refreshed_button.accessibility_name.contains("急救贴"):
 		refreshed_button.pressed.emit()
 	await process_frame
-	_check(selected.size() == 2 and selected[1].get("payload", {}).get("expected_conditions", "") != selected[0].get("payload", {}).get("expected_conditions", ""), "reopened actual button sends a refreshed condition token")
+	_check(selected.size() == 3 and selected[2].get("payload", {}).get("expected_conditions", "") != selected[0].get("payload", {}).get("expected_conditions", ""), "reopened actual button sends a refreshed condition token after the separate quote refresh")
 	_check(bool(scene.last_command_result.get("ok", false)) and context.asset_ledger.get_currency(&"black_coin") == coins_before - 9, "fresh actual purchase pays exactly nine coins")
 	_check(context.asset_ledger.item_instances.size() == items_before + 1 and runtime.action_receipts.size() == receipts_before + 1, "fresh actual purchase grants one item and one committed receipt")
 	scene.command_bus.dispatch(&"abandon_run", {"confirmed": true})
+	if scene.run_context.phase == &"failure_salvage":
+		scene.command_bus.dispatch(&"confirm_failure_salvage", {"selected_instance_ids": []})
 	await _drain_terminal_audio(scene)
 	_release_main(main)
 	await process_frame
 	await process_frame
+
+
+func _start_formal_fixture(scene) -> Dictionary:
+	var meta = scene.meta_progress_adapter
+	# Eligibility setup only; the separate new-player journey owns natural teaching input.
+	if not meta.data.get("tutorial_completed", false):
+		_check(meta.begin_tutorial_training().get("ok", false), "fixture teaching eligibility begins")
+		_check(meta.purchase_tutorial_flag().get("ok", false), "fixture teaching purchase persists")
+		var completed: Dictionary = meta._apply_tutorial_settlement({"mode": "tutorial", "outcome": "Training Complete", "settlement": {"outcome": "success"}}, "resume-fixture-teaching")
+		_check(completed.get("ok", false), "fixture legal teaching qualification persists")
+		if not completed.get("ok", false):
+			return completed
+	var config := RunStartConfig.default_config()
+	config.merge({"map_config_id": "classic_7x7_simple", "difficulty": &"simple", "seed_value": 71}, true)
+	config.selected_objective_id = M7ContentCatalog.commission_offer_candidates("classic_7x7_simple", 0)[0].id
+	return scene.command_bus.dispatch(&"start_standard_run", {"run_start_config": config})
+
+
+func _event_option_button(scene, index: int) -> Button:
+	var dialogue: Control = scene.z2_event_adapter.dialogue
+	# Advance the delivered dialogue through its real click signal, then use its button.
+	for advance in range(16):
+		if dialogue.get_node("%ChoicesFrame").visible:
+			break
+		var click := InputEventMouseButton.new()
+		click.button_index = MOUSE_BUTTON_LEFT
+		dialogue.get_node("%DialogueText").gui_input.emit(click)
+	return dialogue.find_child("Option_%d" % index, true, false) as Button

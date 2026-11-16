@@ -61,6 +61,13 @@ func dispatch(command_name: StringName, payload: Dictionary = {}) -> Dictionary:
 			action_result = toggle_flag_cell(command_payload.get("pos", null))
 		&"flag_current_cell":
 			action_result = flag_current_cell()
+		&"end_opening_effect", &"dismantle_opening_item", &"use_opening_tool":
+			if not _can_accept_command() or runtime_controller == null:
+				action_result = _blocked(&"blocked", _current_blocked_reason())
+			else:
+				var operation: String = {&"end_opening_effect": "end", &"dismantle_opening_item": "dismantle", &"use_opening_tool": "use_tool"}[command_name]
+				action_result = runtime_controller.execute_z2_opening_action(operation, command_payload)
+				_emit_state()
 		&"search_current_room":
 			action_result = search_current_room()
 		&"interact_current_room":
@@ -124,6 +131,8 @@ func dispatch(command_name: StringName, payload: Dictionary = {}) -> Dictionary:
 			action_result = debug_restart_run()
 		&"confirm_tutorial_popup":
 			action_result = confirm_tutorial_popup()
+		&"cancel_flag_entry":
+			action_result = cancel_flag_entry()
 		&"open_map":
 			action_result = _mark_open_map_placeholder()
 		&"debug_add_run_black_coin":
@@ -202,7 +211,7 @@ func attempt_room_transition(direction: Vector2i, entry_position: Vector2 = Vect
 	return move_by(direction, entry_position)
 
 
-func move_by(delta: Vector2i, entry_position: Vector2 = Vector2(-1, -1)) -> Dictionary:
+func move_by(delta: Vector2i, entry_position: Vector2 = Vector2(-1, -1), confirmed_flag: bool = false) -> Dictionary:
 	if not _can_accept_command():
 		return _blocked(&"blocked", "command_blocked")
 	if bool(EventService.cage_state(context, context.get_current_pos()).get("active", false)):
@@ -218,7 +227,17 @@ func move_by(delta: Vector2i, entry_position: Vector2 = Vector2(-1, -1)) -> Dict
 		context.last_message = "Blocked by map boundary."
 		_emit_state()
 		return _blocked(&"out_of_bounds", "out_of_bounds")
-	if context.intel_map.is_flagged(target):
+	if context.intel_map.is_flagged(target) and not confirmed_flag:
+		if context.profile_fields.get("z2_progression_version") == 1:
+			context.tutorial_popup = {
+				"id": &"flag_entry_confirm", "title": "进入插旗房间？",
+				"message": "这里已被你标记。继续进入会正常触发房间风险，旗帜仍会保留。",
+				"confirm_text": "确认进入", "blocking": true, "once": false,
+				"run_id": str(context.run_id), "origin": context.get_current_pos(),
+				"target": target, "entry_position": entry_position,
+			}
+			_emit_state()
+			return {"ok": true, "status": &"flag_confirmation_required", "actor_id": DEFAULT_ACTOR_ID}
 		context.blocked_reason = "blocked_flagged"
 		context.last_message = "Blocked by flag."
 		_emit_state()
@@ -248,9 +267,14 @@ func move_by(delta: Vector2i, entry_position: Vector2 = Vector2(-1, -1)) -> Dict
 func toggle_flag_cell(pos = null) -> Dictionary:
 	if context == null or context.intel_map == null:
 		return _blocked(&"not_ready", "not_ready")
+	if context.profile_fields.get("z2_progression_version") == 1 and not context.profile_fields.get("flag_unlocked", false):
+		return _blocked(&"flag_not_learned", "flag_not_learned")
 	var target: Vector2i = context.get_current_pos() if pos == null else pos
 	var was_flagged := context.intel_map.is_flagged(target)
 	context.intel_map.toggle_flag(target)
+	if context.profile_fields.get("z2_progression_version") == 1 and was_flagged != context.intel_map.is_flagged(target):
+		context.record_event(&"manual_flag_changed", str(context.active_command.get("command_id", "")), DEFAULT_ACTOR_ID, "player_flag", {
+			"position": target, "enabled": context.intel_map.is_flagged(target), "is_mine": context.truth_map.is_mine(target), "triggered": context.truth_map.is_triggered(target)})
 	if not was_flagged and context.intel_map.is_flagged(target) and not context.intel_map.is_revealed(target):
 		context.run_stats["flags_placed"] = int(context.run_stats.get("flags_placed", 0)) + 1
 	context.last_message = "Flag toggled at %s." % _format_pos(target)
@@ -662,9 +686,30 @@ func debug_force_fail(reason: String = "debug_forced_failure") -> Dictionary:
 
 
 func confirm_tutorial_popup() -> Dictionary:
+	if context == null or not context.run_active:
+		return _blocked(&"not_ready", "not_ready")
+	if str(context.tutorial_popup.get("id", "")) == "flag_entry_confirm":
+		var pending := context.tutorial_popup.duplicate(true)
+		if str(pending.get("run_id", "")) != str(context.run_id) or pending.get("origin") != context.get_current_pos():
+			return _blocked(&"stale_flag_confirmation", "stale_flag_confirmation")
+		var target: Vector2i = pending.get("target", Vector2i(-1, -1))
+		if not context.is_inside(target) or not context.intel_map.is_flagged(target):
+			return _blocked(&"stale_flag_confirmation", "stale_flag_confirmation")
+		context.tutorial_popup = {}
+		return move_by(target - context.get_current_pos(), pending.get("entry_position", Vector2(-1, -1)), true)
+	if context.mode == &"tutorial" and str(context.tutorial_popup.get("id", "")) == "spawn_intro" and context.profile_fields.get("z2_progression_version") == 1:
+		context.profile_fields["flag_unlocked"] = true
 	TutorialService.confirm_popup(context)
 	_emit_state()
 	return {"ok": true, "status": &"tutorial_popup_confirmed", "actor_id": DEFAULT_ACTOR_ID}
+
+
+func cancel_flag_entry() -> Dictionary:
+	if context == null or str(context.tutorial_popup.get("id", "")) != "flag_entry_confirm":
+		return _blocked(&"no_flag_confirmation", "no_flag_confirmation")
+	context.tutorial_popup = {}
+	_emit_state()
+	return {"ok": true, "status": &"flag_entry_cancelled", "actor_id": DEFAULT_ACTOR_ID}
 
 
 func _can_accept_command() -> bool:

@@ -5,6 +5,7 @@ const SaveAdapterScript := preload("res://scripts/core/save/save_adapter.gd")
 const SaveProfileManifestScript := preload("res://scripts/core/save/save_profile_manifest.gd")
 const SaveProfilePreviewScript := preload("res://scripts/core/save/save_profile_preview.gd")
 const SaveImportStagingScript := preload("res://scripts/core/save/save_import_staging.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
 
 var save_adapter: SaveAdapter = SaveAdapterScript.new()
 var manifest: Dictionary = SaveProfileManifestScript.default_manifest()
@@ -36,6 +37,38 @@ func save_manifest() -> Dictionary:
 
 func active_profile_paths() -> Dictionary:
 	return SaveProfileManifestScript.profile_paths(active_profile_id)
+
+
+func reset_outdated_profiles_for_z2() -> Dictionary:
+	if bool(manifest.get("read_only", false)):
+		return _blocked("manifest_read_only_fallback")
+	var profile_ids: Array = manifest.get("profiles", {}).keys()
+	# Only this game's canonical profile directory is in scope.
+	if DirAccess.dir_exists_absolute(SaveProfileManifestScript.PROFILES_DIR):
+		for id in DirAccess.get_directories_at(SaveProfileManifestScript.PROFILES_DIR):
+			if id == SaveProfileManifestScript.sanitize_profile_id(id) and not profile_ids.has(id):
+				profile_ids.append(id)
+	var reset_ids: Array[String] = []
+	for id in profile_ids:
+		var paths := SaveProfileManifestScript.profile_paths(str(id))
+		var adapter := MetaProgressAdapter.new()
+		adapter.save_adapter = save_adapter
+		adapter.set_active_profile_path(str(paths.meta_progress), str(id))
+		adapter.load_or_create_default()
+		if not adapter.can_write_persistence():
+			return _blocked(adapter.write_block_reason)
+		if not Z2Rules.applies_to(adapter.data):
+			var reset := adapter.reset_as_current_z2_profile()
+			if not reset.get("ok", false):
+				return reset
+			reset_ids.append(str(id))
+		if adapter.data.get("reset_checkpoint_pending", false):
+			if not save_adapter.remove_json(str(paths.run_checkpoint)):
+				return _blocked("old_checkpoint_cleanup_failed")
+			adapter.data.erase("reset_checkpoint_pending")
+			if not adapter.save():
+				return _blocked("reset_cleanup_save_failed")
+	return {"ok": true, "status": "profiles_ready", "reset_profile_ids": reset_ids}
 
 
 func meta_progress_path() -> String:

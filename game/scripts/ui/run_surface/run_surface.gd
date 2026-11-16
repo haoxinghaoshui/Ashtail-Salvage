@@ -101,14 +101,19 @@ var backpack_strip: GridContainer
 var backpack_empty_watermark: TextureRect
 var backpack_detail_label: Label
 var backpack_capacity_label: Label
+var backpack_supplies_header: Label
+var backpack_tools_header: Label
 var room_title_label: Label
 var room_body_label: Label
+var room_description_scroll: ScrollContainer
+var command_feedback_scroll: ScrollContainer
 var objective_label: Label
 var player_tag_label: Label
 var encounter_title_label: Label
 var encounter_body_label: Label
 var encounter_result_label: Label
 var resource_label: Label
+var vitals_label: Label
 var mine_risk_label: Label
 var right_title_label: Label
 var right_body_label: Label
@@ -136,6 +141,8 @@ var command_feedback_time_remaining := 0.0
 var built := false
 var current_layout_profile: Dictionary = {}
 var ui_scale_factor := 1.0
+var current_has_tutorial_popup := false
+var _content_layout_pending := false
 
 const LAYER_ROOM_BACKGROUND := 0
 const LAYER_SCENE_TINT := 10
@@ -177,7 +184,8 @@ func build() -> void:
 	right_backdrop.add_theme_stylebox_override("panel", _panel_style(Color(0.006, 0.014, 0.016, 0.68), PresentationTheme.color_for_key(&"ui.warning"), 2))
 	Art10UISkinKitScript.apply_panel(right_backdrop, &"summary")
 	status_card_art = _add_nine_patch_from_ref("Art21RunStatusCard", Art21UIPlacementContractScript.slot_ref(&"run_hud", &"top_right_status_card", &"ui.art19.panel.deploy_summary"), 0.94, 12)
-	_apply_art24_frame(status_card_art, STATUS_CARD_FRAME_PATH, 12)
+	# Keep the source rivets, bevels and bracket ends inside unstretched corners.
+	_apply_art24_frame(status_card_art, STATUS_CARD_FRAME_PATH, 36)
 	protocol_level_plate = _add_texture_rect_from_ref("RunProtocolLevelPlate", _protocol_level_ref(5), 0.48)
 	protocol_level_plate.stretch_mode = TextureRect.STRETCH_SCALE
 	protocol_level_plate.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -229,6 +237,8 @@ func build() -> void:
 	scanner_legend_label = _add_label("RunScannerLegend", "P 当前 | ? 未知 | F 标记 | X 撤离", 13, PresentationTheme.color_for_key(&"ui.muted"))
 
 	scanner_detail_label = _add_label("RunScannerDetail", "已知 / 危险 / 撤离", 13, PresentationTheme.color_for_key(&"ui.muted"))
+	backpack_supplies_header = _add_label("RunBackpackSuppliesHeader", "物资", 13, PresentationTheme.text_color())
+	backpack_tools_header = _add_label("RunBackpackToolsHeader", "道具", 13, PresentationTheme.text_color())
 	backpack_scroll = ScrollContainer.new()
 	backpack_scroll.name = "RunBackpackScroll"
 	backpack_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -241,7 +251,7 @@ func build() -> void:
 	backpack_strip.columns = 1
 	backpack_strip.add_theme_constant_override("h_separation", 0)
 	backpack_strip.add_theme_constant_override("v_separation", 4)
-	backpack_strip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	backpack_strip.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	backpack_strip.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	backpack_strip.mouse_filter = Control.MOUSE_FILTER_PASS
 	backpack_scroll.add_child(backpack_strip)
@@ -298,6 +308,7 @@ func build() -> void:
 	# probe, but present the authoritative count in the UE-aligned plate below
 	# the room. The left rail must not duplicate the same risk signal.
 	resource_label.visible = false
+	vitals_label = _add_label("RunProtocolVitals", "", 13, PresentationTheme.text_color())
 	mine_risk_label = _add_label("RunMineRiskText", "", 16, Color(0.91, 0.87, 0.78, 1.0))
 	mine_risk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	mine_risk_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -307,6 +318,10 @@ func build() -> void:
 
 	right_title_label = _add_label("RunProtocolTitle", "协议状态", 18, PresentationTheme.color_for_key(&"ui.warning"))
 	right_body_label = _add_label("RunProtocolBody", "协议：--\n压力：--\n危险：--", 13, PresentationTheme.text_color())
+	var protocol_body_backing := StyleBoxFlat.new()
+	protocol_body_backing.bg_color = Color(18.0 / 255.0, 22.0 / 255.0, 20.0 / 255.0, 1.0)
+	protocol_body_backing.set_content_margin_all(0.0)
+	right_body_label.add_theme_stylebox_override(&"normal", protocol_body_backing)
 	event_label = _add_label("RunEventStatus", "事件：无待处理事件。", 13, PresentationTheme.text_color())
 	reward_label = _add_label("RunRewardSummary", "奖励：等待记录。", 12, PresentationTheme.color_for_key(&"ui.muted"))
 	reward_label.visible = false
@@ -356,6 +371,9 @@ func build() -> void:
 	overlay_slot = _add_slot("RunOverlaySlot")
 	modal_slot = _add_slot("RunModalSlot")
 	_apply_layer_order()
+	room_description_scroll = _wrap_text_scroll(room_body_label, "RunRoomBodyScroll")
+	command_feedback_scroll = _wrap_text_scroll(command_feedback_label, "RunCommandFeedbackScroll")
+	command_feedback_scroll.visible = false
 	_update_protocol_presentation(5, 0)
 
 
@@ -371,13 +389,19 @@ func apply_surface_model(model: Dictionary) -> void:
 		current_map_dimensions = map_dimensions
 		call_deferred("_reflow_backpack_content_layout")
 	scanner_title_label.text = "区域扫描图"
-	scanner_legend_label.text = _resource_lines(String(model.get("resource_summary", "")))
+	scanner_legend_label.text = String(model.get("currency_text", _resource_lines(String(model.get("resource_summary", "")))))
+	vitals_label.text = String(model.get("vitals_text", ""))
 	scanner_detail_label.text = "作业包  %s 展开" % SemanticActionHintScript.current_binding_label(&"open_inventory")
 	_refresh_backpack_strip(model.get("backpack_items", []))
-	backpack_capacity_label.text = "共享 %s/%s · 战利品 %s/%s" % [model.get("equipment_used", 0), model.get("equipment_capacity", 100), model.get("backpack_used", 0), model.get("backpack_capacity", 0)]
+	backpack_capacity_label.text = "共享 %s/%s\n战利品 %s/%s" % [model.get("equipment_used", 0), model.get("equipment_capacity", 100), model.get("backpack_used", 0), model.get("backpack_capacity", 0)]
 	scanner_summary_label.text = "%d × %d · 展开详情" % [current_map_dimensions.x, current_map_dimensions.y] if current_map_dimensions.x > 0 and current_map_dimensions.y > 0 else "地图尚未公开"
-	room_title_label.text = ""
-	room_body_label.text = ""
+	room_title_label.text = String(model.get("room_title", "当前房间"))
+	var description_lines: Array[String] = []
+	for text: String in [String(model.get("room_summary", "")), String(model.get("current_objective", "")), String(model.get("commission_text", ""))]:
+		if not text.is_empty() and not description_lines.has(text):
+			description_lines.append(text)
+	room_body_label.text = "\n\n".join(description_lines)
+	current_has_tutorial_popup = bool(model.get("has_tutorial_popup", false))
 	objective_label.text = ""
 	objective_label.visible = false
 	room_background_layer.visible = false
@@ -389,6 +413,7 @@ func apply_surface_model(model: Dictionary) -> void:
 	right_title_label.text = "协议 %s" % protocol_level
 	right_body_label.text = "%s · 压力 %s%%" % [protocol_title, model.get("pressure", "--")]
 	_update_protocol_presentation(model.get("protocol_level", 5), model.get("pressure", 0))
+	_schedule_content_layout()
 	event_label.text = ""
 	event_label.visible = false
 	reward_label.text = "奖励\n%s" % _compact_line(String(model.get("reward_summary", "等待记录。")), 14)
@@ -396,7 +421,7 @@ func apply_surface_model(model: Dictionary) -> void:
 		command_feedback_art.visible = false
 		command_feedback_label.visible = false
 
-	var status_text := _lines_text(model.get("status_lines", []), "", 3, 18)
+	var status_text := "\n".join(model.get("status_lines", []))
 	right_body_label.tooltip_text = status_text
 	event_label.text = ""
 	event_label.visible = false
@@ -423,15 +448,11 @@ func apply_surface_model(model: Dictionary) -> void:
 func apply_combat_snapshot(snapshot: Dictionary) -> void:
 	if not built:
 		return
-	scanner_legend_label.text = _resource_lines(
-		"生命 %s/%s | 作业强度 %s | 待结算黑币 %s | 安全金币 %s" % [
-			snapshot.get("hp", 0),
-			snapshot.get("max_hp", 0),
-			snapshot.get("power", 0),
-			snapshot.get("black_coin", 0),
-			snapshot.get("gold_coin", 0),
-		]
-	)
+	vitals_label.text = "生命 %s/%s\n强度 %s" % [snapshot.get("hp", 0), snapshot.get("max_hp", 0), snapshot.get("power", 0)]
+	# Combat refreshes omit ledger/map fields. Preserve their last authoritative
+	# projection until a snapshot explicitly supplies a new value.
+	if snapshot.has("black_coin") and snapshot.has("gold_coin"):
+		scanner_legend_label.text = "黑币 %s · 金币 %s" % [snapshot.black_coin, snapshot.gold_coin]
 	var combat_runtime: Dictionary = snapshot.get("combat_runtime", {})
 	var alive_enemies := 0
 	for raw_enemy in (combat_runtime.get("enemies", []) as Array):
@@ -449,8 +470,8 @@ func apply_combat_snapshot(snapshot: Dictionary) -> void:
 		snapshot.get("max_hp", 0),
 	]
 	_update_protocol_presentation(snapshot.get("protocol_level", 5), snapshot.get("pressure", 0))
-	var adjacent := int(snapshot.get("adjacent_mines", -1)) if snapshot.has("adjacent_mines") else -1
-	_update_mine_risk_presentation(adjacent)
+	if snapshot.has("adjacent_mines"):
+		_update_mine_risk_presentation(int(snapshot.adjacent_mines))
 
 
 func apply_combat_attack_state(attack_input: Dictionary) -> void:
@@ -556,357 +577,145 @@ func apply_layout_profile(profile: Dictionary) -> void:
 	if not built:
 		build()
 	current_layout_profile = profile.duplicate(true)
-	ui_scale_factor = Art10UISkinKitScript.normalize_runtime_ui_scale_factor(
-		float(current_layout_profile.get("ui_scale_factor", ui_scale_factor))
-	)
+	ui_scale_factor = Art10UISkinKitScript.normalize_runtime_ui_scale_factor(float(profile.get("ui_scale_factor", ui_scale_factor)))
 	current_layout_profile["ui_scale_factor"] = ui_scale_factor
-	profile = current_layout_profile
-	var viewport_size := UILayerContractScript.viewport_size_from_profile(profile)
-	var is_low: bool = bool(profile.get("is_low_resolution", false))
-	var is_high: bool = bool(profile.get("is_high_resolution", false))
-	if hud != null:
-		hud.visible = false
-	var width: float = maxf(1.0, viewport_size.x)
-	var height: float = maxf(1.0, viewport_size.y)
-	var ui_scale_step := (ui_scale_factor - 1.0) / 0.5
-	var margin: float = 10.0 if is_low else 12.0
-	var left_width: float = UILayerContractScript.run_left_width(profile)
-	var gameplay_left: float = left_width
-	var gameplay_width: float = max(1.0, width - gameplay_left)
-	var rail_content_left: float = margin + 12.0
-	var rail_content_width: float = left_width - rail_content_left * 2.0
-	var right_card_size := UILayerContractScript.run_status_card_size(profile)
-	var right_card_width: float = right_card_size.x
-	var body_font_size := Art10UISkinKitScript.scaled_font_size(13 if is_low else (16 if is_high else 14), ui_scale_factor)
-	var body_line_height := ceilf(scanner_legend_label.get_theme_font("font").get_height(body_font_size))
-	var title_font_size := Art10UISkinKitScript.scaled_font_size(16 if is_low else (20 if is_high else 18), ui_scale_factor)
-	var right_title_height := maxf(24.0 + 18.0 * ui_scale_step, ceilf(right_title_label.get_theme_font("font").get_height(title_font_size)))
-	var protocol_body_minimum_height := maxf(20.0, body_line_height)
-	# Two text lines, their gaps, the pressure track, and the authored 18 px
-	# top/bottom safe insets must fit before allocating either label.
-	var right_card_height: float = maxf(right_card_size.y, right_title_height + protocol_body_minimum_height + 52.0)
-	# The stable footer contains only the mine-risk plate and the action dock.
-	# Command feedback is a short overlay toast and must not reserve a third band.
-	var footer_geometry := UILayerContractScript.run_footer_geometry(profile)
-	var bottom_key_height: float = float(footer_geometry.get("key_height", 40.0))
-	var center_left: float = gameplay_left
-	var center_width: float = gameplay_width
-	var right_left: float = width - right_card_width - margin
-	var right_content_left: float = right_left + margin
-	var right_content_width: float = right_card_width - margin * 2.0
-	var scanner_title_height := maxf(28.0 + 14.0 * ui_scale_step, ceilf(scanner_title_label.get_theme_font("font").get_height(title_font_size)))
-	var scanner_title_top := 36.0 + 4.0 * ui_scale_step
-	var scanner_summary_height := maxf(20.0, body_line_height)
-	var scanner_map_top: float = scanner_title_top + scanner_title_height + scanner_summary_height + 4.0
-	var stats_line_spacing := maxi(2, int(round(float(2 if is_low else 3) * ui_scale_factor)))
-	var stats_height: float = maxf(48.0 + 20.0 * ui_scale_step, body_line_height * 2.0 + stats_line_spacing + 16.0)
-	var backpack_row_height := 46.0
-	var backpack_gap := 4.0
-	var backpack_capacity_gap := 8.0
-	var backpack_visible_rows := mini(current_backpack_item_count, 2 if ui_scale_factor >= 1.49 else 3)
-	var backpack_list_height := (
-		48.0
-		if current_backpack_item_count == 0
-		else backpack_row_height * backpack_visible_rows + backpack_gap * maxf(0.0, backpack_visible_rows - 1.0)
-	)
-	var backpack_header_height := 24.0 + 10.0 * ui_scale_step
-	var detail_font_size := Art10UISkinKitScript.scaled_font_size(Art10UISkinKitScript.font_size(&"hud_small"), ui_scale_factor)
-	var detail_line_count := 3 if current_backpack_item_count > 0 else 1
-	var backpack_detail_height := maxf(
-		44.0 + 12.0 * ui_scale_step,
-		ceilf(backpack_detail_label.get_theme_font("font").get_height(detail_font_size)) * detail_line_count
-		+ backpack_detail_label.get_theme_constant("line_spacing") * (detail_line_count - 1)
-		+ backpack_detail_label.get_theme_stylebox("normal").get_minimum_size().y
-	)
-	var backpack_capacity_height := 24.0 + 12.0 * ui_scale_step
-	var backpack_outer_padding := 6.0
-	var backpack_panel_height := (
-		backpack_outer_padding * 2.0
-		+ backpack_header_height
-		+ backpack_list_height
-		+ backpack_detail_height
-		+ backpack_capacity_height
-		+ backpack_gap * 2.0
-		+ backpack_capacity_gap
-	)
-	var map_aspect := float(current_map_dimensions.y) / float(current_map_dimensions.x) if current_map_dimensions.x > 0 else 1.0
-	var preferred_map_height := minf(rail_content_width, (rail_content_width - 16.0) * map_aspect + 16.0)
-	preferred_map_height = minf(preferred_map_height, 300.0 * height / 1080.0)
-	var map_available_height := height - 24.0 - scanner_map_top - stats_height - backpack_panel_height - 20.0
-	var scanner_map_height := maxf(80.0, minf(preferred_map_height, map_available_height))
-	var scanner_stats_top: float = scanner_map_top + scanner_map_height + 10.0
-	var backpack_top: float = scanner_stats_top + stats_height + 10.0
-	var backpack_available_height := maxf(168.0, height - backpack_top - 12.0)
-	if backpack_panel_height > backpack_available_height and backpack_visible_rows > 0:
-		var excess_per_row := ceilf(
-			(backpack_panel_height - backpack_available_height) / float(backpack_visible_rows)
-		)
-		backpack_row_height = maxf(44.0, backpack_row_height - excess_per_row)
-		backpack_list_height = (
-			backpack_row_height * backpack_visible_rows
-			+ backpack_gap * maxf(0.0, backpack_visible_rows - 1.0)
-		)
-		backpack_panel_height = (
-			backpack_outer_padding * 2.0
-			+ backpack_header_height
-			+ backpack_list_height
-			+ backpack_detail_height
-			+ backpack_capacity_height
-			+ backpack_gap * 2.0
-			+ backpack_capacity_gap
-		)
-	var preferred_key_width := (620.0 if is_low else 720.0) + 80.0 * ui_scale_step
-	var bottom_key_width: float = minf(preferred_key_width, gameplay_width - margin * 3.0)
-	bottom_key_width = maxf(minf(520.0, gameplay_width - margin * 3.0), bottom_key_width)
-	var bottom_key_left: float = gameplay_left + (gameplay_width - bottom_key_width) * 0.5
-	var bottom_key_top: float = float(footer_geometry.get("key_top", height - bottom_key_height - 8.0))
-	var mine_risk_height: float = float(footer_geometry.get("mine_risk_height", 40.0))
-	var mine_risk_top: float = float(footer_geometry.get("mine_risk_top", bottom_key_top - mine_risk_height - 4.0))
-	var mine_risk_width: float = (220.0 if is_low else (258.0 if is_high else 236.0)) + 24.0 * ui_scale_step
-	var mine_risk_left: float = gameplay_left + (gameplay_width - mine_risk_width) * 0.5
-	var preferred_encounter_width: float = 400.0 if is_low else (480.0 if is_high else 440.0)
-	var encounter_width: float = minf(preferred_encounter_width, maxf(220.0, gameplay_width * 0.38))
-	var encounter_height: float = 70.0
-	var encounter_left: float = clampf(gameplay_left + gameplay_width * 0.58, gameplay_left + margin, width - encounter_width - margin)
-	var encounter_top: float = clampf(height * 0.52 - encounter_height * 0.5, margin + 110.0, mine_risk_top - encounter_height - 12.0)
-	var gameplay_square_size: float = min(gameplay_width - margin * 2.0, height - margin * 2.0)
-	gameplay_square_size = max(320.0 if is_low else 420.0, gameplay_square_size)
-	var gameplay_square_left: float = gameplay_left + max(margin, (gameplay_width - gameplay_square_size) * 0.5)
-	if gameplay_square_left + gameplay_square_size > width - margin:
-		gameplay_square_left = max(gameplay_left + margin, width - margin - gameplay_square_size)
-	var gameplay_square_top: float = margin
-	var room_info_width: float = min(gameplay_square_size - 48.0, 420.0 if is_high else 340.0)
-	encounter_left = clampf(gameplay_square_left + gameplay_square_size * 0.58, gameplay_square_left + 20.0, gameplay_square_left + gameplay_square_size - encounter_width - 20.0)
-	encounter_top = clampf(gameplay_square_top + gameplay_square_size * 0.68, gameplay_square_top + 120.0, gameplay_square_top + gameplay_square_size - encounter_height - 24.0)
-
-	var left_rail_height := minf(
-		height - margin,
-		backpack_top + backpack_panel_height + 12.0
-	)
-	_set_rect(left_rail_art, Rect2(8, 12, left_width - 16, left_rail_height - 12))
-	_set_rect(left_backdrop, left_rail_art.get_rect().grow(-8.0))
-	left_backdrop.add_theme_stylebox_override("panel", _interior_band_style(Color(0.060, 0.065, 0.055, 0.98)))
-	_set_rect(right_backdrop, Rect2(right_left, margin, right_card_width, right_card_height))
-	_set_rect(status_card_art, Rect2(right_left, margin, right_card_width, right_card_height))
-	_set_rect(protocol_level_plate, Rect2())
-	var protocol_visible_border := 12.0
-	var protocol_left_inset := maxf(
-		float(status_card_art.get_patch_margin(SIDE_LEFT)),
-		right_card_width * 0.18
-	)
-	var protocol_top_inset := maxf(
-		protocol_visible_border + 6.0,
-		float(status_card_art.get_patch_margin(SIDE_TOP))
-	)
-	var protocol_right_inset := maxf(
-		protocol_visible_border + 6.0,
-		float(status_card_art.get_patch_margin(SIDE_RIGHT))
-	)
-	var protocol_bottom_inset := maxf(
-		protocol_visible_border + 6.0,
-		float(status_card_art.get_patch_margin(SIDE_BOTTOM))
-	)
-	var protocol_safe_rect := Rect2(
-		Vector2(right_left + protocol_left_inset, margin + protocol_top_inset),
-		Vector2(
-			maxf(1.0, right_card_width - protocol_left_inset - protocol_right_inset),
-			maxf(1.0, right_card_height - protocol_top_inset - protocol_bottom_inset)
-		)
-	)
-	var protocol_copy_left := protocol_safe_rect.position.x
-	var protocol_copy_width := protocol_safe_rect.size.x
-	var protocol_track_rect := Rect2(
-		protocol_copy_left,
-		protocol_safe_rect.end.y - 6.0,
-		protocol_copy_width,
-		6.0
-	)
-	status_card_art.set_meta("protocol_visible_border_thickness", protocol_visible_border)
-	status_card_art.set_meta("protocol_safe_rect", protocol_safe_rect)
-	_set_rect(protocol_pressure_track, protocol_track_rect)
-	protocol_pressure_track.set_meta("protocol_safe_rect", protocol_safe_rect)
-	_set_rect(protocol_pressure_fill, Rect2(protocol_track_rect.position, Vector2(protocol_track_rect.size.x * current_protocol_pressure / PROTOCOL_PRESSURE_MAX, protocol_track_rect.size.y)))
-	_set_rect(center_backdrop, Rect2(0, 0, 0, 0))
-	_set_rect(room_background_layer, Rect2(0, 0, 0, 0))
-	_set_rect(encounter_backdrop, Rect2(encounter_left, encounter_top, encounter_width, encounter_height))
-	_set_rect(bottom_backdrop, Rect2(bottom_key_left, bottom_key_top, bottom_key_width, bottom_key_height))
-	_set_rect(bottom_overlay_art, Rect2(bottom_key_left, bottom_key_top, bottom_key_width, bottom_key_height))
-	_set_rect(mine_risk_tag_art, Rect2(mine_risk_left, mine_risk_top, mine_risk_width, mine_risk_height))
-	_set_rect(resource_backdrop, Rect2(rail_content_left, scanner_stats_top, rail_content_width, stats_height))
-	_set_rect(scanner_text_mask, Rect2(rail_content_left, backpack_top, rail_content_width, backpack_panel_height))
-	_set_rect(room_text_mask, Rect2(0, 0, 0, 0))
-	_set_rect(threat_mask, Rect2(right_content_left, margin + 34.0, right_content_width, 42.0 if is_low else 50.0))
-	_set_rect(event_mask, Rect2(right_content_left, margin + (78.0 if is_low else 90.0), right_content_width, 24.0 if is_low else 30.0))
-	_set_rect(reward_mask, Rect2(0, 0, 0, 0))
-	_set_rect(player_sprite_layer, Rect2(0, 0, 0, 0))
-	_set_rect(player_tag_mask, Rect2(0, 0, 0, 0))
-	_set_rect(room_hint_softener, Rect2(0, 0, 0, 0))
-	_set_rect(scanner_glow_layer, Rect2(0, 0, 0, 0))
-	_set_rect(room_glow_layer, Rect2(0, 0, 0, 0))
-	_set_rect(protocol_glow_layer, protocol_safe_rect)
-	_set_rect(bottom_key_glow_layer, Rect2(bottom_key_left + 8.0, bottom_key_top + 8.0, bottom_key_width - 16.0, bottom_key_height - 16.0))
-	_set_rect(right_game_fill_layer, Rect2(0, 0, 0, 0))
-	left_backdrop.visible = true
-	left_rail_art.visible = true
-	right_backdrop.visible = false
+	var viewport := UILayerContractScript.viewport_size_from_profile(profile)
+	# Canvas-items stretch already converts logical pixels to the client size.
+	# A narrow OS window must not apply that reduction a second time.
+	if is_inside_tree():
+		viewport = viewport.max(get_viewport_rect().size)
+	current_layout_profile["actual_viewport_size"] = Vector2i(viewport)
+	var geometry := RunSurfaceModelScript.layout_geometry(current_layout_profile)
+	var protocol: Rect2 = geometry.protocol_rect
+	var rail: Rect2 = geometry.scanner_rail_rect
+	var description: Rect2 = geometry.description_rect
+	var action: Rect2 = geometry.action_rect
+	var risk: Rect2 = geometry.mine_risk_rect
+	_apply_ue_readability_tokens(current_layout_profile)
+	for label in [backpack_capacity_label, room_title_label, room_body_label, vitals_label, scanner_title_label, right_title_label, scanner_summary_label, command_feedback_label]:
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.max_lines_visible = -1
+		label.clip_text = false
+		label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	vitals_label.add_theme_font_size_override("font_size", right_body_label.get_theme_font_size("font_size"))
+	resource_label.visible = false
+	for hidden in [hud, right_backdrop, protocol_level_plate, center_backdrop, room_background_layer, player_sprite_layer, player_tag_mask, player_tag_label, room_hint_softener, scanner_glow_layer, room_glow_layer, threat_mask, event_mask, event_label, reward_mask, reward_label, right_game_fill_layer, layout_label, objective_label, backpack_detail_label]:
+		hidden.visible = false
+	_set_rect(status_card_art, protocol)
 	status_card_art.visible = true
-	# The generated level plate is a second framed rectangle. Layering it inside
-	# the audited protocol panel caused the double/plastic border reported by the
-	# player; keep its asset binding for governance tests but do not render it.
-	protocol_level_plate.visible = false
+	var safe := Rect2(protocol.position + Vector2(maxf(18.0, protocol.size.x * 0.18), 18.0), Vector2(protocol.size.x - maxf(18.0, protocol.size.x * 0.18) - 18.0, protocol.size.y - 36.0))
+	status_card_art.set_meta("protocol_safe_rect", safe)
+	status_card_art.set_meta("protocol_visible_border_thickness", 12.0)
+	var cursor := safe.position.y
+	for label in [right_title_label, right_body_label, vitals_label]:
+		label.size.x = safe.size.x
+		var line_height: float = label.get_minimum_size().y
+		_set_rect(label, Rect2(safe.position.x, cursor, safe.size.x, line_height))
+		label.visible = true
+		label.set_meta("protocol_safe_rect", safe)
+		cursor += line_height + 4.0
+	_set_rect(protocol_pressure_track, Rect2(safe.position.x, safe.end.y - 6.0, safe.size.x, 6.0))
 	protocol_pressure_track.visible = true
 	protocol_pressure_fill.visible = true
-	bottom_backdrop.add_theme_stylebox_override("panel", _panel_style(Color(0.055, 0.060, 0.050, 0.98), Color(0.46, 0.40, 0.27, 0.96), 1))
+	_set_rect(protocol_glow_layer, safe)
+	_update_protocol_presentation(current_protocol_level, current_protocol_pressure)
+	_set_rect(room_title_label, geometry.room_title_rect)
+	room_title_label.visible = true
+	_set_rect(room_text_mask, description)
+	room_text_mask.visible = not current_has_tutorial_popup
+	_set_rect(room_description_scroll, description.grow(-18.0))
+	room_description_scroll.visible = not current_has_tutorial_popup
+	room_body_label.visible = true
+	room_body_label.custom_minimum_size = Vector2.ZERO
+	room_body_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_set_rect(left_rail_art, rail)
+	_set_rect(left_backdrop, rail.grow(-8.0))
+	left_rail_art.visible = true
+	left_backdrop.visible = true
+	left_backdrop.add_theme_stylebox_override("panel", _interior_band_style(Color(0.060, 0.065, 0.055, 0.98)))
+	var inner := rail.grow(-18.0)
+	cursor = inner.position.y
+	for label in [scanner_title_label, scanner_summary_label]:
+		label.size.x = inner.size.x
+		var line_height: float = label.get_minimum_size().y
+		_set_rect(label, Rect2(inner.position.x, cursor, inner.size.x, line_height))
+		cursor += line_height + 4.0
+	var map_height := minf(inner.size.x, viewport.y * 0.29)
+	_set_rect(minimap_panel, Rect2(inner.position.x, cursor, inner.size.x, map_height))
+	minimap_panel.apply_layout_profile(current_layout_profile)
+	cursor += map_height + 8.0
+	scanner_legend_label.size.x = inner.size.x - 12.0
+	var currency_height := scanner_legend_label.get_minimum_size().y + 12.0
+	_set_rect(resource_backdrop, Rect2(inner.position.x, cursor, inner.size.x, currency_height))
+	_set_rect(scanner_legend_label, Rect2(inner.position.x + 6.0, cursor + 6.0, inner.size.x - 12.0, currency_height - 12.0))
+	resource_backdrop.visible = true
+	cursor += currency_height + 8.0
+	var bag_top := cursor
+	for label in [scanner_detail_label, backpack_capacity_label]:
+		label.size.x = inner.size.x
+		var line_height: float = label.get_minimum_size().y
+		_set_rect(label, Rect2(inner.position.x, cursor, inner.size.x, line_height))
+		cursor += line_height + 6.0
+	_set_rect(scanner_text_mask, Rect2(inner.position.x, bag_top, inner.size.x, inner.end.y - bag_top))
+	scanner_text_mask.visible = true
+	var list_width := maxf(1.0, inner.size.x - 12.0)
+	var cell_width := (list_width - 4.0) * 0.5
+	var header_height := 0.0
+	for label: Label in [backpack_supplies_header, backpack_tools_header]:
+		label.add_theme_font_size_override("font_size", Art10UISkinKitScript.scaled_font_size(13, ui_scale_factor))
+		label.size.x = cell_width
+		header_height = maxf(header_height, label.get_minimum_size().y)
+	_set_rect(backpack_supplies_header, Rect2(inner.position.x, cursor, cell_width, header_height))
+	_set_rect(backpack_tools_header, Rect2(inner.position.x + cell_width + 4.0, cursor, cell_width, header_height))
+	cursor += header_height + 4.0
+	var list_rect := Rect2(inner.position.x, cursor, inner.size.x, maxf(1.0, inner.end.y - cursor))
+	_set_rect(backpack_scroll, list_rect)
+	backpack_scroll.visible = current_backpack_item_count > 0
+	backpack_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	backpack_strip.columns = 2
+	backpack_strip.add_theme_constant_override("h_separation", 4)
+	backpack_strip.add_theme_constant_override("v_separation", 4)
+	backpack_strip.custom_minimum_size = Vector2(list_width, 0.0)
+	for child in backpack_strip.get_children():
+		var button := child as Button
+		if button == null:
+			if child is Control:
+				child.custom_minimum_size = Vector2(cell_width, 0.0)
+			continue
+		button.add_theme_font_size_override("font_size", Art10UISkinKitScript.scaled_font_size(13, ui_scale_factor))
+		button.add_theme_constant_override("icon_max_width", roundi(20.0 * minf(ui_scale_factor, 1.25)))
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		button.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+		button.size.x = cell_width
+		button.custom_minimum_size = Vector2(cell_width, maxf(38.0, button.get_minimum_size().y + 8.0))
+	var watermark_size := Vector2.ONE * minf(80.0, minf(list_rect.size.x, list_rect.size.y))
+	_set_rect(backpack_empty_watermark, Rect2(list_rect.get_center() - watermark_size * 0.5, watermark_size))
+	backpack_empty_watermark.visible = current_backpack_item_count == 0
+	scanner_text_mask.set_meta("content_item_count", current_backpack_item_count)
+	scanner_text_mask.set_meta("content_layout_rects", {"panel": scanner_text_mask.get_rect(), "header": scanner_detail_label.get_rect(), "list": list_rect, "detail": Rect2(), "capacity": backpack_capacity_label.get_rect()})
+	_set_rect(bottom_backdrop, action)
+	_set_rect(bottom_overlay_art, action)
 	bottom_backdrop.visible = true
 	bottom_overlay_art.visible = true
 	bottom_overlay_art.draw_center = false
-	encounter_backdrop.visible = false
-	center_backdrop.visible = false
-	room_background_layer.visible = false
-	player_sprite_layer.visible = false
-	resource_backdrop.visible = true
-	var resource_band := _interior_band_style(Color(0.075, 0.080, 0.063, 0.96))
-	resource_backdrop.add_theme_stylebox_override("panel", resource_band)
-	scanner_text_mask.visible = true
-	scanner_text_mask.add_theme_stylebox_override("panel", _interior_band_style(Color(0.060, 0.065, 0.055, 0.98)))
-	threat_mask.visible = false
-	event_mask.visible = false
-	room_glow_layer.visible = false
-	room_text_mask.visible = false
-	room_hint_softener.visible = false
-	player_tag_mask.visible = false
-	protocol_glow_layer.visible = true
-	bottom_key_glow_layer.visible = false
-	right_game_fill_layer.visible = false
-
-	_set_rect(scanner_title_label, Rect2(rail_content_left + 6.0, scanner_title_top, rail_content_width - 12.0, scanner_title_height))
-	_set_rect(scanner_summary_label, Rect2(rail_content_left + 2.0, scanner_title_top + scanner_title_height, rail_content_width - 4.0, scanner_summary_height))
-	_set_rect(minimap_panel, Rect2(rail_content_left, scanner_map_top, rail_content_width, scanner_map_height))
-	minimap_panel.apply_layout_profile(profile)
-	_set_rect(scanner_legend_label, Rect2(rail_content_left + 10.0, scanner_stats_top + 8.0, rail_content_width - 20.0, stats_height - 16.0))
-	var backpack_content_left := rail_content_left + backpack_outer_padding
-	var backpack_content_width := rail_content_width - backpack_outer_padding * 2.0
-	var backpack_header_rect := Rect2(
-		backpack_content_left,
-		backpack_top + backpack_outer_padding,
-		backpack_content_width,
-		backpack_header_height
-	)
-	var backpack_list_rect := Rect2(
-		backpack_content_left,
-		backpack_header_rect.end.y + backpack_gap,
-		backpack_content_width,
-		backpack_list_height
-	)
-	var backpack_detail_rect := Rect2(
-		backpack_content_left,
-		backpack_list_rect.end.y + backpack_gap,
-		backpack_content_width,
-		backpack_detail_height
-	)
-	var backpack_capacity_rect := Rect2(
-		backpack_content_left,
-		backpack_detail_rect.end.y + backpack_capacity_gap,
-		backpack_content_width,
-		backpack_capacity_height
-	)
-	_set_rect(scanner_detail_label, backpack_header_rect)
-	_set_rect(backpack_scroll, backpack_list_rect if current_backpack_item_count > 0 else Rect2())
-	backpack_scroll.visible = current_backpack_item_count > 0
-	backpack_scroll.mouse_filter = Control.MOUSE_FILTER_STOP if backpack_scroll.visible else Control.MOUSE_FILTER_IGNORE
-	backpack_scroll.vertical_scroll_mode = (
-		ScrollContainer.SCROLL_MODE_AUTO
-		if current_backpack_item_count > backpack_visible_rows
-		else ScrollContainer.SCROLL_MODE_DISABLED
-	)
-	backpack_strip.custom_minimum_size = Vector2(maxf(80.0, backpack_content_width - 12.0), 0.0)
-	_set_rect(backpack_empty_watermark, backpack_list_rect if current_backpack_item_count == 0 else Rect2())
-	backpack_empty_watermark.visible = current_backpack_item_count == 0
-	_set_rect(backpack_detail_label, backpack_detail_rect)
-	_set_rect(backpack_capacity_label, backpack_capacity_rect)
-	scanner_text_mask.set_meta("content_item_count", current_backpack_item_count)
-	scanner_text_mask.set_meta("content_layout_rects", {
-		"panel": Rect2(rail_content_left, backpack_top, rail_content_width, backpack_panel_height),
-		"header": backpack_header_rect,
-		"list": backpack_list_rect,
-		"detail": backpack_detail_rect,
-		"capacity": backpack_capacity_rect,
-	})
-
-	_set_rect(room_title_label, Rect2(gameplay_square_left + 26.0, gameplay_square_top + 22.0, room_info_width - 28.0, 24.0))
-	_set_rect(room_body_label, Rect2(0, 0, 0, 0))
-	_set_rect(objective_label, Rect2(0, 0, 0, 0))
-	_set_rect(player_tag_label, Rect2(0, 0, 0, 0))
-	_set_rect(encounter_title_label, Rect2(0, 0, 0, 0))
-	_set_rect(encounter_body_label, Rect2(0, 0, 0, 0))
-	var encounter_option_rect := Rect2(encounter_left, encounter_top, encounter_width, encounter_height)
-	encounter_option_base_rect = encounter_option_rect
-	_set_rect(encounter_backdrop, encounter_option_rect)
-	_set_rect(encounter_options_box, Rect2(
-		encounter_option_rect.position + Vector2(5.0, 5.0),
-		encounter_option_rect.size - Vector2(10.0, 10.0)
-	))
-	_set_rect(encounter_result_label, Rect2(0, 0, 0, 0))
-	_set_rect(resource_label, Rect2())
-	resource_label.visible = false
-	var mine_icon_reserve := mine_risk_width * 0.27
-	_set_rect(
-		mine_risk_label,
-		Rect2(
-			mine_risk_left + mine_icon_reserve,
-			mine_risk_top + 2.0,
-			mine_risk_width - mine_icon_reserve - 10.0,
-			mine_risk_height - 4.0
-		)
-	)
-
-	var protocol_title_body_gap := 4.0
-	var protocol_body_track_gap := 6.0
-	var right_title_top := protocol_safe_rect.position.y
-	var protocol_copy_bottom := protocol_track_rect.position.y - protocol_body_track_gap
-	_set_rect(right_title_label, Rect2(protocol_copy_left, right_title_top, protocol_copy_width, right_title_height))
-	right_title_label.set_meta("protocol_safe_rect", protocol_safe_rect)
-	_set_rect(
-		right_body_label,
-		Rect2(
-			protocol_copy_left,
-			right_title_top + right_title_height + protocol_title_body_gap,
-			protocol_copy_width,
-			maxf(1.0, protocol_copy_bottom - (right_title_top + right_title_height + protocol_title_body_gap))
-		)
-	)
-	right_body_label.set_meta("protocol_safe_rect", protocol_safe_rect)
-	right_body_label.autowrap_mode = TextServer.AUTOWRAP_OFF
-	right_body_label.max_lines_visible = 1
-	right_body_label.clip_text = false
-	right_body_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
-	_set_rect(event_label, Rect2(0, 0, 0, 0))
-	event_label.visible = false
-	_set_rect(reward_label, Rect2(0, 0, 0, 0))
-	var toast_height := 36.0 + 8.0 * ui_scale_step
-	var toast_width := minf(gameplay_width - margin * 4.0, 520.0 + 80.0 * ui_scale_step)
-	var toast_left := gameplay_left + (gameplay_width - toast_width) * 0.5
-	var toast_top := mine_risk_top - toast_height - 8.0
-	_set_rect(command_feedback_art, Rect2(toast_left, toast_top, toast_width, toast_height))
-	_set_rect(command_feedback_label, Rect2(toast_left + 18.0, toast_top + 4.0, toast_width - 36.0, toast_height - 8.0))
-	_set_rect(layout_label, Rect2(right_content_left, height - 46.0, right_content_width, 24))
-	layout_label.visible = false
-
+	_set_rect(action_bar, action.grow(-6.0))
+	for button: Button in action_buttons.values():
+		button.custom_minimum_size = Vector2(0.0, action_bar.size.y)
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		button.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	_refresh_action_button_visibility()
+	_set_rect(mine_risk_tag_art, risk)
+	_set_rect(mine_risk_label, Rect2(risk.position + Vector2(risk.size.x * 0.27, 2.0), Vector2(risk.size.x * 0.73 - 10.0, risk.size.y - 4.0)))
+	var feedback_rect := Rect2(action.position.x, risk.position.y - 126.0, action.size.x, 120.0)
+	_set_rect(command_feedback_scroll, feedback_rect)
+	command_feedback_scroll.visible = command_feedback_label.visible
+	command_feedback_art.visible = false
 	_set_rect(action_hint_label, Rect2())
 	action_hint_label.visible = false
-	_set_rect(action_bar, Rect2(bottom_key_left + 12.0, bottom_key_top + 4.0, bottom_key_width - 24.0, bottom_key_height - 8.0))
-	var action_count := maxi(1, action_buttons.size())
-	var action_button_width := maxf(0.0, (action_bar.size.x - float(action_count - 1) * 4.0) / float(action_count))
-	for button_value in action_buttons.values():
-		var action_button := button_value as Button
-		if action_button != null:
-			action_button.custom_minimum_size = Vector2(action_button_width, maxf(28.0, action_bar.size.y))
-	_refresh_action_button_visibility()
-	action_bar.z_as_relative = true
-	action_bar.z_index = 20
-	_set_rect(feedback_slot, Rect2(0, 0, width, height))
-	_set_rect(overlay_slot, Rect2(0, 0, width, height))
-	_set_rect(modal_slot, Rect2(0, 0, width, height))
+	encounter_option_base_rect = Rect2(action.position.x + action.size.x * 0.35, risk.position.y - 85.0, action.size.x * 0.65, 72.0)
+	_fit_encounter_option_geometry()
+	for slot in [feedback_slot, overlay_slot, modal_slot]:
+		_set_rect(slot, Rect2(Vector2.ZERO, viewport))
 	if active_modal_visibility_policy != &"":
 		apply_modal_visibility_policy(active_modal_visibility_policy)
 
@@ -929,6 +738,9 @@ func show_command_feedback(result: Dictionary) -> void:
 	var feedback_copy := _feedback_copy(text)
 	command_feedback_label.text = feedback_copy
 	command_feedback_label.visible = feedback_copy != ""
+	command_feedback_scroll.visible = command_feedback_label.visible
+	command_feedback_scroll.scroll_vertical = 0
+	_schedule_content_layout()
 	# The former full-width framed "action completed" bar is intentionally
 	# retired. A short unframed rejection remains readable without becoming a
 	# second permanent HUD layer.
@@ -946,6 +758,8 @@ func clear_command_feedback() -> void:
 		command_feedback_art.visible = false
 	if command_feedback_label != null:
 		command_feedback_label.visible = false
+	if command_feedback_scroll != null:
+		command_feedback_scroll.visible = false
 
 
 func advance_command_feedback(delta: float) -> void:
@@ -958,6 +772,8 @@ func advance_command_feedback(delta: float) -> void:
 		command_feedback_art.visible = false
 	if command_feedback_label != null:
 		command_feedback_label.visible = false
+	if command_feedback_scroll != null:
+		command_feedback_scroll.visible = false
 
 
 func _refresh_backpack_strip(items_variant: Variant) -> void:
@@ -976,7 +792,7 @@ func _refresh_backpack_strip(items_variant: Variant) -> void:
 		if item_variant is Dictionary:
 			var item: Dictionary = item_variant
 			var presentation := RunUIViewModel.item_presentation(item)
-			signature_parts.append("%s:%s:%s:%s:%s:%s:%s" % [
+			signature_parts.append("%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
 				str(item.get("instance_ids", [item.get("instance_id", "")])),
 				presentation.get("display_name", "未命名物资"),
 				presentation.get("quantity", 1),
@@ -984,6 +800,8 @@ func _refresh_backpack_strip(items_variant: Variant) -> void:
 				presentation.get("rarity_text", "[?] 未鉴定"),
 				presentation.get("collectible_level", 0),
 				presentation.get("short_description", ""),
+				item.get("item_type", &""),
+				item.get("can_consume", false),
 			])
 	var signature := ",".join(signature_parts)
 	if signature == last_backpack_signature and backpack_strip.get_child_count() > 0:
@@ -998,31 +816,33 @@ func _refresh_backpack_strip(items_variant: Variant) -> void:
 			backpack_detail_label.tooltip_text = ""
 		return
 	var first_item: Dictionary = {}
-	for index in range(items.size()):
-		if not (items[index] is Dictionary):
+	var columns := RunSurfaceModelScript.backpack_columns(items)
+	var slots: Array = []
+	for row in range(maxi(columns[0].size(), columns[1].size())):
+		for column: Array in columns:
+			slots.append(column[row] if row < column.size() else {})
+	for index in range(slots.size()):
+		if (slots[index] as Dictionary).is_empty():
+			var space := Control.new()
+			space.name = "BackpackColumnSpace%d" % index
+			space.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			backpack_strip.add_child(space)
 			continue
-		var item: Dictionary = (items[index] as Dictionary).duplicate(true)
+		var item: Dictionary = (slots[index] as Dictionary).duplicate(true)
 		if first_item.is_empty():
 			first_item = item.duplicate(true)
 		var presentation := RunUIViewModel.item_presentation(item)
 		var rarity: Dictionary = presentation.get("rarity", {})
 		var rarity_color: Color = rarity.get("color", PresentationTheme.color_for_key(&"ui.muted"))
-		var item_meta: Array[String] = [String(presentation.get("rarity_text", "[?] 未鉴定"))]
-		var collectible_level_text := String(presentation.get("collectible_level_text", ""))
-		if collectible_level_text != "":
-			item_meta.append(collectible_level_text)
-		item_meta.append("%s重" % presentation.get("weight", 0))
 		var slot := Button.new()
 		slot.name = "BackpackItem%d" % index
 		slot.custom_minimum_size = Vector2(0, 46)
 		slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		slot.focus_mode = Control.FOCUS_ALL
 		slot.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		slot.text = "%s ×%d\n%s" % [
-			_compact_line(String(presentation.get("display_name", "未命名物资")), 8),
-			int(presentation.get("quantity", 1)),
-			" · ".join(item_meta),
-		]
+		slot.text = "%s ×%d" % [String(presentation.get("display_name", "未命名物资")), int(presentation.get("quantity", 1))]
+		slot.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		slot.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 		slot.tooltip_text = String(presentation.get("detail_text", "尚未选择物品。"))
 		slot.icon = Art24ItemVisualCatalog.texture_for(item)
 		slot.expand_icon = true
@@ -1062,8 +882,32 @@ func _refresh_backpack_strip(items_variant: Variant) -> void:
 
 
 func _reflow_backpack_content_layout() -> void:
+	_content_layout_pending = false
 	if not current_layout_profile.is_empty():
 		apply_layout_profile(current_layout_profile)
+
+
+func _schedule_content_layout() -> void:
+	if not _content_layout_pending:
+		_content_layout_pending = true
+		call_deferred("_reflow_backpack_content_layout")
+
+
+func _wrap_text_scroll(label: Label, node_name: String) -> ScrollContainer:
+	var scroll := ScrollContainer.new()
+	scroll.name = node_name
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	label.get_parent().add_child(scroll)
+	scroll.z_as_relative = label.z_as_relative
+	scroll.z_index = label.z_index
+	label.reparent(scroll, false)
+	label.z_as_relative = true
+	label.z_index = 0
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return scroll
 
 
 func _show_backpack_item_detail(item: Dictionary) -> void:
@@ -1446,6 +1290,8 @@ func blocks_world_pointer(viewport_position: Vector2) -> bool:
 		mine_risk_tag_art,
 		encounter_backdrop,
 		command_feedback_art,
+		command_feedback_scroll,
+		room_description_scroll,
 		action_bar,
 	]:
 		if (

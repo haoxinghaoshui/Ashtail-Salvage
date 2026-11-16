@@ -1,0 +1,750 @@
+{
+  "status": "SOURCE_FULL_PASS_TARGET_PACK_PASS",
+  "source_commit": "960306b566a8feeb6f8e24a9a75c2df87af32605",
+  "source_report_sha256": "e59d4ba692918c87ed0bdd4d5e54a3bfb7d1872e7d0569443de3e75ca7134afc",
+  "source_run_id": "20261116T103338276Z_192cae60",
+  "source_runner_count": 183,
+  "source_game_tree": "b5082abdebb59b9dd2c4e52be1007ef12b9201e6",
+  "target_game_tree": "6e1a6bc4ee969d25f579c56a224c589d94d3fd27",
+  "parent_a1_commit": "0dd57116a8479e2fe6ee4ef7b1083e0aa01d8151",
+  "identity_only_difference": [
+    "application/config/name",
+    "application/config/use_custom_user_dir",
+    "application/config/custom_user_dir_name"
+  ],
+  "runners": [
+    {
+      "id": "G37_COMMAND_SEQUENCE",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "G39_NAVIGATION_BOUNDARY",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "I04_RUN_SCENE_CONTRACT",
+      "status": "PASS"
+    },
+    {
+      "id": "I04_ART21R2_NO_FLAGS",
+      "status": "PASS"
+    },
+    {
+      "id": "I04_ART21R2_MODAL",
+      "status": "PASS"
+    },
+    {
+      "id": "I04_ART21R2_FULL_MAP",
+      "status": "PASS"
+    },
+    {
+      "id": "I04_ART21R2_SPARSE_MAP",
+      "status": "PASS"
+    },
+    {
+      "id": "M2_LUA_UE_EFFECT_FIRST_LOOP",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "M3_MINIMUM_ITEM_DROP_LOOP",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "M3H_ITEM_LOOP_HARDENING",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "M3R_ITEM_USABILITY_COMPLETION",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "M5_ITEM_DROP_LOOP_FULL_CONTENT",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "M6_REAL_ASSET_DEPLOY_SETTLEMENT_LOOP",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "G41_IN_RUN_CORE_GAMEPLAY_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "M7_CONTENT_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "M7_META_UI_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "I5_CAREER_PROGRESSION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z1_DEMO_PROGRESSION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z1_SUPPLIES",
+      "status": "PASS"
+    },
+    {
+      "id": "I1_RUNTIME_SAFETY",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "I1_SAVE_RELIABILITY",
+      "status": "PASS"
+    },
+    {
+      "id": "I1_TERMINAL_AUTHORITY",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "I1_REFRESH_SCOPE",
+      "status": "PASS"
+    },
+    {
+      "id": "I1_COMBAT_REFRESH",
+      "status": "PASS"
+    },
+    {
+      "id": "I1_STATE_AUTHORITY",
+      "status": "PASS"
+    },
+    {
+      "id": "I1_ANIMATION_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "I1_COMMAND_MODULE",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "I1_UI_INTERACTION",
+      "status": "PASS"
+    },
+    {
+      "id": "I1_PROJECT_METADATA",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "ART21_MAIN_MENU_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "I5_MAIN_MENU_VISUALS",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_CHARACTER_PRESENTATION_SWAP",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_MAIN_MENU_ANCHOR_TEXT",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_MAIN_MENU_TRANSITION_COORDINATOR",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_MAIN_MENU_TRANSITION_FALLBACK",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_DEPLOY_MAP_PROJECTION",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_DEPLOY_META_ACTION_TRANSACTION",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_WAREHOUSE_BATCH_SALE",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_TALENT_SYSTEM",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_OUT_OF_RUN_PLAYER_ARCHIVE",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_OUT_OF_RUN_PRODUCTION_JOURNEY",
+      "status": "PASS"
+    },
+    {
+      "id": "ART22_DEPLOY_PREP_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "ART22_DEPLOY_PREP_MAIN_ROUTE",
+      "status": "PASS"
+    },
+    {
+      "id": "ART23_LONG_TERM_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "ART23_LONG_TERM_MAIN_ROUTE",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_LONG_TERM_TASK_ARCHIVE",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_LONG_TERM_MODULE_WORKSPACE",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_WORLD_INTERACTION_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_PLAYER_MOTION_PROJECTION",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_ITEM_RARITY_AUTHORITY_ROUNDTRIP",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_ITEM_RARITY_PRESENTATION",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_INVENTORY_HOVER_FOCUS",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_RUN_INFORMATION_SURFACE",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_MAP_PUBLIC_INFORMATION_INPUT",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_RUNTIME_MODAL_PRIORITY",
+      "status": "PASS"
+    },
+    {
+      "id": "ART24_IN_RUN_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "ART24_RUN_SURFACE_LAYER_ROUTING",
+      "status": "PASS"
+    },
+    {
+      "id": "ART24_WORLD_CONTEXT_POPUP_LAYOUT",
+      "status": "PASS"
+    },
+    {
+      "id": "ART24_MAP_OVERLAY_LAYOUT",
+      "status": "PASS"
+    },
+    {
+      "id": "ART24_CONTEXT_ANCHOR_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "ART24_INVENTORY_PANEL_LAYOUT",
+      "status": "PASS"
+    },
+    {
+      "id": "ART24_MAP_OVERLAY_SCENE",
+      "status": "PASS"
+    },
+    {
+      "id": "ART24_RESULT_PANEL_SCENE",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_ROUTE_AUTHORITY_LIFECYCLE",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_SETTINGS_TRANSACTION",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_SETTINGS_SHELL_WIRING",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_RUNTIME_INPUT_PROFILE",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_MODAL_FOCUS_LIFECYCLE",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_ACCESSIBILITY_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_ASSET_BINDING",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_COMBAT_ROOM_EXPERIENCE",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_SPECIAL_ROOM_PLAYER_EXPERIENCE",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_TERMINAL_RESULT_AUTHORITY",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "I2_TERMINAL_COMMIT_RECOVERY",
+      "status": "PASS"
+    },
+    {
+      "id": "I2_COMBAT_FRAME_BASELINE",
+      "status": "PASS"
+    },
+    {
+      "id": "I3_MAP_LOCAL_CONTEXT_INTERACTION",
+      "status": "PASS"
+    },
+    {
+      "id": "I3_HUD_ITEM_INPUT_CHARACTER",
+      "status": "PASS"
+    },
+    {
+      "id": "I3_LONG_TERM_PLAYER_CONTRACT",
+      "status": "PASS"
+    },
+    {
+      "id": "I3_COMBAT_SPECIAL_RESULT_RUNTIME",
+      "status": "PASS_WITH_CLEANUP_DIAGNOSTIC"
+    },
+    {
+      "id": "I3_RUNTIME_MODAL_LAYOUT_MODEL",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_RUN_SCENE_ARCHITECTURE_BOUNDARY",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_INPUT_MODAL_AUTHORITY",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_COMBAT_ATTACK_CONTRACT",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_COMBAT_ROOM_VISUAL_HIERARCHY",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_PRODUCTION_COMBAT_OBSTACLE_JOURNEY",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_PLAYER_MOVEMENT_APPEARANCE",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_TUTORIAL_MAP_MODE",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_TUTORIAL_PLAYER_JOURNEY",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_TUTORIAL_RESPONSIVE_LAYOUT",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_FONT_SURFACE_COVERAGE",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_FONT_RASTER_POLICY",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_PLAYER_COPY_LEAKAGE",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_UI_COMPOSITION_CONTRACT",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_UI_MATERIAL_SAFE_ZONE",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_PLAYER_FEEDBACK_AUDIO",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_WORLD_OBJECT_PRESENTATION_CONTRACT",
+      "status": "PASS"
+    },
+    {
+      "id": "I3R_RUN_FOCUS_LAYOUT",
+      "status": "PASS"
+    },
+    {
+      "id": "I3_PRODUCTION_INPUT_JOURNEY",
+      "status": "PASS"
+    },
+    {
+      "id": "I3_PRODUCTION_FULL_BAG_REPLACEMENT",
+      "status": "PASS"
+    },
+    {
+      "id": "I3_PRODUCTION_TERMINAL_BRANCHES",
+      "status": "PASS"
+    },
+    {
+      "id": "I4_DEBUG_SANDBOX",
+      "status": "PASS"
+    },
+    {
+      "id": "I4_QUANTITY_TRANSACTION",
+      "status": "PASS"
+    },
+    {
+      "id": "I4_DEPLOY_QUANTITY_UI",
+      "status": "PASS"
+    },
+    {
+      "id": "I4_IN_RUN_ITEM_AGGREGATION",
+      "status": "PASS"
+    },
+    {
+      "id": "I4_DEPLOY_INFORMATION_LAYOUT",
+      "status": "PASS"
+    },
+    {
+      "id": "I4_FONT_ROLE_RASTER",
+      "status": "PASS"
+    },
+    {
+      "id": "I4_LONG_TERM_NAVIGATION",
+      "status": "PASS"
+    },
+    {
+      "id": "I4_IN_RUN_VISUAL_PHYSICS",
+      "status": "PASS"
+    },
+    {
+      "id": "Z1_EVENT_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "Z1_MONSTER_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "Z1_RUNTIME_BRIDGE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z1_SCENE_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z1_EVENT_ROOM_PROJECTION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z1_EVENT_ROOM_STATE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z1_EVENT_ROOM_UI",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_ACTION_TRANSACTION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_VITALS_STATUS",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_VITALS_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_CAPACITY",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_COMBAT_TRANSACTION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_RUN_CHECKPOINT",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_RUNTIME_PERSISTENCE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_RESUME_SCENE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_CAPACITY_UI",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_TERMINAL_INT64",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_STATUS_LIFECYCLE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_CONTENT_ELIGIBILITY",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_CONTENT_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_CONTENT_REGISTRY",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_ECONOMY_EVENTS",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_EVENT_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_EVENT_UI",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_GOAL_ACCEPTANCE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_GOAL_TIER_UI",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_GROWTH_RULES",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_INFORMATION_EVENTS",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_LOOT_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_MOVEMENT_RETREAT",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_OPENING_ATTACK_GATE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_OPENING_HOOKS",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_OPENING_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_OPENING_OFFER",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_OPENING_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_OPENING_UI",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_OVERLAY_PREVIEW",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_OVERLAYS",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_PROCESS_EVENTS",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_PROCESS_LOOT_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_PROFILE_RESET",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_PROGRESSION_PROFILE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_PROGRESSION_UI",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_QUEST_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_RESEARCH_CRAFTING",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_ROOM_PIPELINE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_RUNTIME_PERFORMANCE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_SEARCH_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_SEARCH_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_SETTLEMENT_SERVICE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_SUPPLY_COMBAT_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_SUPPLY_INTEGRATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_SUPPLY_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_TALENT_CATALOG",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_TALENT_RUNTIME",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_TERMINAL_SELECTION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_TUTORIAL_PROGRESSION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_CONTENT_RUNTIME_BINDING",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_FORMAL_CLAIM_RETRY",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_FORMAL_EVENT_OVERLAY",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_FORMAL_FREIGHT_GOALS",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_FORMAL_GOAL_JOURNEY",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_RUNTIME_LOAD_PROFILE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_TERMINAL_DURABLE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_SNAPSHOT_PROJECTION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_UI_ADAPTATION",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_NEW_PLAYER_JOURNEY",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_SUPPLY_EVENT_JOURNEY",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_EVENT_DIALOGUE_SOURCE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_RULE_DIGEST",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_CONTENT_JOURNEY",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_TERMINAL_UI_LIFECYCLE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_EXCLUSIVE_DROP",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_RETREAT_RESTORE",
+      "status": "PASS"
+    },
+    {
+      "id": "Z2_EXCLUSIVE_DROP_INTEGRATION",
+      "status": "PASS"
+    }
+  ],
+  "target_validation_sha256": "5c7a9293061d57585da006e4aba1afc18eff579ed29df2cbce28974b24e8c689"
+}

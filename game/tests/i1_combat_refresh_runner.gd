@@ -44,8 +44,8 @@ func _run() -> void:
 		_finish([], [])
 		return
 
-	var start_result: Dictionary = bus.dispatch(&"start_demo_run")
-	_require(bool(start_result.get("ok", false)), "demo run could not be started")
+	var start_result: Dictionary = preload("res://tests/z2_legacy_main_fixture.gd").start(run_scene)
+	_require(bool(start_result.get("ok", false)), "qualified standard run could not be started")
 	run_scene.call("_show_run_screen")
 	context.max_hp = 10000
 	context.hp = 10000
@@ -95,14 +95,18 @@ func _run() -> void:
 	for scope in observed_scopes:
 		_require(scope == &"combat", "damage emitted a non-combat state scope")
 	var run_surface: Variant = run_scene.get("run_surface")
-	var combat_status_label: Variant = run_surface.get("scanner_legend_label") if run_surface != null else null
-	_require(combat_status_label != null, "production combat status label is missing")
+	var combat_status_label := run_surface.get("vitals_label") as Label if run_surface != null else null
+	_require(combat_status_label != null, "production protocol vitals label is missing")
 	if combat_status_label != null:
-		var expected_hp_ratio := String(run_surface.call(
-			"_compact_stat_token",
-			"%s/%s" % [context.hp, context.max_hp]
-		))
-		_require(String(combat_status_label.text).contains(expected_hp_ratio), "lightweight combat refresh did not expose current HP")
+		var expected_hp_line := "生命 %s/%s" % [context.hp, context.max_hp]
+		_require(combat_status_label.text.get_slice("\n", 0) == expected_hp_line, "lightweight combat refresh did not expose exact current/max HP")
+		_require(combat_status_label.is_visible_in_tree(), "current HP exists only in a hidden control")
+		_require(root.get_visible_rect().encloses(combat_status_label.get_global_rect()), "current HP is outside the viewport")
+		_require(not combat_status_label.clip_text and combat_status_label.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING, "current HP is clipped or abbreviated")
+		var font_size := combat_status_label.get_theme_font_size("font_size")
+		var hp_width := combat_status_label.get_theme_font("font").get_string_size(expected_hp_line, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		_require(font_size >= 13 and hp_width <= combat_status_label.size.x + 0.5, "complete current/max HP does not fit readable text width")
+		_require(combat_status_label.get_minimum_size().y <= combat_status_label.size.y + 0.5, "visible protocol vitals clip their native text height")
 
 	for warmup_index in range(4):
 		bus.call("_emit_state")

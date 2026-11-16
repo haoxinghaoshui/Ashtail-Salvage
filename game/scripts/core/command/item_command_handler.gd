@@ -73,12 +73,28 @@ func _rule_outcome(context: RunContext, result: Dictionary, operation: StringNam
 func _equipment_outcome(context: RunContext, instance_id: String, equip: bool) -> Dictionary:
 	if context == null or context.asset_ledger == null:
 		return {"action_result": _blocked(&"not_ready", "not_ready"), "emit_state": false}
+	var current_z2 := RunSettlementService.applies_to(context)
+	var before := RunStateSnapshot.capture_context(context) if current_z2 else {}
+	var equipped_before := context.asset_ledger.get_items_by_location(RunAssetLedger.LOCATION_EQUIPPED)
+	var capacities := {"backpack_capacity": context.asset_ledger.backpack_capacity, "failure_salvage_capacity": context.asset_ledger.failure_salvage_capacity}
 	var result: Dictionary
 	if equip:
 		result = context.asset_ledger.equip_inventory_item(instance_id)
 	else:
 		result = context.asset_ledger.unequip_item(instance_id)
-	RunInventory.apply_equipment_change(context, result)
+	if current_z2 and bool(result.get("ok", false)):
+		# The ledger preflights the move. Supply runtime owns the complete stat
+		# delta, including capacity effects earned by this equipment instance.
+		context.asset_ledger.backpack_capacity = int(capacities.backpack_capacity)
+		context.asset_ledger.failure_salvage_capacity = int(capacities.failure_salvage_capacity)
+		var changed: Dictionary = Z2SupplyRuntime.apply_equipment_change(context, equipped_before, context.asset_ledger.get_items_by_location(RunAssetLedger.LOCATION_EQUIPPED))
+		if not changed.get("ok", false):
+			RunStateSnapshot.install_context(context, before)
+			result = changed
+		else:
+			result["capacity"] = context.asset_ledger.get_capacity_snapshot()
+	elif not current_z2:
+		RunInventory.apply_equipment_change(context, result)
 	context.asset_ledger.sync_compat_fields(context)
 	if bool(result.get("ok", false)):
 		context.blocked_reason = ""

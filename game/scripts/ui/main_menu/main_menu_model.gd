@@ -54,7 +54,7 @@ static func build() -> Dictionary:
 		],
 		"notice": {
 			"title": "基地公告",
-			"body": "今日回收区域已开放；完成整备后从洞口出发，长期记录可在基地下层查看。",
+			"body": "整备完成后即可出发。\n长期记录请到基地下层查看。",
 		},
 		"shortcuts": [
 			{

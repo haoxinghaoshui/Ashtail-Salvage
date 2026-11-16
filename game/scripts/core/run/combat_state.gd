@@ -4,6 +4,7 @@ class_name CombatState
 const RunStateMachineScript := preload("res://scripts/core/run/run_state_machine.gd")
 const RunBalanceCatalogScript := preload("res://scripts/core/run/run_balance_catalog.gd")
 const RunEffectApplierScript := preload("res://scripts/core/run/run_effect_applier.gd")
+const Z2Talents := preload("res://scripts/core/progression/z2_talent_runtime.gd")
 
 const BASE_MINE_DAMAGE := RunBalanceCatalogScript.BASE_MINE_DAMAGE
 const MIN_MINE_DAMAGE := RunBalanceCatalogScript.MIN_MINE_DAMAGE
@@ -37,8 +38,9 @@ static func take_mine_hit(context: RunContext, fail_authority = null) -> int:
 static func apply_mine_hit(context: RunContext, fail_authority = null) -> Dictionary:
 	if context == null:
 		return {"ok": false, "reason": "no_active_run", "facts": {}}
-	var immune := context.mine_immunity > 0
-	var damage: int = RunBalanceCatalogScript.mine_damage(context.mine_dmg_reduce, immune)
+	var z2 := RunEffectApplierScript.is_z2_run(context)
+	var immune := not z2 and context.mine_immunity > 0
+	var damage: int = RunBalanceCatalogScript.mine_damage(0 if z2 else context.mine_dmg_reduce, immune)
 	var alive_before := context.hp > 0
 	var result := RunEffectApplierScript.apply_damage_packet(context, {"amount": damage, "damage_type": "mine", "source_id": "mine"})
 	if not bool(result.ok):
@@ -130,11 +132,15 @@ static func grant_monster_clear_progress(context: RunContext) -> int:
 		return 0
 	context.run_stats["monsters_defeated"] = int(context.run_stats.get("monsters_defeated", 0)) + 1
 	var current_bonus := int(context.run_stats.get("monster_power_bonus", 0))
-	var power_gain := mini(MONSTER_POWER_GAIN_PER_CLEAR, maxi(0, MONSTER_POWER_GAIN_CAP - current_bonus))
+	var power_gain := mini(MONSTER_POWER_GAIN_PER_CLEAR, maxi(0, _monster_power_gain_cap(context) - current_bonus))
 	if power_gain > 0:
 		context.run_stats["monster_power_bonus"] = current_bonus + power_gain
 		context.power += power_gain
 	return power_gain
+
+
+static func _monster_power_gain_cap(context: RunContext) -> int:
+	return MONSTER_POWER_GAIN_CAP + Z2Talents.amount(Z2Talents.from_context(context), "normal_combat_growth_cap")
 
 
 static func preview_reward_gold(context: RunContext, pos: Vector2i) -> int:
@@ -156,7 +162,7 @@ static func build_monster_summary(context: RunContext, pos: Vector2i, adjacent_m
 	var expected_damage := maxi(0, enemy_power - player_power)
 	var survives := context.hp > expected_damage
 	var cleared := bool(enemy_state.get("cleared", false))
-	var power_gain_available := int(context.run_stats.get("monster_power_bonus", 0)) < 5 and not cleared and survives
+	var power_gain_available := int(context.run_stats.get("monster_power_bonus", 0)) < _monster_power_gain_cap(context) and not cleared and survives
 	return {
 		"monster_id": "monster_%d_%d" % [pos.x, pos.y],
 		"display_name": String(enemy_state.get("enemy_name", "Anomaly")),

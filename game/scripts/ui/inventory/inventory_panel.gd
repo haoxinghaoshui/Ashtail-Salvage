@@ -9,10 +9,12 @@ const Art21UIPlacementContractScript := preload("res://scripts/presentation/art2
 const Art24ItemVisualCatalogScript := preload("res://scripts/presentation/art24/art24_item_visual_catalog.gd")
 const ItemRarityDescriptorScript := preload("res://scripts/presentation/item_rarity_descriptor.gd")
 const UILayerContractScript := preload("res://scripts/ui/shell/ui_layer_contract.gd")
+const OpeningOffer := preload("res://scripts/core/progression/z2_opening_offer.gd")
 
 signal drop_item_requested(instance_id: String)
 signal use_item_requested(instance_id: String)
 signal close_requested
+signal opening_action_requested(command: StringName, payload: Dictionary)
 
 var title_label: Label
 var summary_label: Label
@@ -31,6 +33,9 @@ var item_stack_focus_targets: Dictionary = {}
 var item_button_minimum_size: Vector2 = Vector2(360, 52)
 var _ui_scale_factor := 1.0
 var _last_layout_profile: Dictionary = {}
+var opening_controls: VBoxContainer
+var opening_item_choice: OptionButton
+var _opening_pending := false
 
 
 func _ready() -> void:
@@ -40,6 +45,7 @@ func _ready() -> void:
 
 func build() -> void:
 	name = "InventoryPanel"
+	UILayerContractScript.apply_layer(self, &"modal")
 	Art10UISkinKitScript.apply_player_ui_theme(self)
 	visible = false
 	offset_left = 390.0
@@ -141,6 +147,10 @@ func build() -> void:
 	detail_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	detail_scroll.custom_minimum_size.y = 112.0
 	detail_column.add_child(detail_scroll)
+	var detail_content := VBoxContainer.new()
+	detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_content.add_theme_constant_override("separation", 5)
+	detail_scroll.add_child(detail_content)
 	tooltip_label = Label.new()
 	tooltip_label.name = "InventoryItemTooltip"
 	tooltip_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -149,7 +159,7 @@ func build() -> void:
 	tooltip_label.custom_minimum_size = Vector2(500, 54)
 	tooltip_label.add_theme_font_size_override("font_size", 15)
 	tooltip_label.add_theme_constant_override("line_spacing", 2)
-	detail_scroll.add_child(tooltip_label)
+	detail_content.add_child(tooltip_label)
 
 	last_result_label = Label.new()
 	last_result_label.name = "InventoryCommandResult"
@@ -159,8 +169,92 @@ func build() -> void:
 	last_result_label.custom_minimum_size = Vector2(0, 22)
 	last_result_label.add_theme_font_size_override("font_size", 14)
 	last_result_label.hide()
-	detail_column.add_child(last_result_label)
+	detail_content.add_child(last_result_label)
 	_refresh_ui_scale_metrics()
+
+
+func apply_opening_state(state: Dictionary, items: Array, pending: bool = false) -> void:
+	var selected_id := ""
+	if is_instance_valid(opening_item_choice) and opening_item_choice.selected > 0:
+		selected_id = str(opening_item_choice.get_item_metadata(opening_item_choice.selected))
+	if is_instance_valid(opening_controls):
+		opening_controls.get_parent().remove_child(opening_controls)
+		opening_controls.queue_free()
+	opening_controls = null
+	opening_item_choice = null
+	call_deferred("_refresh_opening_layout")
+	_opening_pending = pending
+	var selected := str(state.get("selected", ""))
+	if str(state.get("status", "")) != "selected" or selected not in ["avoidance", "power_life", "dismantle"]:
+		return
+	var effect: Dictionary = state.get("effect_state", {})
+	if selected != "dismantle" and not bool(effect.get("active", false)):
+		return
+	opening_controls = VBoxContainer.new()
+	opening_controls.name = "OpeningEffectControls"
+	opening_controls.add_theme_constant_override("separation", 4)
+	detail_column.add_child(opening_controls)
+	var title := Label.new()
+	title.text = OpeningOffer.LABELS[OpeningOffer.IDS.find(selected)]
+	_set_scaled_font(title, 14)
+	opening_controls.add_child(title)
+	if selected != "dismantle":
+		_opening_button(opening_controls, "EndOpeningEffect", "主动解除此效果", &"end_opening_effect", {}, true)
+		return
+	title.text += " · 已拆解 %d / 3" % int(effect.get("uses", 0))
+	opening_item_choice = OptionButton.new()
+	opening_item_choice.name = "OpeningDismantleItem"
+	opening_item_choice.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	opening_item_choice.add_item("选择要拆解的物品")
+	opening_controls.add_child(opening_item_choice)
+	for item: Dictionary in items:
+		if bool(item.get("can_equip", false)) or bool(item.get("can_consume", false)) or bool(item.get("is_unique", false)) or str(item.get("item_type", "")) not in ["collectible", "material"]:
+			continue
+		opening_item_choice.add_item(str(item.get("display_name", item.get("item_id", ""))))
+		var index := opening_item_choice.item_count - 1
+		opening_item_choice.set_item_metadata(index, str(item.get("instance_id", "")))
+		if str(item.get("instance_id", "")) == selected_id:
+			opening_item_choice.select(index)
+	opening_item_choice.disabled = pending or int(effect.get("uses", 0)) >= 3
+	var dismantle_row := HBoxContainer.new()
+	opening_controls.add_child(dismantle_row)
+	var use_row := HBoxContainer.new()
+	opening_controls.add_child(use_row)
+	for tool in ["scan", "trap"]:
+		var label := "扫描" if tool == "scan" else "破机关"
+		var dismantle := _opening_button(dismantle_row, "DismantleOpening_" + tool, "拆为" + label, &"dismantle_opening_item", {"tool": tool}, int(effect.get("uses", 0)) < 3 and opening_item_choice.selected > 0)
+		opening_item_choice.item_selected.connect(func(index: int) -> void: dismantle.disabled = _opening_pending or int(effect.get("uses", 0)) >= 3 or index <= 0)
+		var count := int(effect.get("tools", {}).get(tool, 0))
+		_opening_button(use_row, "UseOpening_" + tool, "使用%s（%d）" % [label, count], &"use_opening_tool", {"tool": tool}, count > 0)
+
+
+func _refresh_opening_layout() -> void:
+	if not _last_layout_profile.is_empty():
+		apply_layout_profile(_last_layout_profile)
+
+
+func _opening_button(parent: Control, node_name: String, text_value: String, command: StringName, payload: Dictionary, enabled: bool) -> Button:
+	var button := Button.new()
+	button.name = node_name
+	button.text = text_value
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.disabled = _opening_pending or not enabled
+	_set_scaled_font(button, 14)
+	parent.add_child(button)
+	button.pressed.connect(func() -> void:
+		if button.disabled or _opening_pending:
+			return
+		var request := payload.duplicate(true)
+		if command == &"dismantle_opening_item":
+			if opening_item_choice.selected <= 0:
+				return
+			request["instance_id"] = str(opening_item_choice.get_item_metadata(opening_item_choice.selected))
+		_opening_pending = true
+		for control: Node in opening_controls.find_children("*", "BaseButton", true, false):
+			(control as BaseButton).disabled = true
+		opening_action_requested.emit(command, request)
+	)
+	return button
 
 
 func set_ui_scale_factor(value: float) -> bool:
@@ -248,6 +342,8 @@ func show_command_result(result: Dictionary) -> void:
 	last_result_label.visible = last_result_label.text.strip_edges() != ""
 	Art10UISkinKitScript.apply_label(last_result_label, 14, PresentationTheme.color_for_key(&"ui.accent"))
 	_set_scaled_font(last_result_label, 14)
+	if last_result_label.visible:
+		detail_scroll.call_deferred("ensure_control_visible", last_result_label)
 	var pulse_state := &"ready"
 	if not bool(result.get("accepted", result.get("ok", false))):
 		pulse_state = &"warning"
@@ -293,6 +389,9 @@ func apply_layout_profile(profile: Dictionary) -> void:
 	)
 	if item_scroll != null:
 		item_scroll.custom_minimum_size = Vector2(content_width, 132.0 if is_low else (224.0 if is_high else 184.0))
+		if is_instance_valid(opening_controls):
+			# Keep new effect actions inside the existing drawer; inventory rows already scroll.
+			item_scroll.custom_minimum_size.y = 80.0
 	if tooltip_label != null:
 		tooltip_label.custom_minimum_size = Vector2(content_width, 48.0 if is_low else (64.0 if is_high else 54.0))
 	if detail_scroll != null:
@@ -312,6 +411,8 @@ func _main_game_modal_rect(profile: Dictionary, y_shift: float = 0.0) -> Rect2:
 	var is_high := bool(profile.get("is_high_resolution", false))
 	var margin: float = 18.0 if is_low else 24.0
 	var left_width: float = min(UILayerContractScript.run_left_width(profile), width * 0.42)
+	if width < 960.0:
+		left_width = 0.0
 	var gameplay_left: float = left_width + margin
 	var gameplay_width: float = maxf(260.0, width - gameplay_left - margin)
 	var footer_geometry := UILayerContractScript.run_footer_geometry(profile)
@@ -322,6 +423,9 @@ func _main_game_modal_rect(profile: Dictionary, y_shift: float = 0.0) -> Rect2:
 	var modal_min_width := 500.0 if is_low else 540.0
 	var modal_max_width := 620.0 if is_low else (760.0 if is_high else 680.0)
 	var modal_width: float = clampf(gameplay_width * 0.58, modal_min_width, modal_max_width)
+	modal_width *= _ui_scale_factor
+	if width < 960.0:
+		modal_width = gameplay_width
 	if modal_width > gameplay_width:
 		modal_width = maxf(260.0, gameplay_width)
 	var modal_height: float = clampf(height * 0.65, 420.0 if is_low else 460.0, 480.0 if is_low else (580.0 if is_high else 540.0))
@@ -365,11 +469,12 @@ func _add_item_row(item: Dictionary, can_drop: bool) -> void:
 	item_button.text = _item_summary_text(item)
 	item_button.custom_minimum_size = item_button_minimum_size
 	item_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	item_button.clip_text = true
-	item_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	item_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_apply_art09_item_icon(item_button, item)
 	_apply_art21r2_modal_button(item_button, &"art21r2.modal.item_row.normal", &"secondary", 15, 10, 18)
+	item_button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	item_button.clip_text = false
+	item_button.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 	_apply_rarity_row_style(item_button, item)
 	var instance_id: String = String(item.get("instance_id", ""))
 	var stack_key := String(item.get("stack_key", RunUIViewModel.item_stack_key(item)))
@@ -568,10 +673,14 @@ func _apply_art21r2_modal_button(button: Button, visual_key: StringName, tone: S
 	button.set_meta("ui_scale_base_font_size", font_size_value)
 	var size_class := &"compact" if button.custom_minimum_size.x <= 96.0 else &"regular"
 	var inset_profile := Art10UISkinKitScript.control_inset_profile(size_class)
+	var content_insets: Vector4 = inset_profile.get("content", Vector4(padding, padding, padding, padding))
+	if visual_key == &"art21r2.modal.item_row.normal":
+		content_insets.y = 14.0
+		content_insets.w = 14.0
 	var texture := Art21UIPlacementContractScript.texture_for_visual_key(visual_key, &"ui.art19.button.dark")
 	var style := Art10UISkinKitScript.style_box_from_texture_with_insets(
 		texture,
-		inset_profile.get("content", Vector4(padding, padding, padding, padding)),
+		content_insets,
 		inset_profile.get("slice", Vector4(texture_margin, texture_margin, texture_margin, texture_margin))
 	)
 	if style != null:

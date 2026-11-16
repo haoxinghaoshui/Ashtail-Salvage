@@ -10,6 +10,7 @@ const PlayerControllerScript := preload("res://scripts/gameplay/player/player_co
 const RuntimeAnimationCatalogScript := preload("res://scripts/presentation/art24/art24_runtime_animation_catalog.gd")
 const RuntimeInputProfileScript := preload("res://scripts/core/input/runtime_input_profile.gd")
 const UILayoutProfileScript := preload("res://scripts/ui/shell/ui_layout_profile.gd")
+const Z2ItemCatalogScript := preload("res://scripts/core/content/z2_item_catalog.gd")
 
 const PASS_MARKER := "I3_HUD_ITEM_INPUT_CHARACTER=PASS"
 const FAIL_MARKER := "I3_HUD_ITEM_INPUT_CHARACTER=FAIL"
@@ -26,6 +27,7 @@ func _run() -> void:
 	root.size = Vector2i(1280, 720)
 	RuntimeInputProfileScript.install()
 	await _check_hud_actions_and_items()
+	await _check_classified_quick_bag()
 	await _check_input_and_character_profile()
 	await _check_production_gamepad_propagation()
 	_finish()
@@ -110,11 +112,9 @@ func _check_hud_actions_and_items() -> void:
 	_require(quick_button != null and quick_button.tooltip_text == String(descriptor.get("detail_text", "")), "quick bag bypassed the shared item detail")
 	_require(surface.backpack_detail_label.text == String(descriptor.get("detail_text", "")), "quick bag focus detail drifted from the shared descriptor")
 	_require(surface.current_backpack_item_count == 1, "single aggregated quick-bag row count drifted")
-	_require(
-		surface.backpack_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED,
-		"single quick-bag row reserved an unnecessary scroll range"
-	)
-	_require(surface.backpack_capacity_label.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "quick bag burden is not bottom-centered")
+	_check_single_bag_row(surface, quick_button)
+	_require(not surface.backpack_detail_label.visible, "quick bag retained a permanent duplicate detail block")
+	_require(surface.backpack_capacity_label.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "quick bag capacity text lost centered alignment")
 	_require(not _tree_text(surface.backpack_strip).contains("空位"), "quick bag rendered fake empty slots")
 
 	var inventory := InventoryPanelScript.new()
@@ -250,6 +250,243 @@ func _check_hud_actions_and_items() -> void:
 	await _frames(3)
 
 
+func _check_classified_quick_bag() -> void:
+	var host := Control.new()
+	host.size = Vector2(1280, 720)
+	root.add_child(host)
+	var surface := RunSurfaceScript.new()
+	host.add_child(surface)
+	surface.build()
+	var legacy := _sample_item("legacy-a", "旧物资", 2, 4)
+	legacy["item_type"] = "legacy_unknown"
+	legacy["instance_ids"] = ["legacy-a", "legacy-b"]
+	var material := _sample_item("material", "材料", 1, 3)
+	material["item_type"] = "material"
+	var supply := _sample_item("supply", "装备", 1, 5)
+	var tool := _sample_item("tool", "药品", 1, 2)
+	tool["item_type"] = "consumable"
+	var special := _sample_item("special", "特殊道具", 1, 1)
+	special["item_type"] = "special"
+	special["can_consume"] = true
+	var cases := [
+		{"items": [], "columns": [[], []]},
+		{"items": [legacy], "columns": [["legacy-a"], []]},
+		{"items": [tool], "columns": [[], ["tool"]]},
+		{"items": [tool, legacy, special, material], "columns": [["legacy-a", "material"], ["tool", "special"]]},
+		{"items": [legacy, tool, material, supply], "columns": [["legacy-a", "material", "supply"], ["tool"]]},
+	]
+	var snapshot := {"inventory_items": [], "equipment_used": 17, "equipment_capacity": 83, "backpack_used": 29, "backpack_capacity": 97}
+	for scale: float in [1.0, 1.25, 1.5]:
+		var profile: Dictionary = UILayoutProfileScript.profile_for_resolution(&"1280x720")
+		profile.merge({"actual_viewport_size": Vector2i(1280, 720), "ui_scale_factor": scale}, true)
+		surface.apply_layout_profile(profile)
+		for fixture: Dictionary in cases:
+			snapshot["inventory_items"] = fixture.items
+			var model := RunSurfaceModelScript.build(snapshot, null, profile, {})
+			surface.apply_surface_model(model)
+			await _frames(5)
+			_check_bag_columns(surface, model.backpack_items, fixture.columns)
+			var buttons := _bag_buttons(surface)
+			if buttons.size() == 1:
+				_check_single_bag_row(surface, buttons[0])
+			if buttons.is_empty():
+				_require(not surface.backpack_scroll.visible and surface.backpack_empty_watermark.visible, "empty bag did not show only its noninteractive watermark")
+		# The instance/type stay identical: classification must invalidate the cache.
+		snapshot["inventory_items"] = [legacy]
+		surface.apply_surface_model(RunSurfaceModelScript.build(snapshot, null, profile, {}))
+		await _frames(3)
+		var usable_legacy := legacy.duplicate(true)
+		usable_legacy["can_consume"] = true
+		snapshot["inventory_items"] = [usable_legacy]
+		var changed := RunSurfaceModelScript.build(snapshot, null, profile, {})
+		surface.apply_surface_model(changed)
+		await _frames(5)
+		_check_bag_columns(surface, changed.backpack_items, [[], ["legacy-a"]])
+		var long_columns: Array = [[], []]
+		var long_items: Array = []
+		var catalog := Z2ItemCatalogScript.all_items()
+		catalog.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a.display_name).length() > str(b.display_name).length())
+		for item: Dictionary in catalog:
+			var column := 1 if str(item.item_type) == "consumable" else 0
+			if long_columns[column].size() >= 8:
+				continue
+			var id := "catalog-%s" % item.item_id
+			item.merge({"instance_id": id + "-a", "instance_ids": [id + "-a", id + "-b", id + "-c"], "quantity": 3}, true)
+			long_items.append(item)
+			long_columns[column].append(id + "-a")
+		_require(long_columns[0].size() == 8 and long_columns[1].size() == 8, "long bag fixture lacks eight actual catalog stacks in each category")
+		snapshot["inventory_items"] = long_items
+		var long_model := RunSurfaceModelScript.build(snapshot, null, profile, {})
+		surface.apply_surface_model(long_model)
+		await _frames(5)
+		_check_bag_columns(surface, long_model.backpack_items, long_columns)
+		var bar: VScrollBar = surface.backpack_scroll.get_v_scroll_bar()
+		_require(bar.is_visible_in_tree() and bar.max_value - bar.page > 1.0, "long catalog list did not exercise actual scrolling")
+		var headers := [surface.backpack_supplies_header.get_global_rect(), surface.backpack_tools_header.get_global_rect()]
+		var before_scroll := bar.value
+		await _wheel_bag(surface.backpack_scroll)
+		_require(bar.value > before_scroll and absf(bar.value - (bar.max_value - bar.page)) <= 1.0, "native bag wheel cannot reach the end of the long catalog list")
+		for column in range(2):
+			var header: Label = surface.backpack_supplies_header if column == 0 else surface.backpack_tools_header
+			_require(header.is_visible_in_tree() and header.get_global_rect() == headers[column], "bag category header moved while scrolling")
+			var last: Control = surface.backpack_strip.get_child(14 + column)
+			_require(surface.backpack_scroll.get_global_rect().grow(1.0).encloses(last.get_global_rect()), "last complete catalog row is unreachable by wheel")
+		surface.backpack_scroll.scroll_vertical = 0
+		await _check_short_left_panel(surface, profile)
+	_require(item_action_count == 0, "bag presentation or scrolling issued an item action")
+	host.queue_free()
+	await _frames(3)
+
+
+func _bag_buttons(surface: RunSurface) -> Array[Button]:
+	var buttons: Array[Button] = []
+	for child in surface.backpack_strip.get_children():
+		if child is Button:
+			buttons.append(child)
+	return buttons
+
+
+func _check_bag_columns(surface: RunSurface, items: Array, expected_columns: Array) -> void:
+	var grid: GridContainer = surface.backpack_strip
+	_require(grid.columns == 2 and grid.get_theme_constant("h_separation") == 4 and grid.get_theme_constant("v_separation") == 4, "bag lost its two-column geometry")
+	_require(surface.backpack_supplies_header.text == "物资" and surface.backpack_tools_header.text == "道具", "bag category headings changed")
+	_require(surface.backpack_capacity_label.text == "共享 17/83\n战利品 29/97", "bag classification replaced independent capacity values")
+	_require(_bag_buttons(surface).size() == items.size() and surface.current_backpack_item_count == items.size(), "bag lost or duplicated an actual item stack")
+	_require(grid.get_child_count() == 2 * maxi(expected_columns[0].size(), expected_columns[1].size()), "bag row count does not match the longer category")
+	var actual_columns: Array = [[], []]
+	for index in range(grid.get_child_count()):
+		var child: Control = grid.get_child(index)
+		if not child is Button:
+			_require(child.get_class() == "Control" and child.get_child_count() == 0 and child.focus_mode == Control.FOCUS_NONE and child.mouse_filter == Control.MOUSE_FILTER_IGNORE, "blank category alignment became a fake or interactive item")
+			continue
+		var button := child as Button
+		var id := String(button.get_meta("item_instance_id", ""))
+		actual_columns[index % 2].append(id)
+		var header: Label = surface.backpack_supplies_header if index % 2 == 0 else surface.backpack_tools_header
+		_require(absf(button.get_global_rect().position.x - header.get_global_rect().position.x) <= 1.0, "bag item is not aligned under its fixed category: " + id)
+		var matches := items.filter(func(item: Dictionary) -> bool: return str(item.instance_id) == id)
+		_require(matches.size() == 1, "bag stack identity is missing or repeated: " + id)
+		if matches.size() != 1:
+			continue
+		var item: Dictionary = matches[0]
+		var detail := RunUIViewModelScript.item_presentation(item)
+		_require(button.get_meta("item_instance_ids", []) == item.instance_ids and button.get_meta("item_stack_key", "") == item.stack_key, "bag lost grouped instance IDs or stack key: " + id)
+		_require(button.text == "%s ×%d" % [detail.display_name, detail.quantity] and button.tooltip_text == detail.detail_text, "bag truncated name/count/shared full detail: " + id)
+		_require(button.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING and button.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART, "bag hides long names instead of wrapping: " + id)
+		_require(button.get_minimum_size().y <= button.size.y + 1.0, "bag clips native button height: " + id)
+		var style := button.get_theme_stylebox("normal")
+		var icon_width := float(button.get_theme_constant("icon_max_width")) + button.get_theme_constant("h_separation") if button.icon != null else 0.0
+		var safe_width := button.size.x - style.get_minimum_size().x - icon_width
+		var shaped := button.get_theme_font("font").get_multiline_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, safe_width, button.get_theme_font_size("font_size"), -1, TextServer.BREAK_MANDATORY | TextServer.BREAK_WORD_BOUND | TextServer.BREAK_ADAPTIVE)
+		_require(shaped.x <= safe_width + 1.0 and shaped.y <= button.size.y - style.get_minimum_size().y + 1.0, "bag native shaping does not fit the complete name/count: " + id)
+	_require(actual_columns == expected_columns, "bag changed category, within-category order, or exact item identity: %s" % str(actual_columns))
+	_require(not _tree_text(grid).contains("空位"), "bag alignment created fake empty-slot copy")
+
+
+func _check_single_bag_row(surface: RunSurface, button: Button) -> void:
+	var bar := surface.backpack_scroll.get_v_scroll_bar()
+	_require(not bar.is_visible_in_tree() and bar.max_value - bar.page <= 1.0, "single short bag row exposes actual scrolling")
+	_require(button != null and surface.backpack_scroll.get_global_rect().grow(1.0).encloses(button.get_global_rect()), "complete single item is outside the bag viewport")
+
+
+func _wheel_bag(scroll: Control) -> void:
+	for _index in range(64):
+		var motion := InputEventMouseMotion.new()
+		motion.position = scroll.get_global_rect().get_center()
+		motion.global_position = motion.position
+		root.push_input(motion, true)
+		for pressed in [true, false]:
+			var event := InputEventMouseButton.new()
+			event.position = motion.position
+			event.global_position = motion.position
+			event.button_index = MOUSE_BUTTON_WHEEL_DOWN
+			event.pressed = pressed
+			root.push_input(event, true)
+		await process_frame
+
+
+func _check_short_left_panel(surface: RunSurface, profile: Dictionary) -> void:
+	# Presentation boundaries only. Real new-save admission and gameplay input
+	# remain in the Main-scene test below; this does not complete a tutorial.
+	var room_copy := "房间说明：搜索结束后检查现场物资，确认负重再继续探索。".repeat(8)
+	var quest_copy := "当前任务：结束一次正式探索后回营地手动领取奖励。".repeat(6)
+	var model := RunSurfaceModelScript.build({"run_active": true, "current_room": &"Normal"}, null, profile, {})
+	model.merge({"room_summary": room_copy, "current_objective": quest_copy, "commission_text": "委托说明末行。"}, true)
+	surface.apply_surface_model(model)
+	await _frames(5)
+	var frame: Rect2 = surface.room_text_mask.get_global_rect()
+	var scale: float = profile.ui_scale_factor
+	var expected_blank := 210.0 if scale == 1.0 else (149.0 if scale == 1.25 else 88.0)
+	_require(absf(720.0 - frame.end.y - expected_blank) <= 1.0, "short left panel lost its reference lower-left space")
+	_require(frame.size.y <= 300.0 + 64.0 * (scale - 1.0) / 0.5 + 1.0, "short left panel exceeds the final height budget")
+	var body: Label = surface.room_body_label
+	var scroll: ScrollContainer = surface.room_description_scroll
+	_require(body.text == room_copy + "\n\n" + quest_copy + "\n\n委托说明末行。", "short left panel changed or discarded room/quest copy")
+	_require(body.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING and body.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART and body.max_lines_visible == -1, "short left panel clips text instead of scrolling it")
+	_require(body.get_theme_font_size("font_size") >= roundi(13.0 * scale), "short left panel shrank its font to meet the height budget")
+	_require(frame.encloses(scroll.get_global_rect()) and scroll.is_ancestor_of(body), "room copy escaped its actual scroll viewport")
+	var bar := scroll.get_v_scroll_bar()
+	_require(bar.max_value - bar.page > 1.0, "long room/quest fixture did not exercise actual overflow")
+	await _wheel_bag(scroll)
+	_require(absf(bar.value - (bar.max_value - bar.page)) <= 1.0 and body.get_global_rect().end.y <= scroll.get_global_rect().end.y + 1.0, "native wheel cannot reach the complete room/quest final line")
+	var map_actions: Array[StringName] = []
+	var on_map := func(source: StringName) -> void: map_actions.append(source)
+	surface.map_requested.connect(on_map)
+	await _click_native(surface.action_buttons[&"map"])
+	_require(map_actions == [&"surface_button"], "short panel blocked or duplicated the native main-action click")
+	surface.map_requested.disconnect(on_map)
+	var tutorial := preload("res://scenes/ui/tutorial/tutorial_popup_panel.tscn").instantiate() as TutorialPopupPanel
+	surface.get_parent().add_child(tutorial)
+	tutorial.apply_layout_profile(profile)
+	var context := RunContext.new()
+	context.mode = &"tutorial"
+	context.profile_fields = {"z2_progression_version": 1, "flag_unlocked": false}
+	context.tutorial_triggers = {"0,0": &"spawn_intro"}
+	preload("res://scripts/core/run/tutorial_service.gd").trigger_for(context, Vector2i.ZERO)
+	var cost_popup := context.tutorial_popup.duplicate(true)
+	var clicks: Array[int] = [0, 0]
+	tutorial.confirmed.connect(func() -> void: clicks[0] += 1)
+	tutorial.cancelled.connect(func() -> void: clicks[1] += 1)
+	tutorial.apply_popup(cost_popup)
+	await _frames(5)
+	var message := tutorial.get_node("Panel/Content/Message") as RichTextLabel
+	var confirm := tutorial.get_node("Panel/Content/ConfirmButton") as Button
+	var content := tutorial.get_node("Panel/Content") as Control
+	_require(message.text == cost_popup.message and message.text.contains("花费100点"), "short tutorial panel changed the actual teaching cost copy")
+	_require(message.get_theme_font_size("normal_font_size") >= roundi(13.0 * scale), "short tutorial panel reduced its body font")
+	await _wheel_bag(message)
+	var message_bar := message.get_v_scroll_bar()
+	_require(message_bar.value >= message_bar.max_value - message_bar.page - 1.0, "native wheel cannot reach the teaching cost final line")
+	_require(content.get_global_rect().grow(1.0).encloses(confirm.get_global_rect()) and confirm.get_minimum_size().y <= confirm.size.y + 1.0, "teaching action does not fit its native minimum height or safe rect")
+	_require(confirm.text.contains("100点 · 学习插旗") and confirm.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING, "teaching action lost its full cost text")
+	await _click_native(confirm)
+	_require(clicks == [1, 0], "native teaching confirm click did not emit exactly one action")
+	var entry_popup := cost_popup.duplicate(true)
+	entry_popup.merge({"id": &"flag_entry_confirm", "confirm_text": "确认进入"}, true)
+	tutorial.apply_popup(entry_popup)
+	await _frames(5)
+	var cancel := tutorial.get_node("Panel/Content/CancelButton") as Button
+	_require(cancel.visible and content.get_global_rect().grow(1.0).encloses(cancel.get_global_rect()) and cancel.get_minimum_size().y <= cancel.size.y + 1.0, "short confirmation panel lost its complete cancel action")
+	await _click_native(cancel)
+	await _click_native(confirm)
+	_require(clicks == [2, 1], "short confirmation panel blocked or duplicated native cancel/confirm")
+	tutorial.queue_free()
+	await _frames(3)
+
+
+func _click_native(control: Control) -> void:
+	_require(control.is_visible_in_tree(), "native click target is hidden: %s" % control.name)
+	for pressed in [true, false]:
+		var event := InputEventMouseButton.new()
+		event.position = control.get_global_rect().get_center()
+		event.global_position = event.position
+		event.button_index = MOUSE_BUTTON_LEFT
+		event.pressed = pressed
+		root.push_input(event, true)
+		await process_frame
+	await _frames(2)
+
+
 func _check_input_and_character_profile() -> void:
 	var player := PlayerControllerScript.new()
 	root.add_child(player)
@@ -305,21 +542,30 @@ func _check_production_gamepad_propagation() -> void:
 		main.queue_free()
 		await _frames(2)
 		return
-	var start_result: Dictionary = bus.dispatch(&"start_demo_run")
-	_require(bool(start_result.get("ok", false)), "production run could not start")
+	var start_result: Dictionary = preload("res://tests/z2_legacy_main_fixture.gd").start(run_scene)
+	_require(bool(start_result.get("ok", false)), "production run could not start: %s" % start_result)
+	if not bool(start_result.get("ok", false)):
+		main.queue_free()
+		await _frames(3)
+		return
 	run_scene.call("_show_run_screen")
+	run_scene.call("_debug_teleport_to_room_type", &"Normal")
 	await _frames(5)
+	var context: RunContext = run_scene.get("run_context")
+	_require(context.get_status_snapshot().get("current_room") == &"Normal" and context.asset_ledger.get_room_floor_items(context.get_current_pos()).is_empty(), "gamepad fixture is not a clear noncombat room")
 	var production_player := run_scene.get("player_controller") as PlayerController
 	var inventory_panel := run_scene.get("inventory_panel") as Control
 	_require(production_player != null and inventory_panel != null, "production input fixtures are missing")
 	if production_player != null:
 		production_player.set_local_position(Vector2(0.25, 0.25))
+		_require(production_player.input_enabled, "production gamepad movement is unexpectedly input-blocked")
 		var before_gamepad := production_player.get_local_position()
 		_parse_joy_button(JOY_BUTTON_DPAD_RIGHT, true)
-		await _frames(8)
+		await create_timer(0.15).timeout
 		_parse_joy_button(JOY_BUTTON_DPAD_RIGHT, false)
 		await _frames(2)
 		_require(production_player.get_local_position().x > before_gamepad.x, "D-pad input did not propagate through production continuous movement")
+		_require(is_equal_approx(production_player.get_local_position().y, before_gamepad.y), "right D-pad input introduced vertical displacement")
 	_parse_joy_button(JOY_BUTTON_LEFT_SHOULDER, true)
 	await process_frame
 	_parse_joy_button(JOY_BUTTON_LEFT_SHOULDER, false)
@@ -404,6 +650,7 @@ func _require(condition: bool, message: String) -> void:
 
 func _finish() -> void:
 	if failures.is_empty():
+		print("I3_HUD_CLASSIFICATION columns=2 cases=empty,1+0,0+1,2+2,3+1,can_consume_changed catalog=8+8 scales=100,125,150 text=native_full wheel=last_row short_left=full_copy,cost,confirm,cancel")
 		print("%s hud=primary_action,mine_risk actions=7,context_order items=shared_descriptor,scroll replacement=two_line,no_clip,authoritative_level input=single_path,gamepad_propagated character=appearance,animation_set reduced_motion=preserved" % PASS_MARKER)
 		quit(0)
 		return

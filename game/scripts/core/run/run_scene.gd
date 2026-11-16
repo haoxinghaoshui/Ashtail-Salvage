@@ -46,9 +46,10 @@ const G41RoomRuntimeViewScript := preload("res://scripts/gameplay/runtime/g41_ro
 const G41RuntimeLayoutScript := preload("res://scripts/gameplay/runtime/g41_runtime_layout.gd")
 const Art25GameplayBackdropScript := preload("res://scripts/presentation/art25_gameplay_backdrop.gd")
 const RuntimeTextureCacheScript := preload("res://scripts/presentation/runtime_texture_cache.gd")
-const EventChoicePanelScript := preload("res://scripts/ui/run_surface/z1_event_choice_panel.gd")
 const Art24RuntimeAnimationCatalogScript := preload("res://scripts/presentation/art24/art24_runtime_animation_catalog.gd")
 const Art24EnemyVisualCatalogScript := preload("res://scripts/presentation/art24/art24_enemy_visual_catalog.gd")
+const Z2RunUIControllerScript := preload("res://scripts/ui/run_surface/z2_run_ui_controller.gd")
+const EventChoicePanelScript := preload("res://scripts/ui/run_surface/z1_event_choice_panel.gd")
 const SemanticActionHintScript := preload("res://scripts/core/input/semantic_action_hint.gd")
 const RuntimeInputProfileScript := preload("res://scripts/core/input/runtime_input_profile.gd")
 const PlayerFeedbackServiceScript := preload("res://scripts/presentation/player_feedback_service.gd")
@@ -119,6 +120,10 @@ var abandon_confirm_cancel_button: Button
 var abandon_confirm_button: Button
 var dev_diagnostics_panel: Control
 var event_panel: PanelContainer
+var event_modal_root: Control
+var z2_event_adapter: Control
+var opening_inventory_pending := false
+var z2_ui_controller = Z2RunUIControllerScript.new(self)
 var event_choice_panel
 var event_title_label: Label
 var event_body_label: Label
@@ -237,6 +242,14 @@ func _ready() -> void:
 	persistence_controller.present_error()
 
 
+func _exit_tree() -> void:
+	# Release the scene's existing runtime bindings without advancing or saving it.
+	if in_run_runtime != null:
+		in_run_runtime.bind(null)
+	if command_bus != null:
+		command_bus.bind_runtime_controller(null)
+
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and persistence_controller != null:
 		persistence_controller.request_quit()
@@ -255,7 +268,9 @@ func get_ui_scale_factor() -> float:
 
 
 func _apply_ui_scale_to_runtime_controls(sync_shell: bool) -> void:
-	var targets: Array[Node] = [run_surface, tutorial_popup_panel, map_overlay_panel, result_panel, inventory_panel, ground_loot_panel, loot_panel, runtime_settings_panel, event_choice_panel]
+	var targets: Array[Node] = [run_surface, tutorial_popup_panel, map_overlay_panel, result_panel, inventory_panel, ground_loot_panel, loot_panel, runtime_settings_panel, event_choice_panel, z2_event_adapter]
+	if is_inside_tree():
+		targets.append(get_tree().root.get_node_or_null("Z2PersistentOverlays/NotificationQueue"))
 	if sync_shell:
 		targets.push_front(ui_shell)
 	for target in targets:
@@ -362,6 +377,8 @@ func _handle_cancel_input(event: InputEvent) -> bool:
 	# A blocking tutorial prompt owns the current input context. Escape/Back
 	# must not open another modal above the teaching decision.
 	if screen_state == SCREEN_RUN and run_context != null and run_context.has_blocking_tutorial_popup():
+		if str(run_context.tutorial_popup.get("id", "")) == "flag_entry_confirm":
+			_dispatch_command(&"cancel_flag_entry")
 		return true
 	if _close_top_runtime_modal():
 		return true
@@ -621,6 +638,7 @@ func _build_run_overlay() -> void:
 	inventory_panel.connect("drop_item_requested", _on_inventory_drop_requested)
 	inventory_panel.connect("use_item_requested", _on_inventory_use_requested)
 	inventory_panel.connect("close_requested", _close_inventory_modal)
+	inventory_panel.connect("opening_action_requested", _on_opening_inventory_action_requested)
 	surface_overlay_slot.add_child(inventory_panel)
 
 	result_panel = ResultPanelScene.instantiate() as ResultPanel
@@ -629,6 +647,7 @@ func _build_run_overlay() -> void:
 	result_panel.return_deploy_requested.connect(_return_from_result_to_deploy)
 	result_panel.career_follow_up_requested.connect(_open_career_follow_up_from_result)
 	result_panel.failure_salvage_confirmed.connect(_confirm_failure_salvage_from_result)
+	result_panel.terminal_selection_query = Callable(runtime_controller, "terminal_selection_state")
 	result_panel.retry_save_requested.connect(_retry_terminal_commit_from_result)
 	result_panel.discard_unsaved_result_requested.connect(_discard_unsaved_result_from_result)
 	result_panel.hide_result()
@@ -648,6 +667,7 @@ func _build_run_overlay() -> void:
 	tutorial_popup_panel = TutorialPopupScene.instantiate() as TutorialPopupPanel
 	tutorial_popup_panel.name = "TutorialPopupPanel"
 	tutorial_popup_panel.confirmed.connect(_on_tutorial_popup_confirmed)
+	tutorial_popup_panel.cancelled.connect(func() -> void: _dispatch_command(&"cancel_flag_entry"))
 	surface_overlay_slot.add_child(tutorial_popup_panel)
 
 
@@ -657,24 +677,14 @@ func _build_runtime_modals() -> void:
 	runtime_modal_input_shield.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	runtime_modal_input_shield.color = Color(0.0, 0.0, 0.0, 0.52)
 	runtime_modal_input_shield.mouse_filter = Control.MOUSE_FILTER_STOP
+	UILayerContractScript.apply_layer(runtime_modal_input_shield, &"modal", -1)
 	runtime_modal_input_shield.hide()
 	var runtime_modal_parent: Control = run_overlay_root
 	if run_surface != null:
 		runtime_modal_parent = run_surface.get_modal_slot()
 	runtime_modal_parent.add_child(runtime_modal_input_shield)
 
-	event_panel = _new_modal_panel("EventOptionPanel", Rect2(420, 140, 450, 360))
-	if run_surface != null:
-		run_surface.apply_legacy_modal_style(event_panel, &"mini.event")
-	event_choice_panel = EventChoicePanelScript.new()
-	event_choice_panel.option_selected.connect(func(option: Dictionary) -> void:
-		_select_event_option(StringName(option.get("id", &"")), option.get("payload", {}) as Dictionary)
-	)
-	event_choice_panel.close_requested.connect(func() -> void: _cancel_event_modal(&"button_cancel"))
-	event_panel.add_child(event_choice_panel)
-	event_title_label = event_choice_panel.get("_title")
-	event_body_label = event_choice_panel.get("_body")
-	event_options_box = event_choice_panel.get("_options")
+	z2_ui_controller.build_event_panel()
 
 	loot_panel = LootResultPanelScript.new() as Control
 	loot_panel.name = "LootResultPanel"
@@ -802,7 +812,7 @@ func _bind_runtime_modal_controller() -> void:
 		runtime_modal_input_shield,
 		run_surface,
 		{
-			&"event": event_panel,
+			&"event": event_modal_root,
 			&"loot_result": loot_panel,
 			&"extract_confirm": extract_panel,
 			&"combat_flee_confirm": extract_panel,
@@ -1250,6 +1260,7 @@ func _on_m7_meta_action_requested(action: Dictionary) -> void:
 		return
 	var envelope: Dictionary = runtime_controller.execute_meta_action(action)
 	var result := (envelope.get("result", {}) as Dictionary).duplicate(true)
+	_publish_z2_notifications(envelope)
 	last_command_result = result.duplicate(true)
 	_show_command_feedback(result)
 	if ui_shell != null:
@@ -1354,6 +1365,8 @@ func _handle_interact_pressed() -> void:
 				&"mine":
 					_show_command_feedback({"ok": true, "status": &"mine_inspected", "message": String((world_request.get("payload", {}) as Dictionary).get("summary", "机关状态已显示。"))})
 					return
+	if z2_ui_controller.open_completed_event_in_range():
+		return
 	var snapshot := run_context.get_status_snapshot()
 	var current_room: StringName = StringName(snapshot.get("current_room", &"Unknown"))
 	var search_data: Dictionary = snapshot.get("search_state_data", {})
@@ -1498,6 +1511,7 @@ func _show_inventory_panel() -> void:
 	if _is_runtime_modal_open():
 		return
 	inventory_panel.call("apply_snapshot", run_context.get_status_snapshot())
+	_refresh_opening_inventory_controls()
 	inventory_panel.call("show_panel")
 	var pushed := _push_runtime_modal(
 		&"inventory",
@@ -1507,6 +1521,18 @@ func _show_inventory_panel() -> void:
 	)
 	if not pushed:
 		inventory_panel.call("hide_panel")
+
+
+func _refresh_opening_inventory_controls() -> void:
+	z2_ui_controller._refresh_opening_inventory_controls()
+
+
+func _on_opening_inventory_action_requested(command: StringName, payload: Dictionary) -> void:
+	z2_ui_controller._on_opening_inventory_action_requested(command, payload)
+
+
+func _finish_opening_inventory_action(result: Dictionary) -> void:
+	z2_ui_controller._finish_opening_inventory_action(result)
 
 
 func _activate_world_context_primary() -> void:
@@ -1526,6 +1552,8 @@ func _world_interaction_in_range(expected_kind: StringName) -> bool:
 	var expected_room := &"Event" if expected_kind == &"event" else (&"Exit" if expected_kind == &"exit" else &"Unknown")
 	if expected_room != &"Unknown" and run_context.current_room_type != expected_room:
 		return false
+	if expected_kind == &"event" and z2_ui_controller.completed_event_in_range():
+		return true
 	var request: Dictionary = room_runtime_view.request_nearest_interaction(player_controller.get_local_position())
 	return bool(request.get("accepted", false)) and StringName(request.get("interaction_kind", &"none")) == expected_kind
 
@@ -1548,7 +1576,7 @@ func _show_ground_loot_panel() -> void:
 
 
 func _on_world_context_action_requested(action: StringName, payload: Dictionary) -> void:
-	if _is_runtime_modal_open():
+	if _gameplay_input_blocked():
 		return
 	match action:
 		&"pickup":
@@ -1559,7 +1587,7 @@ func _on_world_context_action_requested(action: StringName, payload: Dictionary)
 			_handle_interact_pressed()
 		&"event_open":
 			var event_state: Dictionary = run_context.get_status_snapshot().get("event_state", {})
-			if not event_state.is_empty() and not bool(event_state.get("completed", false)):
+			if not event_state.is_empty() and (not bool(event_state.get("completed", false)) or bool(event_state.get("allow_after_completion", false))):
 				_show_event_panel(event_state)
 		&"exit_request":
 			_request_extract_from_ui()
@@ -1578,75 +1606,47 @@ func _on_inventory_use_requested(instance_id: String) -> void:
 
 
 func _on_ground_loot_pickup_requested(instance_id: String) -> void:
-	if _is_runtime_modal_open():
+	if _gameplay_input_blocked():
 		return
 	_pickup_floor_from_ui(instance_id)
 
 
 func _on_ground_loot_replace_requested(instance_id: String) -> void:
-	if _is_runtime_modal_open():
+	if _gameplay_input_blocked():
 		return
 	_replace_floor_from_ui(instance_id)
 
 
 func _show_event_panel(event_state: Dictionary, presentation: Dictionary = {}) -> void:
-	if event_panel == null or _is_runtime_modal_open():
-		return
-	if not _require_world_interaction(&"event"):
-		return
-	var display: Dictionary = runtime_controller.guarded_event_display(event_state)
-	var event_presentation := presentation.duplicate(true)
-	event_presentation["room_pos"] = run_context.get_current_pos()
-	event_presentation["inventory_items"] = run_context.asset_ledger.get_items_by_location(&"inventory")
-	var event_type := String(display.get("event_type", ""))
-	if event_type.begins_with("z1_event_"):
-		event_presentation["event_icon_asset_id"] = StringName("z1.event." + event_type.trim_prefix("z1_event_"))
-	event_choice_panel.call("apply_event", display, event_presentation)
-	_apply_runtime_modal_layout(_current_layout_profile())
-	var pushed := _push_runtime_modal(
-		&"event",
-		event_panel,
-		_preferred_modal_focus(event_panel),
-		Callable(self, "_cancel_event_modal")
-	)
-	if not pushed:
-		event_panel.hide()
+	z2_ui_controller._show_event_panel(event_state, presentation)
 
 
 func _cancel_event_modal(_reason: StringName = &"cancel") -> void:
-	if _runtime_modal_is_top(&"event"):
-		_pop_runtime_modal(&"event")
+	z2_ui_controller._cancel_event_modal(_reason)
+
+
+func _z2_event_presentation() -> Dictionary:
+	return z2_ui_controller._z2_event_presentation()
+
+
+func _on_z2_event_choice_requested(request: Dictionary, option: Dictionary) -> void:
+	z2_ui_controller._on_z2_event_choice_requested(request, option)
+
+
+func _ensure_z2_notification_queue() -> Control:
+	return z2_ui_controller._ensure_z2_notification_queue()
+
+
+func enqueue_z2_committed_notifications(receipt: Dictionary, notices: Array) -> int:
+	return z2_ui_controller.enqueue_z2_committed_notifications(receipt, notices)
+
+
+func _publish_z2_notifications(result: Dictionary) -> void:
+	z2_ui_controller._publish_z2_notifications(result)
 
 
 func _select_event_option(option_id: StringName, option_payload: Dictionary = {}) -> void:
-	if not _runtime_modal_is_top(&"event"):
-		return
-	if not _require_world_interaction(&"event"):
-		return
-	var submitted_room_key := run_context.cell_key(run_context.get_current_pos())
-	_pop_runtime_modal(&"event")
-	var command_payload := option_payload.duplicate(true)
-	command_payload["option_id"] = option_id
-	command_payload["source"] = "ui"
-	var result := _dispatch_command(
-		&"select_event_option",
-		command_payload,
-		true,
-		false
-	)
-	var action_result: Dictionary = result.get("action_result", {})
-	_show_world_reward_feedback(result, action_result, &"event")
-	if run_context.cell_key(run_context.get_current_pos()) != submitted_room_key:
-		return
-	var next_event: Dictionary = run_context.get_status_snapshot().get("event_state", {})
-	if option_id != &"leave" and run_context.run_active and not bool(next_event.get("completed", true)) and (in_run_runtime == null or not in_run_runtime.has_active_combat()):
-		var last_attempt := action_result if not bool(action_result.get("ok", true)) else {}
-		_show_event_panel(next_event, {"attempt_result": last_attempt})
-		return
-	if bool(result.get("accepted", result.get("ok", false))) and room_runtime_view != null:
-		var popup = room_runtime_view.get("context_popup")
-		if is_instance_valid(popup):
-			popup.show_event_result(submitted_room_key, action_result)
+	z2_ui_controller._select_event_option(option_id, option_payload)
 
 
 func _on_encounter_option_selected(_option_id: StringName, command_payload: Dictionary) -> void:
@@ -2140,11 +2140,18 @@ func _close_top_runtime_modal() -> bool:
 
 func _hide_runtime_popups() -> void:
 	_clear_runtime_modal_stack(false)
+	# Live floor/replacement UI belongs to the room view, not the legacy panel.
+	# Clear its identities now; an inactive run no longer reaches the frame update.
+	if room_runtime_view != null:
+		room_runtime_view.set_context_ui_suppressed(true)
 	extract_modal_mode = &"extract"
 	pending_combat_flee_direction = Vector2i.ZERO
 	_clear_exit_interaction_authorization()
 	if event_panel != null:
 		event_panel.visible = false
+	if z2_event_adapter != null:
+		z2_event_adapter.hide()
+		z2_event_adapter.dialogue.dismiss()
 	if loot_panel != null:
 		loot_panel.call("hide_panel")
 	if extract_panel != null:
@@ -2186,6 +2193,7 @@ func _on_result_available(snapshot: Dictionary) -> void:
 		{"outcome": outcome, "terminal_reason_code": snapshot.get("terminal_reason_code", &"")}
 	)
 	var display_snapshot := _build_result_display_snapshot(snapshot)
+	_publish_z2_notifications(display_snapshot)
 	_refresh_view_models()
 	_hide_runtime_popups()
 	if result_panel != null:
@@ -2222,7 +2230,9 @@ func _retry_terminal_commit_from_result() -> void:
 	if not _runtime_modal_is_top(&"result") or result_panel == null or not result_panel.retry_save_allowed():
 		return
 	_dispatch_command(&"retry_terminal_commit", {"source": "result_panel"}, false, false)
-	result_panel.update_persistence_state(_build_result_display_snapshot(run_context.result_snapshot))
+	var display_snapshot := _build_result_display_snapshot(run_context.result_snapshot)
+	_publish_z2_notifications(display_snapshot)
+	result_panel.update_persistence_state(display_snapshot)
 	result_panel.mark_retry_complete()
 
 
@@ -2313,6 +2323,8 @@ func _apply_full_view_models() -> void:
 	if room_controller != null:
 		room_controller.configure(PresentationMapping.room_visual_from_snapshot(snapshot))
 	_apply_player_presentation()
+	if player_controller != null:
+		player_controller.set_talent_runtime_profile(Z2TalentRuntime.from_context(run_context))
 	if in_run_runtime != null and player_controller != null:
 		in_run_runtime.sync_room(player_controller.get_local_position())
 	if room_runtime_view != null:
@@ -2340,6 +2352,7 @@ func _apply_full_view_models() -> void:
 	if inventory_panel != null:
 		inventory_panel.call("apply_layout_profile", layout_profile)
 		inventory_panel.call("apply_snapshot", snapshot)
+		_refresh_opening_inventory_controls()
 	if ground_loot_panel != null:
 		ground_loot_panel.call("apply_layout_profile", layout_profile)
 		ground_loot_panel.call("apply_snapshot", snapshot)
@@ -2412,10 +2425,7 @@ func _apply_game_stage_layout(layout_profile: Dictionary) -> void:
 	if room_layer == null or player_layer == null:
 		return
 	var viewport_size := UILayerContractScript.viewport_size_from_profile(layout_profile)
-	var width: float = maxf(1.0, viewport_size.x)
-	var height: float = maxf(1.0, viewport_size.y)
 	var left_width: float = UILayerContractScript.run_left_width(layout_profile)
-	var gameplay_width: float = maxf(1.0, width - left_width)
 	if gameplay_backdrop != null:
 		gameplay_backdrop.apply_layout(viewport_size, left_width)
 	var room_visual_size := Vector2(560.0, 560.0)
@@ -2426,29 +2436,14 @@ func _apply_game_stage_layout(layout_profile: Dictionary) -> void:
 			room_visual_center = background_sprite.position
 			if background_sprite.texture != null:
 				room_visual_size = background_sprite.texture.get_size() * background_sprite.scale.abs()
-	# The room, UE-aligned mine-risk plate, contextual information band and key
-	# dock are four distinct vertical regions. The former hotbar-only budget let
-	# the room extend underneath the other two frames and obscured its lower door.
-	var footer_geometry := UILayerContractScript.run_footer_geometry(layout_profile)
-	var room_top := 8.0
-	var room_bottom := float(footer_geometry.get("room_bottom", height - 160.0))
-	var stage_rect := Rect2(left_width, room_top, gameplay_width, maxf(1.0, room_bottom - room_top))
-	if run_context != null and not run_context.tutorial_popup.is_empty():
-		var blocking := bool(run_context.tutorial_popup.get("blocking", false))
-		stage_rect = UILayerContractScript.run_tutorial_geometry(layout_profile, blocking).get(
-			"room_stage_rect",
-			stage_rect
-		)
-	var status_margin := 10.0 if bool(layout_profile.get("is_low_resolution", false)) else 12.0
-	var status_left := width - UILayerContractScript.run_status_card_size(layout_profile).x - status_margin
-	# Keep the entire room clear of the persistent status card at every UI scale.
-	stage_rect.size.x = maxf(1.0, minf(stage_rect.end.x, status_left - 12.0) - stage_rect.position.x)
+	# HUD and tutorial share the same side rails; showing a lesson must not
+	# change the world-to-screen allocation of the center room.
+	var stage_rect: Rect2 = RunSurfaceModel.layout_geometry(layout_profile).room_stage_rect
 	var scale_value: float = minf(
 		stage_rect.size.x / maxf(1.0, room_visual_size.x),
 		stage_rect.size.y / maxf(1.0, room_visual_size.y)
 	)
-	# Tutorial copy owns a real safe zone beside the room. A 0.90 lower clamp
-	# ignored that contract and let the room spill back underneath the modal.
+	# Keep the existing uniform mapping for room art, player and logical bodies.
 	scale_value = clampf(scale_value, 0.32, 1.82)
 	var gameplay_center := stage_rect.get_center()
 	var origin := gameplay_center - room_visual_center * scale_value
@@ -2478,10 +2473,6 @@ func _suppress_runtime_scene_labels() -> void:
 
 func _current_layout_profile() -> Dictionary:
 	var viewport_size: Vector2 = get_viewport_rect().size
-	var window := get_window()
-	if window != null and window.size.x > 0 and window.size.y > 0:
-		var window_size := Vector2(float(window.size.x), float(window.size.y))
-		viewport_size = Vector2(min(viewport_size.x, window_size.x), min(viewport_size.y, window_size.y))
 	var requested_resolution_size := Vector2i.ZERO
 	if SettingsManager != null:
 		requested_resolution_size = SettingsManager.get_current_resolution_size()
@@ -2678,7 +2669,13 @@ func _debug_teleport_to_room_type(room_type: StringName) -> void:
 
 
 func _on_tutorial_popup_confirmed() -> void:
-	_dispatch_command(&"confirm_tutorial_popup")
+	var before := run_context.get_current_pos()
+	var result := _dispatch_command(&"confirm_tutorial_popup")
+	if result.get("ok", false) and run_context.get_current_pos() != before:
+		pending_combat_flee_direction = Vector2i.ZERO
+		_reset_transition_rejection_debounce()
+		player_controller.set_facing_vector(Vector2(run_context.get_current_pos() - before))
+		player_controller.set_runtime_visual_state(&"idle")
 
 
 func _start_standard_from_ui() -> void:
@@ -2844,7 +2841,7 @@ func _g41_transition_precheck(direction: Vector2i) -> Dictionary:
 	var target := run_context.get_current_pos() + direction
 	if not run_context.is_inside(target):
 		return {"ok": false, "reason": &"out_of_bounds", "message": "No door exists beyond this boundary."}
-	if run_context.intel_map != null and run_context.intel_map.is_flagged(target):
+	if run_context.intel_map != null and run_context.intel_map.is_flagged(target) and run_context.profile_fields.get("z2_progression_version") != 1:
 		return {"ok": false, "reason": &"blocked_flagged", "message": "The target room is flagged."}
 	if run_context.move_requires_revealed and run_context.intel_map != null and not run_context.intel_map.is_revealed(target):
 		return {"ok": false, "reason": &"blocked_hidden", "message": "The target room is not revealed."}

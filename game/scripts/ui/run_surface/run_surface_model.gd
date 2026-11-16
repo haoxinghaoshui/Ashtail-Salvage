@@ -4,6 +4,47 @@ class_name RunSurfaceModel
 const RunUIViewModel := preload("res://scripts/ui/shell/run_ui_view_model.gd")
 const PresentationTheme := preload("res://scripts/presentation/presentation_theme.gd")
 const SemanticActionHintScript := preload("res://scripts/core/input/semantic_action_hint.gd")
+const UILayerContractScript := preload("res://scripts/ui/shell/ui_layer_contract.gd")
+
+
+static func layout_geometry(profile: Dictionary) -> Dictionary:
+	var viewport := UILayerContractScript.viewport_size_from_profile(profile)
+	var scale_step := (clampf(float(profile.get("ui_scale_factor", 1.0)), 1.0, 1.5) - 1.0) / 0.5
+	var margin := 12.0
+	var left_width := clampf(viewport.x * 0.20, 240.0, 360.0) + 32.0 * scale_step
+	var right_width := clampf(viewport.x * 0.22, 280.0, 400.0) + 32.0 * scale_step
+	var protocol := Rect2(margin, margin, left_width, 148.0 + 42.0 * scale_step)
+	var title := Rect2(margin, protocol.end.y + 8.0, left_width, 34.0 + 16.0 * scale_step)
+	var description_height := minf(viewport.y - title.end.y - 32.0, viewport.y * 5.0 / 12.0 + 64.0 * scale_step)
+	var description := Rect2(margin, title.end.y + 8.0, left_width, maxf(120.0, description_height))
+	var right_rail := Rect2(viewport.x - right_width - margin, margin, right_width, viewport.y - margin * 2.0)
+	var center_left := protocol.end.x + margin
+	var center_width := maxf(1.0, right_rail.position.x - margin - center_left)
+	var action := Rect2(center_left, viewport.y - 54.0 - 10.0 * scale_step, center_width, 46.0 + 10.0 * scale_step)
+	var risk := Rect2(center_left + (center_width - 242.0 - 22.0 * scale_step) * 0.5, action.position.y - 48.0, 242.0 + 22.0 * scale_step, 42.0)
+	return {
+		"viewport_size": viewport,
+		"protocol_rect": protocol,
+		"room_title_rect": title,
+		"description_rect": description,
+		"scanner_rail_rect": right_rail,
+		"room_stage_rect": Rect2(center_left, margin, center_width, maxf(1.0, risk.position.y - margin * 2.0)),
+		"action_rect": action,
+		"mine_risk_rect": risk,
+	}
+
+
+static func backpack_columns(items: Array) -> Array:
+	var columns := [[], []]
+	for item_variant in items:
+		if not (item_variant is Dictionary) or item_variant.is_empty():
+			continue
+		var item: Dictionary = item_variant
+		# Same distinction as the ledger's inventory capacity projection; neither
+		# names nor art tags decide whether an item is a usable consumable.
+		var column := 1 if bool(item.get("can_consume", false)) or StringName(item.get("item_type", &"")) == &"consumable" else 0
+		columns[column].append(item)
+	return columns
 
 
 static func build(snapshot: Dictionary, minimap_view_model: MiniMapViewModel, layout_profile: Dictionary, last_command_result: Dictionary) -> Dictionary:
@@ -35,6 +76,7 @@ static func build(snapshot: Dictionary, minimap_view_model: MiniMapViewModel, la
 		"room_coordinate": "(%d,%d)" % [position.x, position.y],
 		"room_summary": _room_summary(snapshot, room_type, adjacent_mines),
 		"current_objective": _objective_for_room(room_type, search_data, event_state),
+		"commission_text": commission_line,
 		"protocol_level": snapshot.get("protocol_level", 5),
 		"protocol_title": protocol_title_for_level(snapshot.get("protocol_level", 5)),
 		"pressure": snapshot.get("pressure", 0),
@@ -50,6 +92,9 @@ static func build(snapshot: Dictionary, minimap_view_model: MiniMapViewModel, la
 		"equipment_used": snapshot.get("equipment_used", 0),
 		"equipment_capacity": snapshot.get("equipment_capacity", 100),
 		"resource_summary": _resource_summary(snapshot),
+		"vitals_text": "生命 %s/%s\n强度 %s" % [snapshot.get("hp", 0), snapshot.get("max_hp", 0), snapshot.get("power", 0)],
+		"currency_text": "黑币 %s · 金币 %s" % [snapshot.get("black_coin", 0), snapshot.get("gold_coin", 0)],
+		"has_tutorial_popup": not _dict_from(snapshot, "tutorial_popup").is_empty(),
 		"mine_risk": mine_risk_descriptor(adjacent_mines),
 		# Command results are transient presentation events. Rehydrating the last
 		# result on every model refresh recreated the permanent strip beneath the

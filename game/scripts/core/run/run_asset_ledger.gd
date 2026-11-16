@@ -34,6 +34,7 @@ var failure_salvage_capacity: int = 40
 var black_to_gold_rate: float = 1.0
 var next_instance_index: int = 1
 var run_id: String = ""
+var consumable_weight_reduce: int = 0
 
 
 func setup(config: Dictionary) -> void:
@@ -43,6 +44,8 @@ func setup(config: Dictionary) -> void:
 	equipment_capacity = int(config.get("equipment_capacity", 100))
 	failure_salvage_capacity = int(config.get("failure_salvage_capacity", 40))
 	black_to_gold_rate = float(config.get("black_to_gold_rate", 1.0))
+	var profile: Dictionary = config.get("profile_fields", {})
+	consumable_weight_reduce = int(profile.get("consumable_weight_reduce", 0)) if profile.get("ruleset_id", "") == "z2" and profile.get("z2_progression_version") == 1 else 0
 	_define_default_currencies()
 	_add_starting_loadout(config)
 
@@ -61,6 +64,7 @@ func reset() -> void:
 	black_to_gold_rate = 1.0
 	next_instance_index = 1
 	run_id = ""
+	consumable_weight_reduce = 0
 
 
 func _define_default_currencies() -> void:
@@ -105,7 +109,7 @@ func get_currency(currency_id: StringName) -> int:
 
 
 func create_item_instance(item_def: Dictionary, location_state: StringName, room_pos: Vector2i = Vector2i(-999, -999)) -> Dictionary:
-	item_def = M3ItemCatalog.normalize_instance_units(item_def)
+	item_def = _run_item_definition(item_def)
 	var instance_id := String(item_def.get("instance_id", ""))
 	if not instance_id.is_empty() and item_instances.has(instance_id):
 		return {}
@@ -159,6 +163,10 @@ func create_item_instance(item_def: Dictionary, location_state: StringName, room
 		"acquired_sequence": int(item_def.get("acquired_sequence", acquired_sequence)),
 		"counters": item_def.get("counters", {}).duplicate(true) if item_def.get("counters", {}) is Dictionary else {},
 	}, true)
+	if _is_z2_item(item_def):
+		normalized["base_value"] = int(item_def.get("base_value", -1))
+		if bool(normalized.get("can_equip", false)):
+			normalized["equip_allowed_now"] = true
 	if bool(normalized.get("carry_in_equipment", false)):
 		normalized["registered_for_run"] = true
 		normalized["equip_allowed_now"] = true
@@ -166,7 +174,7 @@ func create_item_instance(item_def: Dictionary, location_state: StringName, room
 	if bool(normalized.get("carry_in_consumable", false)):
 		normalized["registered_for_run"] = true
 		normalized["acquired_in_run"] = false
-	if bool(normalized.get("acquired_in_run", false)) and bool(normalized.get("can_equip", false)):
+	if not _is_z2_item(normalized) and bool(normalized.get("acquired_in_run", false)) and bool(normalized.get("can_equip", false)):
 		normalized["equip_allowed_now"] = false
 	item_instances[instance_id] = normalized
 	next_instance_index += 1
@@ -191,7 +199,7 @@ func add_reward_items(item_defs: Array, preferred_location: StringName, room_pos
 	var ground_items: Array[Dictionary] = []
 	var blocked_reasons: Array[String] = []
 	for raw_def in item_defs:
-		var item_def := M3ItemCatalog.normalize_instance_units(raw_def)
+		var item_def := _run_item_definition(raw_def)
 		for field in ["origin_run_id", "origin_action_id", "acquired_sequence"]:
 			if not item_def.has(field) and origin.has(field):
 				item_def[field] = origin[field]
@@ -231,7 +239,7 @@ func add_reward_items(item_defs: Array, preferred_location: StringName, room_pos
 
 
 func can_fit_item(item_def: Dictionary) -> Dictionary:
-	item_def = M3ItemCatalog.normalize_instance_units(item_def)
+	item_def = _run_item_definition(item_def)
 	var weight := maxi(0, int(item_def.get("weight", 1)))
 	var shared := _is_consumable(item_def)
 	var used := get_equipment_used() if shared else get_backpack_used()
@@ -364,7 +372,7 @@ func equip_inventory_item(instance_id: String) -> Dictionary:
 		return {"ok": false, "status": &"not_in_inventory", "reason": "item_not_in_inventory"}
 	if not bool(item.get("can_equip", false)):
 		return {"ok": false, "status": &"blocked_type", "reason": "item_not_equippable"}
-	if not bool(item.get("registered_for_run", false)) and not bool(item.get("carry_in_equipment", false)):
+	if not _is_z2_item(item) and not bool(item.get("registered_for_run", false)) and not bool(item.get("carry_in_equipment", false)):
 		return {"ok": false, "status": &"blocked_registration", "reason": "equipment_requires_extraction_registration", "item": item.duplicate(true), "capacity": get_capacity_snapshot()}
 	if not bool(item.get("equip_allowed_now", false)):
 		return {"ok": false, "status": &"blocked_registration", "reason": "equipment_requires_extraction_registration", "item": item.duplicate(true), "capacity": get_capacity_snapshot()}
@@ -416,6 +424,8 @@ func _preview_item_moves(moves: Dictionary) -> Dictionary:
 			"backpack_capacity": bag_limit += amount
 			"equipment_capacity": shared_limit += amount
 			"salvage_capacity": salvage_limit += amount
+		if _is_z2_item(item):
+			bag_limit += int(item.get("effect_params", {}).get("backpack_capacity_delta", 0)) * equipment_delta
 		var weight := maxi(0, int(item.get("weight", 0)))
 		if after == LOCATION_EQUIPPED or (after == LOCATION_INVENTORY and _is_consumable(item)):
 			shared_used += weight
@@ -512,28 +522,38 @@ func build_failure_preview() -> Dictionary:
 	}
 
 
-func settle_success() -> Dictionary:
+func settle_success(conversion_percent: int = -1, selection: Dictionary = {}) -> Dictionary:
 	var event_delivery := _settle_event_items(&"success")
 	var black_before := get_currency(CURRENCY_BLACK)
 	var safe_before := get_currency(CURRENCY_GOLD)
 	var converted_gold := int(floor(float(black_before) * black_to_gold_rate))
+	if conversion_percent >= 0:
+		@warning_ignore("integer_division")
+		var whole := (black_before / 100) * conversion_percent
+		@warning_ignore("integer_division")
+		var fraction := ((black_before % 100) * conversion_percent) / 100
+		converted_gold = whole + fraction
 	var long_term_gold_gained := converted_gold + safe_before
 	currency_balances[CURRENCY_BLACK] = 0
 	if converted_gold > 0:
 		add_currency(CURRENCY_GOLD, converted_gold, "extract_settlement")
 	if long_term_gold_gained > 0:
 		add_currency(CURRENCY_LONG_TERM_GOLD, long_term_gold_gained, "settlement_writeback_preview")
-	var cleared_consumables := _clear_terminal_consumables()
+	var cleared_consumables := _clear_terminal_consumables(selection.get("retained_consumable_ids", []))
 	var extracted_items: Array[Dictionary] = event_delivery.get("delivered", []).duplicate(true)
 	var forfeited_items: Array[Dictionary] = event_delivery.get("forfeited", []).duplicate(true)
+	var discarded: Array = selection.get("discarded_instance_ids", [])
 	var floor_lost_items: Array[Dictionary] = []
 	for instance_id in item_instances.keys():
 		var item: Dictionary = item_instances[instance_id]
 		var location := StringName(item.get("location_state", &""))
 		if location in [LOCATION_INVENTORY, LOCATION_EQUIPPED]:
-			item["location_state"] = LOCATION_WAREHOUSE
-			extracted_items.append(item.duplicate(true))
-			warehouse_lite.append(item.duplicate(true))
+			item["location_state"] = LOCATION_LOST if discarded.has(str(instance_id)) else LOCATION_WAREHOUSE
+			if discarded.has(str(instance_id)):
+				forfeited_items.append(item.duplicate(true))
+			else:
+				extracted_items.append(item.duplicate(true))
+				warehouse_lite.append(item.duplicate(true))
 			item_instances[instance_id] = item
 		elif location == LOCATION_ROOM_FLOOR:
 			_unregister_room_floor_item(String(instance_id), item.get("room_pos", Vector2i.ZERO))
@@ -572,9 +592,9 @@ func settle_success() -> Dictionary:
 	}
 
 
-func settle_failure(selected_instance_ids: Array = []) -> Dictionary:
-	var candidates := _settlement_candidate_items()
-	var validation := _validate_salvage_selection(candidates, selected_instance_ids)
+func settle_failure(selected_instance_ids: Array = [], selection: Dictionary = {}) -> Dictionary:
+	var candidates := _settlement_candidate_items(bool(selection.get("include_consumables", false)))
+	var validation := _validate_salvage_selection(candidates, selected_instance_ids, selection.get("settlement_weights", {}))
 	if not bool(validation.get("ok", false)):
 		return validation
 	var event_delivery := _settle_event_items(&"failure")
@@ -587,9 +607,11 @@ func settle_failure(selected_instance_ids: Array = []) -> Dictionary:
 	var selected_lookup: Dictionary = {}
 	for selected_id in selected_ids:
 		selected_lookup[String(selected_id)] = true
-	var cleared_consumables := _clear_terminal_consumables()
+	var cleared_consumables := _clear_terminal_consumables(selected_ids)
 	for candidate in candidates:
 		var candidate_id := String(candidate.get("instance_id", ""))
+		if _is_consumable(candidate) and not selected_lookup.has(candidate_id):
+			continue
 		if item_instances.has(candidate_id):
 			var pool_item: Dictionary = item_instances[candidate_id]
 			pool_item["location_state"] = LOCATION_SETTLEMENT_POOL
@@ -607,6 +629,8 @@ func settle_failure(selected_instance_ids: Array = []) -> Dictionary:
 			item_instances[instance_id] = item
 	for candidate in candidates:
 		var candidate_id := String(candidate.get("instance_id", ""))
+		if _is_consumable(candidate) and not selected_lookup.has(candidate_id):
+			continue
 		if not item_instances.has(candidate_id):
 			continue
 		var item: Dictionary = item_instances[candidate_id]
@@ -943,13 +967,13 @@ func _unregister_room_floor_item(instance_id: String, pos: Vector2i) -> void:
 	room_floor_items[key].erase(instance_id)
 
 
-func _settlement_candidate_items() -> Array[Dictionary]:
+func _settlement_candidate_items(include_consumables: bool = false) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for item in item_instances.values():
 		var location := StringName(item.get("location_state", &""))
 		if not (location in [LOCATION_INVENTORY, LOCATION_EQUIPPED]):
 			continue
-		if _is_consumable(item):
+		if _is_consumable(item) and not include_consumables:
 			continue
 		result.append(item.duplicate(true))
 	return result
@@ -964,12 +988,12 @@ func _terminal_consumables() -> Array[Dictionary]:
 	return result
 
 
-func _clear_terminal_consumables() -> Array[Dictionary]:
+func _clear_terminal_consumables(retained_instance_ids: Array = []) -> Array[Dictionary]:
 	var cleared: Array[Dictionary] = []
 	for instance_id in item_instances.keys():
 		var item: Dictionary = item_instances[instance_id]
 		var location := StringName(item.get("location_state", &""))
-		if not (location in [LOCATION_INVENTORY, LOCATION_EQUIPPED]) or not _is_consumable(item):
+		if retained_instance_ids.has(str(instance_id)) or not (location in [LOCATION_INVENTORY, LOCATION_EQUIPPED]) or not _is_consumable(item):
 			continue
 		item["location_state"] = LOCATION_CLEARED
 		item_instances[instance_id] = item
@@ -978,7 +1002,7 @@ func _clear_terminal_consumables() -> Array[Dictionary]:
 	return cleared
 
 
-func _validate_salvage_selection(candidates: Array[Dictionary], selected_instance_ids: Array) -> Dictionary:
+func _validate_salvage_selection(candidates: Array[Dictionary], selected_instance_ids: Array, settlement_weights: Dictionary = {}) -> Dictionary:
 	var candidate_lookup: Dictionary = {}
 	for item in candidates:
 		candidate_lookup[String(item.get("instance_id", ""))] = item
@@ -991,7 +1015,7 @@ func _validate_salvage_selection(candidates: Array[Dictionary], selected_instanc
 		if not candidate_lookup.has(instance_id):
 			return {"ok": false, "status": &"invalid_salvage_selection", "reason": "instance_not_in_settlement_pool", "instance_id": instance_id, "requires_salvage_selection": true, "finalized": false}
 		normalized_ids.append(instance_id)
-		selected_weight += int((candidate_lookup[instance_id] as Dictionary).get("weight", 1))
+		selected_weight += int(settlement_weights.get(instance_id, (candidate_lookup[instance_id] as Dictionary).get("weight", 1)))
 	if selected_weight > failure_salvage_capacity:
 		return {"ok": false, "status": &"blocked_salvage_capacity", "reason": "selected_weight_exceeds_salvage_capacity", "selected_weight": selected_weight, "salvage_capacity": failure_salvage_capacity, "requires_salvage_selection": true, "finalized": false}
 	return {"ok": true, "selected_instance_ids": normalized_ids, "selected_weight": selected_weight}
@@ -999,6 +1023,19 @@ func _validate_salvage_selection(candidates: Array[Dictionary], selected_instanc
 
 func _is_consumable(item: Dictionary) -> bool:
 	return bool(item.get("can_consume", false)) or StringName(item.get("item_type", &"")) == &"consumable"
+
+
+func _is_z2_item(item: Dictionary) -> bool:
+	return str(item.get("content_version", "")) == "z2-system-20261116"
+
+
+func _run_item_definition(item: Dictionary) -> Dictionary:
+	var result := M3ItemCatalog.normalize_instance_units(item)
+	if _is_z2_item(result) and _is_consumable(result):
+		var base := maxi(1, int(result.get("base_weight", result.get("weight", 1))))
+		result["base_weight"] = base
+		result["weight"] = maxi(1, base - consumable_weight_reduce)
+	return result
 
 
 func _sum_item_value(items: Array) -> int:

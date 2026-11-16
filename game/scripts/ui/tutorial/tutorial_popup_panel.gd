@@ -7,8 +7,10 @@ const SemanticActionHintScript := preload("res://scripts/core/input/semantic_act
 const Art10UISkinKitScript := preload("res://scripts/presentation/art10_ui_skin_kit.gd")
 const Art21UIPlacementContractScript := preload("res://scripts/presentation/art21_ui_placement_contract.gd")
 const PresentationThemeScript := preload("res://scripts/presentation/presentation_theme.gd")
+const RunSurfaceModelScript := preload("res://scripts/ui/run_surface/run_surface_model.gd")
 
 signal confirmed
+signal cancelled
 
 var popup: Dictionary = {}
 var layout_profile: Dictionary = {}
@@ -66,7 +68,7 @@ func layout_snapshot() -> Dictionary:
 		"button_rect": button.get_global_rect() if button != null and button.visible else Rect2(),
 		"button_text": button.text if button != null else "",
 		"button_tooltip": button.tooltip_text if button != null else "",
-		"geometry": UILayerContractScript.run_tutorial_geometry(profile, blocking),
+		"geometry": _tutorial_geometry(profile),
 	}
 
 
@@ -85,8 +87,17 @@ func _ready() -> void:
 	var button := get_node_or_null("Panel/Content/ConfirmButton") as Button
 	if button != null:
 		Art10UISkinKitScript.apply_button(button, &"primary")
-		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		button.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 		button.pressed.connect(func() -> void: confirmed.emit())
+	var cancel := Button.new()
+	cancel.name = "CancelButton"
+	cancel.text = "取消 · Esc"
+	cancel.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	cancel.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	Art10UISkinKitScript.apply_button(cancel, &"secondary")
+	cancel.pressed.connect(func() -> void: cancelled.emit())
+	get_node("Panel/Content").add_child(cancel)
 	_refresh(true)
 
 
@@ -115,7 +126,7 @@ func _refresh(reset_scroll: bool = false) -> void:
 	var panel := get_node_or_null("Panel") as Panel
 	var content := get_node_or_null("Panel/Content") as Control
 	var profile := _resolved_layout_profile()
-	var geometry := UILayerContractScript.run_tutorial_geometry(profile, blocking)
+	var geometry := _tutorial_geometry(profile)
 
 	mouse_filter = Control.MOUSE_FILTER_STOP if blocking else Control.MOUSE_FILTER_IGNORE
 	UILayerContractScript.apply_layer(self, &"modal" if blocking else &"overlay", 4)
@@ -149,7 +160,7 @@ func _refresh(reset_scroll: bool = false) -> void:
 		)
 		title.text = String(popup.get("title", "教程：%s" % String(popup.get("id", ""))))
 	if message != null:
-		message.mouse_filter = Control.MOUSE_FILTER_STOP if blocking else Control.MOUSE_FILTER_IGNORE
+		message.mouse_filter = Control.MOUSE_FILTER_STOP
 		message.add_theme_color_override("default_color", PresentationThemeScript.text_color())
 		var body_font := Art10UISkinKitScript.readable_font()
 		if body_font is Font:
@@ -173,6 +184,7 @@ func _refresh(reset_scroll: bool = false) -> void:
 		button.visible = true
 		button.mouse_filter = Control.MOUSE_FILTER_STOP
 		Art10UISkinKitScript.apply_button(button, &"primary" if blocking else &"secondary")
+		_reserve_button_focus_inset(button)
 		button.focus_mode = Control.FOCUS_ALL if blocking else Control.FOCUS_NONE
 		button.custom_minimum_size = Vector2(0.0, round(40.0 * minf(ui_scale_factor, 1.25)))
 		button.add_theme_font_size_override(
@@ -190,11 +202,6 @@ func _refresh(reset_scroll: bool = false) -> void:
 			)
 			var full_hint := str(confirm_hint.get("display_label", ""))
 			var confirm_text := str(popup.get("confirm_text", "继续"))
-			if ui_scale_factor >= 1.4:
-				if confirm_text == "开始作业":
-					confirm_text = "开始"
-				elif confirm_text == "我知道了":
-					confirm_text = "知道了"
 			button.text = "%s · %s" % [confirm_text, compact_hint] if not compact_hint.is_empty() else confirm_text
 			button.tooltip_text = "确认操作：%s" % full_hint if not full_hint.is_empty() else confirm_text
 		else:
@@ -202,46 +209,97 @@ func _refresh(reset_scroll: bool = false) -> void:
 			button.tooltip_text = "关闭当前教程提示"
 		if blocking and reset_scroll:
 			call_deferred("_grab_confirm_focus_if_valid", _last_popup_id)
+	_layout_content()
+	# Wrapped Button minima settle after text/width changes. Reflow once after
+	# Godot has shaped the new text so the bottom action keeps its safe inset.
+	call_deferred("_layout_content")
+
+
+func _layout_content() -> void:
+	if not visible or not is_inside_tree():
+		return
+	var content := get_node_or_null("Panel/Content") as Control
+	var title := get_node_or_null("Panel/Content/Title") as Label
+	var message := get_node_or_null("Panel/Content/Message") as RichTextLabel
+	var button := get_node_or_null("Panel/Content/ConfirmButton") as Button
 	if content != null:
 		var gap := 8.0 + 4.0 * ((ui_scale_factor - 1.0) / 0.5)
-		var title_height := maxf(
-			30.0,
-			title.get_combined_minimum_size().y if title != null else 30.0
-		)
+		# Measure using the new width: Label's old wrapped minimum can otherwise
+		# survive a resize until the next frame and overlap the message.
+		var title_height := 30.0
+		if title != null:
+			title.size.x = content.size.x
+			title_height = maxf(title_height, title.get_minimum_size().y)
+		var cancel := get_node_or_null("Panel/Content/CancelButton") as Button
+		var has_cancel := cancel != null and str(popup.get("id", "")) == "flag_entry_confirm"
+		var stacked_actions := false
+		var action_width := content.size.x
+		if cancel != null:
+			cancel.visible = has_cancel
+			cancel.add_theme_font_size_override("font_size", button.get_theme_font_size("font_size"))
+			_reserve_button_focus_inset(cancel)
+		if has_cancel:
+			var half_width := (content.size.x - gap) / 2.0
+			stacked_actions = _single_line_button_width(button) > half_width or _single_line_button_width(cancel) > half_width
+			if not stacked_actions:
+				action_width = half_width
 		var button_height := 0.0
 		if button != null and button.visible:
-			button_height = maxf(
-				40.0 * minf(ui_scale_factor, 1.25),
-				button.get_combined_minimum_size().y
-			)
+			button_height = _wrapped_button_height(button, action_width)
+		var cancel_height := _wrapped_button_height(cancel, action_width) if has_cancel else 0.0
+		var actions_height := button_height
+		if has_cancel:
+			actions_height = button_height + gap + cancel_height if stacked_actions else maxf(button_height, cancel_height)
 		if title != null:
 			_set_rect(title, Rect2(0.0, 0.0, content.size.x, title_height))
 		if message != null:
 			var message_top := title_height + gap
 			var message_bottom := content.size.y - (
-				button_height + gap
+				actions_height + gap
 				if button != null and button.visible
 				else 0.0
 			)
+			message.custom_minimum_size.y = 0.0
 			_set_rect(
 				message,
 				Rect2(
 					0.0,
 					message_top,
 					content.size.x,
-					maxf(80.0, message_bottom - message_top)
+					maxf(1.0, message_bottom - message_top)
 				)
 			)
 		if button != null and button.visible:
 			_set_rect(
 				button,
 				Rect2(
-					0.0,
+					action_width + gap if has_cancel and not stacked_actions else 0.0,
 					content.size.y - button_height,
-					content.size.x,
+					action_width,
 					button_height
 				)
 			)
+		if has_cancel:
+			_set_rect(cancel, Rect2(0.0, content.size.y - actions_height, action_width, cancel_height))
+
+
+func _wrapped_button_height(button: Button, width: float) -> float:
+	button.size.x = width
+	return maxf(40.0 * minf(ui_scale_factor, 1.25), button.get_minimum_size().y)
+
+
+func _single_line_button_width(button: Button) -> float:
+	return button.get_theme_font("font").get_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, -1, button.get_theme_font_size("font_size")).x + button.get_theme_stylebox("normal").get_minimum_size().x
+
+
+func _reserve_button_focus_inset(button: Button) -> void:
+	# The existing focus texture draws arrows inside both edges. Keep wrapped
+	# action text out of that artwork without reducing its font size.
+	for state in ["normal", "hover", "pressed", "focus", "disabled"]:
+		var style := button.get_theme_stylebox(state).duplicate() as StyleBox
+		style.content_margin_left = maxf(28.0, style.content_margin_left)
+		style.content_margin_right = maxf(28.0, style.content_margin_right)
+		button.add_theme_stylebox_override(state, style)
 
 
 func _resolved_layout_profile() -> Dictionary:
@@ -251,7 +309,20 @@ func _resolved_layout_profile() -> Dictionary:
 		profile = UILayoutProfileScript.profile_for_size(viewport_size)
 		profile["actual_viewport_size"] = Vector2i(int(round(viewport_size.x)), int(round(viewport_size.y)))
 	profile["ui_scale_factor"] = ui_scale_factor
+	if is_inside_tree():
+		profile["actual_viewport_size"] = Vector2i(UILayerContractScript.viewport_size_from_profile(profile).max(get_viewport_rect().size))
 	return profile
+
+
+func _tutorial_geometry(profile: Dictionary) -> Dictionary:
+	var layout := RunSurfaceModelScript.layout_geometry(profile)
+	return {
+		"panel_rect": layout.description_rect,
+		"left_hud_rect": layout.protocol_rect,
+		"right_status_rect": layout.scanner_rail_rect,
+		"room_stage_rect": layout.room_stage_rect,
+		"footer_rect": Rect2(layout.action_rect.position.x, layout.mine_risk_rect.position.y, layout.action_rect.size.x, layout.action_rect.end.y - layout.mine_risk_rect.position.y),
+	}
 
 
 func _reset_message_scroll(expected_popup_id: StringName) -> void:

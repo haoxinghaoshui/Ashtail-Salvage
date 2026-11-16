@@ -40,7 +40,7 @@ func _check_footer_and_mine_risk(resolution_id: StringName) -> void:
 	surface.apply_surface_model(_surface_model(profile, 3, [_long_detail_item()]))
 	await _frames(2)
 
-	var footer := UILayerContractScript.run_footer_geometry(profile)
+	var layout := RunSurfaceModelScript.layout_geometry(surface.current_layout_profile)
 	var risk_rect := surface.mine_risk_tag_art.get_rect()
 	var risk_label_rect := surface.mine_risk_label.get_rect()
 	var key_rect := surface.bottom_overlay_art.get_rect()
@@ -56,7 +56,15 @@ func _check_footer_and_mine_risk(resolution_id: StringName) -> void:
 	_check(surface.mine_risk_label.text == "周围雷险：3", "%s mine-risk copy/count drifted" % resolution_id)
 	_check(surface.mine_risk_tag_art.texture != null, "%s mine-risk art is unbound" % resolution_id)
 	_check(not surface.resource_label.visible, "%s duplicated the mine-risk signal in the left rail" % resolution_id)
-	_check(absf(risk_rect.position.y - float(footer.get("mine_risk_top", -1.0))) <= 0.1, "%s risk plate escaped footer contract" % resolution_id)
+	_check(risk_rect.is_equal_approx(layout.mine_risk_rect), "%s risk plate escaped the shared HUD allocation" % resolution_id)
+	_check(key_rect.is_equal_approx(layout.action_rect), "%s key dock escaped the shared HUD allocation" % resolution_id)
+	var protocol_rect := surface.status_card_art.get_rect()
+	_check(
+		risk_rect.position.x > protocol_rect.end.x and risk_rect.end.x < rail_rect.position.x
+		and absf(risk_rect.get_center().x - (protocol_rect.end.x + rail_rect.position.x) * 0.5) <= 0.5
+		and canvas.get_global_rect().encloses(surface.mine_risk_tag_art.get_global_rect()),
+		"%s risk plate overlaps a side rail or leaves the visible canvas" % resolution_id
+	)
 	_check(not surface.command_feedback_art.visible, "%s steady state retained a permanent command-feedback frame" % resolution_id)
 	_check(not surface.command_feedback_label.visible, "%s steady state retained permanent command-feedback copy" % resolution_id)
 	_check(not surface.action_hint_label.visible, "%s steady state retained permanent action-guidance copy" % resolution_id)
@@ -76,14 +84,31 @@ func _check_footer_and_mine_risk(resolution_id: StringName) -> void:
 			+ flat_backpack.border_width_right + flat_backpack.border_width_bottom == 0,
 			"%s backpack section retained a complete inner outline" % resolution_id
 		)
+	# The current rail is modal_frame.png, not the retired authored left-rail skin.
+	# Its 18px corner slices and real GPU title bounds are recorded in the audit.
+	var rail := surface.left_rail_art
+	var rail_texture := rail.texture
 	_check(
-		scanner_title_rect.position.x >= rail_rect.position.x + 20.0
-		and scanner_title_rect.position.y >= rail_rect.position.y + 24.0
-		and scanner_title_rect.end.x <= rail_rect.end.x - 12.0,
+		rail_texture != null and rail_texture.resource_path == "res://assets/art24/ui/modal_frame.png"
+		and FileAccess.get_sha256(rail_texture.resource_path).to_upper() == "F8D164AF4FF4C3E0C03CFB86D2E6B621FF8BE2F2C9429D2DDDB154F7579F38E4",
+		"%s scanner rail asset changed; its reviewed ornament clearance must be revalidated" % resolution_id
+	)
+	for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
+		_check(rail.get_patch_margin(side) == 18, "%s scanner rail lost its reviewed fixed corner slices" % resolution_id)
+	var rail_inset := Vector2(rail.get_patch_margin(SIDE_LEFT), rail.get_patch_margin(SIDE_TOP))
+	var rail_tail := Vector2(rail.get_patch_margin(SIDE_RIGHT), rail.get_patch_margin(SIDE_BOTTOM))
+	var scanner_safe := Rect2(rail_rect.position + rail_inset, rail_rect.size - rail_inset - rail_tail)
+	_check(
+		scanner_safe.encloses(scanner_title_rect)
+		and surface.scanner_title_label.get_minimum_size().y <= scanner_title_rect.size.y + 0.5
+		and surface.scanner_title_label.get_theme_font_size("font_size") >= 16
+		and not surface.scanner_title_label.clip_text
+		and surface.scanner_title_label.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING
+		and scanner_title_rect.end.y + 4.0 <= surface.scanner_summary_label.get_rect().position.y + 0.5,
 		"%s scanner title enters the authored rail ornament safe zone: title=%s rail=%s" % [
 			resolution_id,
 			scanner_title_rect,
-			rail_rect,
+			scanner_safe,
 		]
 	)
 	_check(
@@ -218,11 +243,36 @@ func _check_redundant_basic_encounter_actions_hidden() -> void:
 		"deprecated steady-HUD encounter copy leaked into the viewport"
 	)
 	_check(
-		not surface.room_body_label.visible
-		and not surface.objective_label.visible
+		not surface.objective_label.visible
 		and not surface.player_tag_label.visible,
-		"deprecated room copy leaked into the viewport"
+		"deprecated floating objective/name copy leaked into the viewport"
 	)
+	var room_copy := surface.room_body_label
+	var room_scroll := surface.room_description_scroll
+	var room_scroll_rect := room_scroll.get_global_rect()
+	_check(
+		room_copy.is_visible_in_tree() and room_scroll.is_visible_in_tree()
+		and room_copy.get_parent() == room_scroll
+		and room_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED
+		and room_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO
+		and room_copy.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART
+		and room_copy.max_lines_visible == -1 and not room_copy.clip_text
+		and room_copy.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING,
+		"authorized room description lost its visible, wrapping, scrollable presentation"
+	)
+	_check(
+		surface.room_text_mask.get_global_rect().grow(-18.0).encloses(room_scroll_rect)
+		and canvas.get_global_rect().encloses(room_scroll_rect)
+		and room_copy.get_global_rect().position.x >= room_scroll_rect.position.x
+		and room_copy.get_global_rect().end.x <= room_scroll_rect.end.x + 0.5
+		and not room_scroll_rect.intersects(surface.status_card_art.get_global_rect())
+		and not room_scroll_rect.intersects(surface.mine_risk_tag_art.get_global_rect()),
+		"room description escaped its padded left panel or overlaps another HUD region"
+	)
+	for copy_key in ["room_summary", "current_objective", "commission_text"]:
+		var expected_copy := String(model.get(copy_key, ""))
+		if not expected_copy.is_empty():
+			_check(room_copy.text.contains(expected_copy), "room description truncated %s" % copy_key)
 
 	for event_type in [&"trader", &"dice", &"altar", &"trap"]:
 		model["encounter_section"] = {

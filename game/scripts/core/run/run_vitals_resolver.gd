@@ -2,6 +2,7 @@ extends RefCounted
 class_name RunVitalsResolver
 
 const Balance := preload("res://scripts/core/run/run_balance_catalog.gd")
+const Z2Talents := preload("res://scripts/core/progression/z2_talent_runtime.gd")
 
 
 static func resolve_damage(state: Dictionary, packet: Dictionary) -> Dictionary:
@@ -9,6 +10,7 @@ static func resolve_damage(state: Dictionary, packet: Dictionary) -> Dictionary:
 		return _reject(state, "invalid_state")
 	if not _valid_damage(packet):
 		return _reject(state, "invalid_packet")
+	packet = Z2Talents.damage_packet(state, packet)
 	var next := _copy_state(state)
 	var kind := str(packet.get("damage_type", "physical"))
 	var amount := float(packet.amount)
@@ -93,6 +95,7 @@ static func resolve_heal(state: Dictionary, packet: Dictionary) -> Dictionary:
 	for key in ["base_multiplier", "bonus_rate", "flat_bonus", "reduction_multiplier"]:
 		if packet.has(key) and not _nonnegative(packet[key]):
 			return _reject(state, "invalid_packet")
+	packet = Z2Talents.heal_packet(state, packet)
 	var next := _copy_state(state)
 	# Battery and talent read the same base; reductions follow every bonus.
 	var boosted := float(packet.amount) * (float(packet.get("base_multiplier", 1.0)) + float(packet.get("bonus_rate", 0.0))) + float(packet.get("flat_bonus", 0.0))
@@ -112,6 +115,8 @@ static func resolve_pressure(state: Dictionary, packet: Dictionary) -> Dictionar
 		return _reject(state, "invalid_packet")
 	if not _nonnegative(packet.get("extra", 0)) or not _valid_counter_entry(packet.get("waiver", {})):
 		return _reject(state, "invalid_packet")
+	packet = Z2Talents.pressure_packet(state, packet)
+	var pressure_cap := Z2Talents.pressure_cap(state)
 	var next := _copy_state(state)
 	var original := float(packet.get("replacement_amount", packet.amount))
 	var adjusted := floori(original)
@@ -126,16 +131,16 @@ static func resolve_pressure(state: Dictionary, packet: Dictionary) -> Dictionar
 		for index in range(modifiers.size() - 1, -1, -1):
 			if str(modifiers[index].get("counter_key", "")) == "":
 				continue
-			var with_delta := _pressure_amount(original, modifiers, extra)
+			var with_delta := _pressure_amount(original, modifiers, extra, pressure_cap)
 			var without := modifiers.duplicate()
 			without.remove_at(index)
-			var without_delta := _pressure_amount(original, without, extra)
+			var without_delta := _pressure_amount(original, without, extra, pressure_cap)
 			var redundant := mini(with_delta, 100 - int(next.pressure)) == mini(without_delta, 100 - int(next.pressure))
 			if can_waive and with_delta >= 10 and without_delta >= 10:
 				redundant = true
 			if redundant:
 				modifiers.remove_at(index)
-		adjusted = _pressure_amount(original, modifiers, extra)
+		adjusted = _pressure_amount(original, modifiers, extra, pressure_cap)
 		for modifier in modifiers:
 			_consume(next, modifier, spent)
 		if can_waive and adjusted >= 10:
@@ -166,7 +171,7 @@ static func _physical_damage(amount: float, modifiers: Array) -> int:
 	return maxi(1, floori(minf(remaining, amount - minimum_block) - flat_block))
 
 
-static func _pressure_amount(amount: float, modifiers: Array, extra: float) -> int:
+static func _pressure_amount(amount: float, modifiers: Array, extra: float, cap: int) -> int:
 	var remaining := amount
 	for modifier in modifiers:
 		if str(modifier.kind) == "percent":
@@ -175,7 +180,8 @@ static func _pressure_amount(amount: float, modifiers: Array, extra: float) -> i
 			remaining -= float(modifier.amount)
 	if remaining <= 0.0:
 		return 0
-	return mini(15, maxi(0, floori(remaining + extra)))
+	var adjusted := maxi(0, floori(remaining + extra))
+	return mini(cap, adjusted) if cap >= 0 else adjusted
 
 
 static func _modifiers(state: Dictionary, packet: Dictionary, key: String, kind: String) -> Array[Dictionary]:

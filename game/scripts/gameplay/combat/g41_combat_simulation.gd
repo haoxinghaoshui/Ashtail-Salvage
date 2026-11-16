@@ -4,6 +4,7 @@ class_name G41CombatSimulation
 const RngScript := preload("res://scripts/gameplay/combat/g41_deterministic_rng.gd")
 const MonsterCatalogScript := preload("res://scripts/gameplay/combat/g41_monster_catalog.gd")
 const WorldObjectProjection := preload("res://scripts/gameplay/runtime/g41_world_object_projection.gd")
+const Z2Talents := preload("res://scripts/core/progression/z2_talent_runtime.gd")
 
 const FIXED_STEP := 1.0 / 60.0
 const MAX_FRAME_DELTA := 0.25
@@ -90,6 +91,9 @@ var next_hit_index: int = 1
 var step_error: Dictionary = {}
 # Authority binding, deliberately excluded from transaction/checkpoint data.
 var hit_resolver: Callable = Callable()
+var attack_allowed_query: Callable = Callable()
+var attack_started_resolver: Callable = Callable()
+var attack_power_resolver: Callable = Callable()
 
 
 func export_transaction_state() -> Dictionary:
@@ -150,6 +154,8 @@ func validate_transaction_state(state: Dictionary) -> bool:
 	if restored_rng <= 0 or restored_rng >= RngScript.MODULUS or str(restored_rng) != state.rng_state or state.encounter_id.is_empty():
 		return false
 	if not _valid_record(state.player, {"pos": TYPE_VECTOR2, "velocity": TYPE_VECTOR2, "facing": TYPE_VECTOR2, "hp": TYPE_INT, "max_hp": TYPE_INT, "power": TYPE_INT, "shield": TYPE_INT, "state": TYPE_STRING_NAME, "state_timer": TYPE_FLOAT, "attack_cooldown": TYPE_FLOAT, "invulnerability": TYPE_FLOAT}):
+		return false
+	if state.player.has("z2_talents") and not Z2Talents.valid_profile(state.player.z2_talents):
 		return false
 	if state.player.max_hp < 1 or state.player.hp < 0 or state.player.hp > state.player.max_hp or state.player.power < 1 or state.player.shield < 0:
 		return false
@@ -352,6 +358,8 @@ func start(config: Dictionary = {}) -> void:
 		"invulnerability": 0.0,
 	}
 	player["hp"] = mini(int(player["hp"]), int(player["max_hp"]))
+	if bool(config.get("z2_talents", {}).get("enabled", false)):
+		player["z2_talents"] = config.z2_talents.duplicate(true)
 	player_position_history.append(player_spawn)
 	var monster_types: Array = config.get("monster_types", MonsterCatalogScript.default_encounter())
 	var enemy_profiles: Array = config.get("enemy_profiles", [])
@@ -391,8 +399,12 @@ func set_player_input(next_move: Vector2, next_aim: Vector2 = Vector2.ZERO) -> v
 		aim_input = move_input.normalized()
 
 
+func is_player_attack_allowed() -> bool:
+	return not attack_allowed_query.is_valid() or attack_allowed_query.call() == true
+
+
 func queue_player_attack(requested_facing: Vector2 = Vector2.ZERO) -> bool:
-	if not active or paused or defeated or cleared:
+	if not active or paused or defeated or cleared or not is_player_attack_allowed():
 		_clear_attack_buffer()
 		return false
 	var player_state := StringName(player.get("state", &"idle"))
@@ -559,7 +571,7 @@ func build_snapshot() -> Dictionary:
 			"remaining_seconds": attack_buffer_remaining,
 			"maximum_seconds": PLAYER_ATTACK_BUFFER_SECONDS,
 			"cooldown_remaining_seconds": float(player.get("attack_cooldown", 0.0)),
-			"cooldown_maximum_seconds": PLAYER_ATTACK_COOLDOWN,
+			"cooldown_maximum_seconds": _attack_seconds(PLAYER_ATTACK_COOLDOWN),
 			"ready": (
 				StringName(player.get("state", &"idle")) in [&"idle", &"move"]
 				and float(player.get("attack_cooldown", 0.0)) <= EPSILON
@@ -629,6 +641,8 @@ func _step(before_physics: Callable = Callable()) -> void:
 			_emit_event(&"player_defeated", {"source_id": "simulation_time", "damage_kind": &"status"})
 			return
 	_update_player(FIXED_STEP)
+	if not step_error.is_empty():
+		return
 	player_position_history.append(Vector2(player.get("pos", Vector2.ZERO)))
 	if player_position_history.size() > 31:
 		player_position_history.pop_front()
@@ -680,7 +694,7 @@ func _update_player(delta: float) -> void:
 		# Recovery keeps the authored facing but returns locomotion immediately.
 		current_velocity = Vector2.ZERO
 	else:
-		var target_velocity := move_input * PLAYER_SPEED
+		var target_velocity := move_input * PLAYER_SPEED * Z2Talents.speed_multiplier(player.get("z2_talents", {}), "movement_speed_percent")
 		var acceleration := PLAYER_ACCELERATION if move_input.length_squared() > EPSILON else PLAYER_DECELERATION
 		current_velocity = current_velocity.move_toward(target_velocity, acceleration * delta)
 	player["velocity"] = current_velocity
@@ -693,6 +707,15 @@ func _update_player(delta: float) -> void:
 
 func _update_player_attack(delta: float) -> void:
 	var state := StringName(player.get("state", &"idle"))
+	# Input can precede a restored opening state. Recheck before consuming any
+	# first-attack effect or creating a damaging attack contract.
+	if not is_player_attack_allowed():
+		_clear_attack_buffer()
+		if state in [&"attack_windup", &"attack_active", &"attack_recovery"]:
+			active_player_attack.clear()
+			state = &"move" if move_input.length_squared() > EPSILON else &"idle"
+			player["state"] = state
+			player["state_timer"] = 0.0
 	if state == &"hurt":
 		player["state_timer"] = maxf(0.0, float(player.get("state_timer", 0.0)) - delta)
 		if float(player["state_timer"]) <= EPSILON:
@@ -703,10 +726,15 @@ func _update_player_attack(delta: float) -> void:
 		_clear_attack_buffer()
 		state = &"attack_windup"
 		player["state"] = state
-		player["state_timer"] = PLAYER_ATTACK_WINDUP
-		player["attack_cooldown"] = PLAYER_ATTACK_COOLDOWN
+		player["state_timer"] = _attack_seconds(PLAYER_ATTACK_WINDUP)
+		player["attack_cooldown"] = _attack_seconds(PLAYER_ATTACK_COOLDOWN)
 		active_player_attack = _create_player_attack_contract(queued_facing)
 		player["facing"] = Vector2(active_player_attack.get("facing", player.get("facing", Vector2.RIGHT)))
+		if attack_started_resolver.is_valid():
+			var started: Variant = attack_started_resolver.call()
+			if not started is Dictionary or not bool(started.get("ok", false)):
+				step_error = started.duplicate(true) if started is Dictionary else {"ok": false, "reason": "invalid_attack_start_result"}
+				return
 		_emit_event(&"player_attack_started", active_player_attack)
 		_react_to_player_attack(active_player_attack)
 	elif attack_queued:
@@ -721,11 +749,11 @@ func _update_player_attack(delta: float) -> void:
 			match state:
 				&"attack_windup":
 					player["state"] = &"attack_active"
-					player["state_timer"] = PLAYER_ATTACK_ACTIVE
+					player["state_timer"] = _attack_seconds(PLAYER_ATTACK_ACTIVE)
 					active_player_attack["active_started_tick"] = tick_index
 				&"attack_active":
 					player["state"] = &"attack_recovery"
-					player["state_timer"] = PLAYER_ATTACK_RECOVERY
+					player["state_timer"] = _attack_seconds(PLAYER_ATTACK_RECOVERY)
 				&"attack_recovery":
 					player["state"] = &"move" if move_input.length_squared() > EPSILON else &"idle"
 					player["state_timer"] = 0.0
@@ -735,7 +763,7 @@ func _update_player_attack(delta: float) -> void:
 
 
 func _perform_player_attack() -> void:
-	if active_player_attack.is_empty() or bool(active_player_attack.get("resolved", false)):
+	if active_player_attack.is_empty() or bool(active_player_attack.get("resolved", false)) or not is_player_attack_allowed():
 		return
 	active_player_attack["resolved"] = true
 	active_player_attack["resolved_tick"] = tick_index
@@ -745,6 +773,13 @@ func _perform_player_attack() -> void:
 	var cone_dot := float(active_player_attack.get("cone_dot", PLAYER_ATTACK_CONE_DOT))
 	var hit_ids: Array[String] = []
 	var blocked_ids: Array[String] = []
+	var attack_power := int(player.get("power", 1))
+	if attack_power_resolver.is_valid():
+		var resolved: Variant = attack_power_resolver.call(attack_power)
+		if not resolved is int or resolved < 1:
+			step_error = {"ok": false, "reason": "invalid_attack_power"}
+			return
+		attack_power = resolved
 	for enemy_index in range(enemies.size()):
 		var enemy := enemies[enemy_index]
 		if int(enemy.get("hp", 0)) <= 0:
@@ -763,7 +798,14 @@ func _perform_player_attack() -> void:
 		if _line_occluded(origin, Vector2(enemy.get("pos", Vector2.ZERO))):
 			blocked_ids.append(enemy_id)
 			continue
-		_damage_enemy(enemy_index, int(player.get("power", 1)))
+		var damage := attack_power
+		var critical := false
+		var crit_stats := Z2Talents.critical_stats(player.get("z2_talents", {}))
+		if int(crit_stats.chance_percent) > 0:
+			critical = rng.next_float() * 100.0 < float(crit_stats.chance_percent)
+			if critical:
+				damage = maxi(1, floori(float(damage) * float(crit_stats.damage_percent) / 100.0))
+		_damage_enemy(enemy_index, damage, critical)
 		hit_ids.append(enemy_id)
 	var resolved_geometry := active_player_attack.duplicate(true)
 	resolved_geometry["hit_enemy_ids"] = hit_ids
@@ -781,7 +823,11 @@ func _player_attack_impact_is_due() -> bool:
 	# that same authoritative step. This keeps the settlement on the first
 	# fixed tick where attack_impact can already be visible.
 	var visible_active_ticks := maxi(1, tick_index - active_started_tick + 1)
-	return float(visible_active_ticks) * FIXED_STEP + EPSILON >= PLAYER_ATTACK_IMPACT_SECONDS
+	return float(visible_active_ticks) * FIXED_STEP + EPSILON >= _attack_seconds(PLAYER_ATTACK_IMPACT_SECONDS)
+
+
+func _attack_seconds(base_seconds: float) -> float:
+	return base_seconds / Z2Talents.speed_multiplier(player.get("z2_talents", {}), "attack_speed_percent")
 
 
 func _update_enemy(enemy_index: int, delta: float) -> void:
@@ -1283,7 +1329,7 @@ func _update_lasers(delta: float) -> void:
 	lasers = survivors
 
 
-func _damage_enemy(enemy_index: int, damage: int) -> void:
+func _damage_enemy(enemy_index: int, damage: int, critical: bool = false) -> void:
 	if enemy_index < 0 or enemy_index >= enemies.size():
 		return
 	var enemy := enemies[enemy_index]
@@ -1300,7 +1346,10 @@ func _damage_enemy(enemy_index: int, damage: int) -> void:
 			applied = maxi(1, int(round(float(applied) * float(definition.get("guard_multiplier", 0.25)))))
 			_emit_event(&"guard_blocked", {"enemy_id": enemy["enemy_id"], "damage": applied})
 	enemy["hp"] = maxi(0, int(enemy.get("hp", 0)) - applied)
-	_emit_event(&"enemy_damaged", {"enemy_id": enemy.get("enemy_id", ""), "damage": applied, "hp": enemy["hp"]})
+	var hit := {"enemy_id": enemy.get("enemy_id", ""), "damage": applied, "hp": enemy["hp"]}
+	if bool(player.get("z2_talents", {}).get("enabled", false)):
+		hit["critical"] = critical
+	_emit_event(&"enemy_damaged", hit)
 	if int(enemy["hp"]) <= 0:
 		enemy["state"] = &"dead"
 		_cancel_enemy_hazards(String(enemy["enemy_id"]))
@@ -1841,7 +1890,7 @@ func _create_player_attack_contract(requested_facing: Vector2 = Vector2.ZERO) ->
 		"cone_dot": PLAYER_ATTACK_CONE_DOT,
 		"half_angle_radians": acos(clampf(PLAYER_ATTACK_CONE_DOT, -1.0, 1.0)),
 		"started_tick": tick_index,
-		"impact_seconds": PLAYER_ATTACK_IMPACT_SECONDS,
+		"impact_seconds": _attack_seconds(PLAYER_ATTACK_IMPACT_SECONDS),
 		"resolved": false,
 		"shape": &"sector",
 		"target_radius_policy": &"circle_sector_intersection",

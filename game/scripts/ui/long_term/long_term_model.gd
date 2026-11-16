@@ -7,6 +7,7 @@ const LongTermTabModelScript := preload("res://scripts/ui/long_term/long_term_ta
 const CodexLiteModelScript := preload("res://scripts/ui/codex_lite/codex_lite_model.gd")
 const M7ContentCatalogScript := preload("res://scripts/core/content/m7_content_catalog.gd")
 const M7TalentCatalogScript := preload("res://scripts/core/progression/m7_talent_catalog.gd")
+const Z2Rules := preload("res://scripts/core/progression/z2_progression_rules.gd")
 const ResultPresentationModelScript := preload("res://scripts/ui/result/result_presentation_model.gd")
 const ItemRarityDescriptorScript := preload("res://scripts/presentation/item_rarity_descriptor.gd")
 
@@ -169,14 +170,14 @@ static func _history_preview_panel(snapshot: Dictionary) -> Dictionary:
 
 
 static func _profile_runtime_panel(meta_summary: Dictionary = {}, latest_result: Dictionary = {}) -> Dictionary:
-	var level := maxi(1, int(meta_summary.get("profile_level", 1)))
+	var level := maxi(0 if Z2Rules.applies_to(meta_summary) else 1, int(meta_summary.get("profile_level", 1)))
 	var exp_value := maxi(0, int(meta_summary.get("profile_exp", 0)))
 	var run_count := maxi(0, int(meta_summary.get("run_count", 0)))
 	var extract_count := clampi(int(meta_summary.get("extract_count", 0)), 0, run_count)
 	var history_records := _array(meta_summary.get("history_records", []))
 	var titles := _array(meta_summary.get("titles", []))
 	var current_title := str(titles.back()) if not titles.is_empty() else "回收员"
-	var next_level_exp := M7ContentCatalogScript.profile_exp_for_level(level + 1)
+	var next_level_exp := M7ContentCatalogScript.profile_exp_for_level(level + 1, meta_summary)
 	return {
 		"title": "角色档案",
 		"profile_level": level,
@@ -273,6 +274,22 @@ static func _goal_cards(meta: Dictionary, goal_kind: String, definitions_value: 
 		if status == "claimable":
 			card["action"] = {"action": &"claim_goal", "goal_kind": goal_kind, "goal_id": goal_id}
 			card["action_label"] = "领取奖励"
+		var steps: Array = definition.get("reward_steps", [])
+		if Z2Rules.applies_to(meta) and steps.size() > 1:
+			var tiers: Array[Dictionary] = []
+			facts.clear()
+			facts.append("状态：%s" % status_label)
+			for step: Dictionary in steps:
+				var tier := int(step.get("tier", 0))
+				var claimed: bool = state.get("claimed_tiers", []).has(tier)
+				var claimable: bool = state.get("claimable_tiers", []).has(tier)
+				var label := "第%d档 · %s" % [tier, "已领" if claimed else ("领取" if claimable else "未达成")]
+				tiers.append({"tier": tier, "label": label, "enabled": claimable and not claimed,
+					"action": {"action": &"claim_goal", "goal_kind": goal_kind, "goal_id": goal_id, "tier": tier}})
+				facts.append("第%d档：%d / %d · %s" % [tier, mini(progress, int(step.target)), int(step.target), _reward_text(step.get("reward", {}))])
+			card["tier_actions"] = tiers
+			card.erase("action")
+			card.erase("action_label")
 		cards.append(card)
 	cards.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.get("sort_order", 9)) < int(b.get("sort_order", 9)))
 	return cards
@@ -327,21 +344,22 @@ static func _research_cards(meta: Dictionary) -> Array[Dictionary]:
 				if str(warehouse_item.get("item_id", "")) == material_name:
 					has_material = true
 					break
-		var material_definition := M7ContentCatalogScript.item_definition(material_name)
+		var material_definition := M7ContentCatalogScript.item_definition(material_name, meta)
 		if not material_definition.is_empty():
 			material_name = str(material_definition.get("display_name", "未知材料"))
 		elif material_name.is_empty():
 			material_name = "未知材料"
 		var affordable := bool(definition.get("affordable", gold >= int(definition.get("gold_cost", 0))))
-		var can_complete := bool(definition.get("can_complete", not is_completed and prerequisite_met and affordable and has_material))
-		var state := "已完成" if is_completed else ("可研究" if can_complete else ("前置未完成" if not prerequisite_met else ("材料不足" if not has_material else ("金币不足" if not affordable else "暂不可研究"))))
+		var repeatable := bool(definition.get("repeatable", false))
+		var can_complete := bool(definition.get("can_complete", (not is_completed or repeatable) and prerequisite_met and affordable and has_material))
+		var state := "已完成" if is_completed and not repeatable else ("可合成" if can_complete and repeatable else ("可研究" if can_complete else ("前置未完成" if not prerequisite_met else ("材料不足" if not has_material else ("金币不足" if not affordable else "暂不可研究")))))
 		var prerequisite_label := "研究起点"
 		if prerequisite != "":
-			var prerequisite_definition: Dictionary = definitions_by_id.get(prerequisite, M7ContentCatalogScript.research_definition(prerequisite))
+			var prerequisite_definition: Dictionary = definitions_by_id.get(prerequisite, M7ContentCatalogScript.research_definition(prerequisite, meta))
 			prerequisite_label = str(prerequisite_definition.get("display_name", "未知前置研究"))
-		var gold_fact := "研究费用：%d 金币（已投入）" % int(definition.get("gold_cost", 0)) if is_completed else "消耗：%d 金币（当前 %d）" % [int(definition.get("gold_cost", 0)), gold]
+		var gold_fact := "研究费用：%d 金币（已投入）" % int(definition.get("gold_cost", 0)) if is_completed and not repeatable else "消耗：%d 金币（当前 %d）" % [int(definition.get("gold_cost", 0)), gold]
 		var material_count := maxi(1, int(definition.get("material_count", 1)))
-		var material_fact := "研究材料：%s ×%d（已投入）" % [material_name, material_count] if is_completed else "材料：%s ×%d（%s）" % [material_name, material_count, "已备齐" if has_material else "缺少"]
+		var material_fact := "研究材料：%s ×%d（已投入）" % [material_name, material_count] if is_completed and not repeatable else "材料：%s ×%d（%s）" % [material_name, material_count, "已备齐" if has_material else "缺少"]
 		var tree_depth := _research_tree_depth(research_id, definitions_by_id)
 		var card := {
 			"id": research_id,
@@ -362,16 +380,16 @@ static func _research_cards(meta: Dictionary) -> Array[Dictionary]:
 			"tree_index": index,
 			"tree_total": definitions.size(),
 		}
-		if not is_completed and can_complete:
+		if (not is_completed or repeatable) and can_complete:
 			card["action"] = {"action": &"complete_research", "research_id": research_id}
-			card["action_label"] = "确认消耗并研究"
+			card["action_label"] = "消耗材料与金币 · 合成1件" if repeatable else "确认消耗并研究"
 		cards.append(card)
 	return cards
 
 
 static func _talent_cards(meta: Dictionary) -> Array[Dictionary]:
 	var source: Array = meta.get("talent_catalog", [])
-	if source.is_empty():
+	if source.is_empty() and not Z2Rules.applies_to(meta):
 		source = M7TalentCatalogScript.projection(meta)
 	var names_by_id := {}
 	for raw_node in source:
@@ -402,7 +420,7 @@ static func _talent_cards(meta: Dictionary) -> Array[Dictionary]:
 				"前置：%s" % prerequisite_text,
 				"消耗：%d 天赋点（当前 %d）" % [int(node.get("cost", 1)), int(node.get("current_talent_points", meta.get("talent_points", 0)))],
 				"精确效果：%s" % str(node.get("effect_label", "")),
-				"生效范围：确认出发后生成的新一局",
+				"生效范围：该批开局效果的选择资格" if StringName(node.get("runtime_scope", &"")) == &"opening_effect_eligibility" else "生效范围：确认出发后生成的新一局",
 			],
 			"presentation_kind": &"talent_unlock_node",
 			"tree_source": &"m7_talent_catalog",
@@ -432,7 +450,7 @@ static func _talent_cards(meta: Dictionary) -> Array[Dictionary]:
 static func _research_catalog(meta: Dictionary) -> Array[Dictionary]:
 	var source: Array = meta.get("research_catalog", [])
 	if source.is_empty():
-		source = M7ContentCatalogScript.research_definitions()
+		source = M7ContentCatalogScript.research_definitions(meta)
 	var result: Array[Dictionary] = []
 	for raw_definition in source:
 		if raw_definition is Dictionary:
@@ -490,7 +508,7 @@ static func _talent_tree_contract(cards_value: Variant, meta: Dictionary) -> Dic
 		if (card.get("prerequisite_ids", []) as Array).is_empty():
 			root_ids.append(str(card.get("id", "")))
 		else:
-			edge_count += 1
+			edge_count += (card.get("prerequisite_ids", []) as Array).size()
 	var talent_summary: Dictionary = meta.get("talent_summary", M7TalentCatalogScript.summary(meta))
 	return {
 		"source": &"m7_talent_catalog",
@@ -523,7 +541,7 @@ static func _codex_group_cards(meta: Dictionary, group_id: StringName) -> Array[
 			title = String(subject["display_name"]) if subject.has("display_name") else _codex_entry_title(entry_id)
 		var facts: Array[String] = ["发现状态：%s" % ("已永久登记" if known else "尚未登记")]
 		if known and entry_id.begins_with("item:"):
-			var item := M7ContentCatalogScript.item_definition(entry_id.trim_prefix("item:"))
+			var item := M7ContentCatalogScript.item_definition(entry_id.trim_prefix("item:"), meta)
 			var quality := ItemRarityDescriptorScript.describe_item(item)
 			facts.append("品质 %s" % quality["label"])
 			var level := int(item.get("collectible_level", 0))
@@ -611,11 +629,11 @@ static func _milestone_cards(meta: Dictionary) -> Array[Dictionary]:
 	var exp_value := int(meta.get("profile_exp", 0))
 	var cards: Array[Dictionary] = []
 	for definition in M7ContentCatalogScript.profile_levels():
-		var threshold := int(definition.get("exp", 0))
+		var threshold := M7ContentCatalogScript.profile_exp_for_level(int(definition.get("level", 1)), meta)
 		cards.append({
 			"id": "profile_level_%d" % int(definition.get("level", 1)),
 			"title": "Lv.%d · %s" % [int(definition.get("level", 1)), str(definition.get("title", "回收员"))],
-			"state": "已达成" if exp_value >= threshold else "还需 %d 经验" % (threshold - exp_value),
+			"state": "完成教学后登记" if Z2Rules.applies_to(meta) and int(meta.get("profile_level", 0)) == 0 else ("已达成" if exp_value >= threshold else "还需 %d 经验" % (threshold - exp_value)),
 			"description": "资历经验达到阈值后永久登记对应称号与徽章。",
 			"facts": [
 				"经验阈值：%d" % threshold,
@@ -642,23 +660,27 @@ static func _simple_owned_cards(values_value: Variant, empty_label: String) -> A
 
 
 static func _qualification_cards(meta: Dictionary) -> Array[Dictionary]:
-	var level := maxi(1, int(meta.get("profile_level", 1)))
+	var z2_profile := Z2Rules.applies_to(meta)
+	var level := maxi(0 if z2_profile else 1, int(meta.get("profile_level", 1)))
 	var exp_value := maxi(0, int(meta.get("profile_exp", 0)))
 	var current_title := "回收员"
-	var next_threshold := M7ContentCatalogScript.profile_exp_for_level(level + 1)
+	var next_threshold := M7ContentCatalogScript.profile_exp_for_level(level + 1, meta)
 	for definition in M7ContentCatalogScript.profile_levels():
 		var definition_level := int(definition.get("level", 1))
 		if definition_level <= level:
 			current_title = str(definition.get("title", current_title))
+	var facts := [
+		"累计经验：%d" % exp_value,
+		"下一阈值：%s" % ("完成教学后升至 Lv.1" if z2_profile and level == 0 else (str(next_threshold) if next_threshold >= 0 else "已达当前上限")),
+	]
+	if z2_profile:
+		facts.append("等级上限 Lv.50 · Demo 内容至 Lv.30")
 	return [{
 		"id": "profile_current_qualification",
 		"title": "Lv.%d · %s" % [level, current_title],
 		"state": "已登记",
 		"description": "当前角色资历来自已提交的局外进度，不在本页重算。",
-		"facts": [
-			"累计经验：%d" % exp_value,
-			"下一阈值：%s" % (str(next_threshold) if next_threshold >= 0 else "已达当前上限"),
-		],
+		"facts": facts,
 	}]
 
 

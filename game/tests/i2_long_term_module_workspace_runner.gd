@@ -123,7 +123,7 @@ func _test_read_only_selection_and_explicit_actions(shell: Control) -> void:
 	_check(str(claim_request.get("request_id", "")).begins_with("long_term:"), "Task claim did not establish a page-owned request id")
 	_check(StringName(claim_request.get("source_page", &"")) == &"long_term", "Task claim source page was not explicit")
 	var claim_tx: Dictionary = shell.call("get_meta_transaction_snapshot")
-	_check(bool(claim_tx.get("pending", false)) and str((claim_tx.get("pending_request", {}) as Dictionary).get("target_id", "")) == "task:task_one", "Task claim pending identity is incomplete")
+	_check(bool(claim_tx.get("pending", false)) and str((claim_tx.get("pending_request", {}) as Dictionary).get("target_id", "")) == "task:task_one:1", "Task claim pending kind/id/tier identity is incomplete")
 
 	# Pending is global to destructive LongTerm actions: navigating to another
 	# actionable record must not allow a second transaction to overlap it.
@@ -144,7 +144,7 @@ func _test_read_only_selection_and_explicit_actions(shell: Control) -> void:
 	_check(not bool(shell.call("apply_meta_action_result", stale_claim)), "Stale claim result was accepted")
 	_check(bool((shell.call("get_meta_transaction_snapshot") as Dictionary).get("pending", false)), "Stale claim result cleared pending")
 	var wrong_target_claim := _meta_result(claim_request, false, &"not_claimable")
-	wrong_target_claim["target_id"] = "task:other"
+	wrong_target_claim["target_id"] = "task:other:1"
 	_check(not bool(shell.call("apply_meta_action_result", wrong_target_claim)), "Wrong-target claim result was accepted")
 	var claim_failure := _meta_result(claim_request, false, &"not_claimable")
 	_check(bool(shell.call("apply_meta_action_result", claim_failure)), "Matching claim failure was not accepted")
@@ -240,7 +240,7 @@ func _meta_result(request: Dictionary, ok: bool, status: StringName) -> Dictiona
 	var action := StringName(request.get("action", &""))
 	var target_id := ""
 	match action:
-		&"claim_goal": target_id = "%s:%s" % [str(request.get("goal_kind", "")), str(request.get("goal_id", ""))]
+		&"claim_goal": target_id = "%s:%s:%d" % [str(request.get("goal_kind", "")), str(request.get("goal_id", "")), int(request.get("tier", 1))]
 		&"complete_research": target_id = str(request.get("research_id", ""))
 		&"mark_viewed": target_id = str(request.get("view_kind", ""))
 	return {

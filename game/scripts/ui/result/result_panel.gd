@@ -58,6 +58,8 @@ var salvage_candidate_buttons: Dictionary = {}
 var selected_salvage_ids: Array[String] = []
 var salvage_capacity: int = 0
 var salvage_has_candidates: bool = false
+var terminal_selection_query: Callable
+var terminal_retention_limit: int = 0
 var result_has_visible_items: bool = false
 var current_layout_profile: Dictionary = {}
 var current_result_model: Dictionary = {}
@@ -67,6 +69,7 @@ var ui_scale_factor := 1.0
 
 
 func _ready() -> void:
+	UILayerContractScript.apply_layer(self, &"modal")
 	Art10UISkinKitScript.apply_player_ui_theme(self)
 	_ensure_backdrop()
 	_ensure_actions()
@@ -627,7 +630,7 @@ func _ensure_salvage_panel() -> void:
 	_set_scaled_constant(content, &"separation", 8)
 	salvage_panel.add_child(content)
 	var heading := Label.new()
-	heading.text = "选择要保全的非消耗品"
+	heading.text = "选择要带回的物资"
 	_set_scaled_font_size(heading, 16)
 	heading.add_theme_color_override("font_color", Color(0.96, 0.72, 0.34, 1.0))
 	content.add_child(heading)
@@ -658,7 +661,7 @@ func _ensure_salvage_panel() -> void:
 	salvage_candidates_scroll.add_child(salvage_candidates_box)
 	salvage_confirm_button = Button.new()
 	salvage_confirm_button.text = "确认保全并完成结算"
-	salvage_confirm_button.tooltip_text = "确认后将所选物资带回仓库；未选择物资与所有消耗品将无法带回。"
+	salvage_confirm_button.tooltip_text = "确认后将所选物资带回仓库；未选择的物资将无法带回。"
 	_set_scaled_minimum_size(salvage_confirm_button, Vector2(0, 44))
 	_apply_art21r2_modal_button(salvage_confirm_button, &"art21r2.modal.button.primary", &"primary", 13)
 	salvage_confirm_button.pressed.connect(_confirm_failure_salvage)
@@ -696,7 +699,12 @@ func _configure_failure_salvage(snapshot: Dictionary) -> void:
 	if salvage_confirm_button != null:
 		salvage_confirm_button.disabled = false
 	selected_salvage_ids.clear()
+	for id in settlement.get("default_selected_instance_ids", []):
+		selected_salvage_ids.append(str(id))
+	terminal_retention_limit = int(settlement.get("retention_limit", 0))
 	salvage_capacity = int(settlement.get("salvage_capacity", 0))
+	if salvage_confirm_button != null:
+		salvage_confirm_button.tooltip_text = "确认后将所选物资带回仓库；未选择的候选物资无法带回。" if terminal_retention_limit > 0 else "确认后将所选物资带回仓库；未选择物资与所有消耗品将无法带回。"
 	if salvage_reason_label != null:
 		salvage_reason_label.text = String(current_result_model.get("reason_text", "本次探索未能完成。"))
 	if salvage_consequence_label != null:
@@ -707,7 +715,7 @@ func _configure_failure_salvage(snapshot: Dictionary) -> void:
 	var candidates: Array = settlement.get("settlement_pool", [])
 	salvage_has_candidates = not candidates.is_empty()
 	if salvage_candidates_scroll != null:
-		_set_scaled_minimum_size(salvage_candidates_scroll, Vector2(0, 92 if salvage_has_candidates else 24))
+		_set_scaled_minimum_size(salvage_candidates_scroll, Vector2(0, 64 if salvage_has_candidates else 24))
 		salvage_candidates_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL if salvage_has_candidates else Control.SIZE_SHRINK_BEGIN
 	if candidates.is_empty():
 		var empty_label := Label.new()
@@ -729,7 +737,7 @@ func _configure_failure_salvage(snapshot: Dictionary) -> void:
 		var collectible_level_text := String(item_model.get("collectible_level_text", ""))
 		if collectible_level_text != "":
 			item_meta.append(collectible_level_text)
-		item_meta.append("重量 %d" % int(item_model.get("weight", 0)))
+		item_meta.append("重量 %d" % int(item.get("settlement_weight", item_model.get("weight", 0))))
 		button.text = "%s  ·  %s" % [
 			String(item_model.get("display_name", "未命名物资")),
 			"  ·  ".join(item_meta),
@@ -738,8 +746,11 @@ func _configure_failure_salvage(snapshot: Dictionary) -> void:
 		_set_scaled_minimum_size(button, Vector2(0, 42))
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		_apply_art21r2_modal_button(button, &"art21r2.modal.item_row.normal", &"secondary", 13, 10)
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		button.clip_text = false
+		button.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 		button.set_meta("instance_id", instance_id)
-		button.set_meta("weight", int(item_model.get("weight", 0)))
+		button.set_meta("weight", int(item.get("settlement_weight", item_model.get("weight", 0))))
 		button.set_meta("collectible_level", int(item_model.get("collectible_level", 0)))
 		button.set_meta("rarity_border_token", rarity.get("border_token", &"rarity.border.unknown"))
 		var rarity_marker := ColorRect.new()
@@ -772,17 +783,22 @@ func _toggle_salvage_item(instance_id: String, pressed: bool) -> void:
 
 func _refresh_salvage_controls() -> void:
 	var used := 0
+	var authoritative: Dictionary = terminal_selection_query.call(selected_salvage_ids) if terminal_selection_query.is_valid() else {}
 	for instance_id in selected_salvage_ids:
 		var selected_button := salvage_candidate_buttons.get(instance_id) as Button
 		if selected_button != null:
 			used += int(selected_button.get_meta("weight", 1))
+	if not authoritative.is_empty():
+		used = int(authoritative.get("selected_salvage_weight", 0))
+		if salvage_confirm_button != null:
+			salvage_confirm_button.disabled = not bool(authoritative.get("ok", false))
 	for instance_id in salvage_candidate_buttons.keys():
 		var button := salvage_candidate_buttons[instance_id] as Button
 		if button == null:
 			continue
 		var is_selected := selected_salvage_ids.has(String(instance_id))
 		button.set_pressed_no_signal(is_selected)
-		button.disabled = not is_selected and used + int(button.get_meta("weight", 1)) > salvage_capacity
+		button.disabled = not is_selected and (not bool(authoritative.get("can_add", {}).get(instance_id, false)) if not authoritative.is_empty() else used + int(button.get_meta("weight", 1)) > salvage_capacity)
 	if salvage_capacity_label != null:
 		salvage_capacity_label.text = "保全容量：%d / %d；已选 %d 件，未选 %d 件。所有消耗品都无法带回。" % [
 			used,
@@ -790,6 +806,8 @@ func _refresh_salvage_controls() -> void:
 			selected_salvage_ids.size(),
 			maxi(0, salvage_candidate_buttons.size() - selected_salvage_ids.size()),
 		]
+		if terminal_retention_limit > 0:
+			salvage_capacity_label.text = "回收占用：%d / %d；消耗品保留 %d / %d，每件占10点。" % [used, salvage_capacity, int(authoritative.get("retained_count", 0)), terminal_retention_limit]
 
 
 func _confirm_failure_salvage() -> void:
@@ -845,8 +863,7 @@ func apply_layout_profile(profile: Dictionary) -> void:
 	var backdrop := get_node_or_null("Backdrop") as ColorRect
 	if backdrop != null:
 		backdrop.visible = true
-		backdrop.position = Vector2.ZERO
-		backdrop.size = viewport_size
+		_set_absolute_rect(backdrop, Rect2(Vector2.ZERO, viewport_size))
 	if result_modal_art != null:
 		_set_absolute_rect(result_modal_art, rect)
 	if result_modal_backing != null:

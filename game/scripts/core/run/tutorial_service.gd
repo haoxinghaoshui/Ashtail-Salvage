@@ -166,6 +166,10 @@ static func trigger_for(context: RunContext, pos: Vector2i) -> StringName:
 		"confirm_action": confirm_action,
 		"confirm_action_hint": SemanticActionHintScript.descriptor(confirm_action),
 	}
+	if trigger_id == &"spawn_intro" and context.profile_fields.get("z2_progression_version") == 1 and not context.profile_fields.get("flag_unlocked", false):
+		context.tutorial_popup["title"] = "学习插旗标记"
+		context.tutorial_popup["message"] = "你已获得100点教学天赋点。\n\n花费100点学习插旗：在区域图上标记可能有风险的房间；进入插旗房间前需要再次确认。\n\n完成教学后到达Lv1，再前往营地申领首次物资。"
+		context.tutorial_popup["confirm_text"] = "100点 · 学习插旗"
 	return trigger_id
 
 

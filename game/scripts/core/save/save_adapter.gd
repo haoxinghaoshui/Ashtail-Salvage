@@ -4,6 +4,7 @@ class_name SaveAdapter
 const M3ItemCatalogScript := preload("res://scripts/core/content/m3_item_catalog.gd")
 const M7ProgressionServiceScript := preload("res://scripts/core/progression/m7_progression_service.gd")
 const M7TalentCatalogScript := preload("res://scripts/core/progression/m7_talent_catalog.gd")
+const Z2ProgressionRulesScript := preload("res://scripts/core/progression/z2_progression_rules.gd")
 
 const M1_META_PROGRESS_PATH := "user://graytail_m1_meta_progress.json"
 const SAVE_ROOT_DIR := "user://saves"
@@ -133,6 +134,9 @@ func load_json_result(path: String = M1_META_PROGRESS_PATH, default_data: Dictio
 
 func save_json(data: Dictionary, path: String = M1_META_PROGRESS_PATH, normalize_meta_progress: bool = true) -> bool:
 	last_error = ""
+	if normalize_meta_progress and not Z2ProgressionRulesScript.profile_error(data).is_empty():
+		last_error = Z2ProgressionRulesScript.profile_error(data)
+		return false
 	_ensure_parent_dir(path)
 	var temp_path := path + ATOMIC_TEMP_SUFFIX
 	var backup_path := path + LAST_VALID_BACKUP_SUFFIX
@@ -270,6 +274,9 @@ static func z2_meta_error(meta: Dictionary) -> String:
 		return "unknown_ruleset"
 	if meta.get("schema_version") != 5:
 		return "unknown_meta_schema"
+	var progression_error := Z2ProgressionRulesScript.profile_error(meta)
+	if not progression_error.is_empty():
+		return progression_error
 	if meta.has("terminal_storage_version") and meta.terminal_storage_version != 1:
 		return "unknown_terminal_storage_version"
 	for key in ["profile_id", "content_version"]:
@@ -369,6 +376,9 @@ func _recovered_load_result(data: Dictionary, recovery_path: String, primary_sta
 
 
 func _normalize_meta_progress(data: Dictionary, fallback: Dictionary) -> Dictionary:
+	if Z2ProgressionRulesScript.applies_to(data):
+		# Current profiles own their explicit budget and receipts. Never synthesize rewards here.
+		return M7ProgressionServiceScript.normalize_meta(data)
 	var result := fallback.duplicate(true)
 	result["schema_version"] = maxi(int(data.get("schema_version", 1)), int(result.get("schema_version", 5)))
 	result["gold"] = maxi(0, int(data.get("gold", result.get("gold", 0))))

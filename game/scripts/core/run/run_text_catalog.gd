@@ -36,7 +36,7 @@ static func search_complete(black_coin: int, item_count: int, ground_count: int,
 
 
 static func mine_triggered(damage: int, pressure_delta: int) -> String:
-	return "Mine triggered: -%d HP, +%d pressure." % [damage, pressure_delta]
+	return "Mine triggered: -%d HP, %s%d pressure." % [damage, "+" if pressure_delta >= 0 else "", pressure_delta]
 
 
 static func mine_reentered() -> String:

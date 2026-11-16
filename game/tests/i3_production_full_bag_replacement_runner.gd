@@ -21,8 +21,9 @@ func _run() -> void:
 		await _finish_bag()
 		return
 
-	# The route is an offline-audited seed-13 fixture. Runtime traversal still
-	# occurs exclusively through held W/A/S/D input and public room feedback.
+	# Seed 13's current Lv1 route yields only 63 total item weight. The explicit
+	# room-floor boundary fixture supplies canonical items without changing the
+	# profile or capacities; movement, pickup and replacement still use real input.
 	_require(await _transition_room(Vector2i.RIGHT, Vector2i(3, 6), &"Chest"), "bag journey could not enter chest (3,6)")
 	await _open_and_collect_chest("bag_03_chest_a")
 	_require(await _transition_room(Vector2i.RIGHT, Vector2i(4, 6), &"Normal"), "bag journey could not enter normal (4,6)")
@@ -86,8 +87,25 @@ func _boot_run() -> bool:
 	await _click_control(start_button, "bag.deploy_confirm")
 	_require(await _wait_screen(&"run", 6.0), "bag journey did not start through real pointer input")
 	_require(int(run_scene.get("run_context").get("seed_value")) == FIXED_SEED, "bag journey lost fixed seed")
+	_prepare_capacity_boundary_room()
 	await _checkpoint("bag_02_run", "fixed-seed run admitted")
 	return StringName(run_scene.get("screen_state")) == &"run"
+
+
+func _prepare_capacity_boundary_room() -> void:
+	var context: RunContext = run_scene.get("run_context")
+	var ledger: RunAssetLedger = context.asset_ledger
+	var room := Vector2i(4, 6)
+	var item := preload("res://scripts/core/content/z2_loot_catalog.gd").definition("col_18")
+	_require(context.truth_map.get_room_type(room) == &"Normal" and not item.is_empty() and int(item.get("weight", 0)) == 20, "full-bag boundary fixture lost its canonical room or item")
+	_require(ledger.backpack_capacity == 100 and ledger.get_backpack_used() == 0, "boundary fixture must begin with an untouched empty 100-capacity backpack")
+	var initial_inventory := ledger.get_items_by_location(RunAssetLedger.LOCATION_INVENTORY).duplicate(true)
+	for index in range(6):
+		var floor_item := item.duplicate(true)
+		floor_item["instance_id"] = "full_bag_room_boundary_%d" % index
+		ledger.create_item_instance(floor_item, RunAssetLedger.LOCATION_ROOM_FLOOR, room)
+	_require(ledger.get_room_floor_items(room).size() == 6 and ledger.get_items_by_location(RunAssetLedger.LOCATION_INVENTORY) == initial_inventory, "boundary fixture must create six floor items without granting carried items")
+	setup_exceptions.append("six canonical col_18 floor items in Normal (4,6), weight20 each, for real-input capacity100 replacement; not natural loot or growth")
 
 
 func _open_and_collect_chest(checkpoint_id: String) -> void:
@@ -100,6 +118,8 @@ func _open_and_collect_chest(checkpoint_id: String) -> void:
 		await _tap_key(KEY_E, "%s.open" % checkpoint_id)
 		_require(await _wait_until(func() -> bool: return bool((_status().get("search_state_data", {}) as Dictionary).get("searched", false)), 3.0), "chest did not open through real E")
 		await _frames(18)
+	var context: RunContext = run_scene.get("run_context")
+	_require(_context_item_count() == context.asset_ledger.get_room_floor_items(context.get_current_pos()).size(), "completed chest search did not publish its exact floor contents to the popup")
 	await _checkpoint(checkpoint_id, "chest contents visible; capacity governed")
 	for _index in range(8):
 		if _context_kind() != &"chest" or _context_item_count() <= 0:

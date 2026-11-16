@@ -157,20 +157,28 @@ func _check_meta_transaction_production_chain(run_scene: Node, app_shell: Contro
 	_check(adapter != null and controller != null, "Production LongTerm transaction authority is missing")
 	if adapter == null or controller == null:
 		return
-	adapter.set_active_profile_path("user://tests/art23_long_term_main_route_transactions.json", "art23_long_term_main_route_transactions")
-	adapter.clear()
+	var manager = run_scene.get("save_manager")
+	_check(bool(manager.switch_profile("art23_claim_%d" % Time.get_ticks_usec()).get("ok", false)), "Production claim profile selection failed")
+	_check(bool(manager.configure_meta_adapter(adapter).get("ok", false)), "Production claim profile binding failed")
+	_check(bool(adapter.initialize_z2_profile(controller.Z2_CONTENT_VERSION).get("ok", false)), "Production claim profile initialization failed")
+	_check(bool(controller.initialize_z2_session(manager).get("ok", false)), "Production claim checkpoint authority failed")
+	_check(bool(preload("res://tests/z2_legacy_main_fixture.gd").start(run_scene).get("ok", false)), "Production claim ordinary exploration was not admitted")
+	var bus = run_scene.get("command_bus")
+	_check(bool(bus.dispatch(&"abandon_run", {"confirmed": true}).get("ok", false)), "Production claim ordinary exploration did not end")
+	_check(bool(bus.dispatch(&"confirm_failure_salvage", {"selected_instance_ids": []}).get("ok", false)), "Production claim terminal selection did not finalize")
+	run_scene.call("_return_from_result_to_main")
+	run_scene.call("_show_long_term_shell", &"task_archive")
+	_check(app_shell.is_visible_in_tree() and long_term.is_visible_in_tree(), "Production claim page is not visible after leaving the settled run")
 	var task_definition := M7ContentCatalogScript.task_definitions()[0] as Dictionary
 	var task_id := str(task_definition.get("id", ""))
-	var task_states := adapter.data.get("task_states", {}) as Dictionary
-	task_states[task_id] = {"status": "claimable", "progress": 1, "target": 1, "achieved": true, "claimed": false}
-	adapter.data["task_states"] = task_states
-	_check(adapter.save(), "Production LongTerm transaction seed save failed")
-	controller.bind_meta_progress_adapter(adapter)
+	_check(task_id == "M01" and adapter.get_summary().task_states.M01.status == "claimable", "Production M01 did not complete through real settlement")
 	_check(bool(run_scene.call("set_ui_scale_factor", 1.5)), "Could not scale up before the production claim")
 	app_shell.call("apply_snapshot", run_scene.call("_shell_snapshot"))
 	long_term.call("_apply_module_immediately", &"task_archive")
 	long_term.call("show_secondary", &"task")
 	long_term.call("_set_long_term_card_selected", 0)
+	# M01 has one reward step and uses the primary record action. Multi-tier
+	# achievements have separate ClaimGoalTier buttons; both return a tier identity.
 	var action_button := long_term.get("content_action_button") as Button
 	_check(action_button != null and action_button.visible and not action_button.disabled, "Production claim action is not reachable")
 	if action_button == null or not action_button.visible or action_button.disabled:
@@ -178,7 +186,7 @@ func _check_meta_transaction_production_chain(run_scene: Node, app_shell: Contro
 		return
 	var before: Dictionary = adapter.get_summary()
 	var revision_before := int((app_shell.call("get_meta_result_delivery_snapshot") as Dictionary).get("current_snapshot_revision", -1))
-	long_term.call("_on_content_action_pressed")
+	action_button.pressed.emit()
 	var state := long_term.call("get_meta_transaction_snapshot") as Dictionary
 	var result := state.get("last_result", {}) as Dictionary
 	var after: Dictionary = adapter.get_summary()
@@ -188,9 +196,9 @@ func _check_meta_transaction_production_chain(run_scene: Node, app_shell: Contro
 	_check(not bool(state.get("pending", true)), "Production claim remained pending after synchronous result")
 	_check(bool(result.get("ok", false)) and StringName(result.get("status", &"")) == &"claimed", "Production claim result was not routed back to LongTerm")
 	_check(StringName(result.get("source_page", &"")) == &"long_term" and str(result.get("request_id", "")).begins_with("long_term:"), "Production claim lost source/request correlation")
-	_check(str(result.get("target_id", "")) == "task:%s" % task_id, "Production claim lost its exact task target")
+	_check(str(result.get("target_id", "")) == "task:%s:1" % task_id, "Production claim lost its exact task/tier target")
 	_check(int(after.get("gold", -1)) == int(before.get("gold", 0)) + int(reward.get("gold", 0)), "Production claim did not grant the exact task gold once")
-	_check((after.get("claimed_reward_ids", []) as Array).has("task:%s" % task_id), "Production claim did not persist its claimed identity")
+	_check((after.get("claimed_reward_ids", []) as Array).has("z2-goal:%s:1" % task_id) and after.task_states[task_id].claimed_tiers == [1], "Production claim did not persist its canonical reward ID and claimed tier")
 	_check((long_term.get("content_record_state_label") as Label).text.contains("奖励已领取"), "Production snapshot refresh overwrote claim feedback")
 	var facts := long_term.get("content_record_facts_label") as Label
 	_check(facts.text.contains("+%d 资历经验" % int(reward.get("exp", 0))), "Production claim did not show the committed experience gain")
