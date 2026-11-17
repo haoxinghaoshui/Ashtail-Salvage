@@ -2436,6 +2436,11 @@ func _apply_game_stage_layout(layout_profile: Dictionary) -> void:
 			room_visual_center = background_sprite.position
 			if background_sprite.texture != null:
 				room_visual_size = background_sprite.texture.get_size() * background_sprite.scale.abs()
+	var b_aspect := 1.0
+	if room_runtime_view != null and room_runtime_view.b_room_view != null and room_runtime_view.b_room_view.visible:
+		b_aspect = 1.55
+		room_visual_size = Vector2(560.0 * b_aspect, 560.0 * 1.16)
+		room_visual_center = G41RuntimeLayoutScript.local_to_world(Vector2(0.5, 0.42))
 	# HUD and tutorial share the same side rails; showing a lesson must not
 	# change the world-to-screen allocation of the center room.
 	var stage_rect: Rect2 = RunSurfaceModel.layout_geometry(layout_profile).room_stage_rect
@@ -2446,11 +2451,12 @@ func _apply_game_stage_layout(layout_profile: Dictionary) -> void:
 	# Keep the existing uniform mapping for room art, player and logical bodies.
 	scale_value = clampf(scale_value, 0.32, 1.82)
 	var gameplay_center := stage_rect.get_center()
-	var origin := gameplay_center - room_visual_center * scale_value
+	var b_scale := Vector2(scale_value * b_aspect, scale_value)
+	var origin := gameplay_center - room_visual_center * b_scale
 	room_layer.position = origin
 	player_layer.position = origin
-	room_layer.scale = Vector2(scale_value, scale_value)
-	player_layer.scale = Vector2(scale_value, scale_value)
+	room_layer.scale = b_scale
+	player_layer.scale = b_scale
 
 
 func _suppress_runtime_scene_labels() -> void:

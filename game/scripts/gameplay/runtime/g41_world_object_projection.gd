@@ -77,7 +77,7 @@ static func build(snapshot: Dictionary, combat_snapshot: Dictionary = {}) -> Dic
 		"world_objects": world_objects,
 		"chest_contents": chest_contents,
 		"doors": _door_projections(snapshot, combat_snapshot, room_pos, room_key, not event_room.is_empty()),
-		"occluders": _occluder_projections(room_type, room_key, not event_room.is_empty()),
+		"occluders": [] if event_room.has("model_path") else _occluder_projections(room_type, room_key, not event_room.is_empty()),
 		"read_only": true,
 		"authority": &"public_snapshot_only",
 	}
@@ -133,6 +133,8 @@ static func _event_projection(snapshot: Dictionary, room_key: String, event_room
 	if event_room.is_empty():
 		return _descriptor(projection)
 	var room_pos: Vector2i = snapshot.get("position", snapshot.get("player_pos", Vector2i.ZERO))
+	if event_room.has("model_path"):
+		return _descriptor(preload("res://scripts/presentation/B/B_event_room_catalog.gd").project(snapshot, projection, event_room))
 	var state := EventRoomState.describe(event_type, event_state, room_pos)
 	var markers: Dictionary = state["markers"]
 	var use_open_art := bool(markers.get("cabinet_open", false)) or (event_type == &"z1_event_e24" and not bool(markers.get("cage_locked", false)))
@@ -383,6 +385,8 @@ static func room_solid_rects(room_type: StringName, event_type: StringName = &""
 			var event_room := EventRoomCatalog.room(event_type)
 			if event_room.is_empty():
 				result.assign(EVENT_PROP_RECTS)
+			elif event_room.has("model_path"):
+				result.append_array(event_room.solids)
 			else:
 				result.append(Rect2(event_room["body_rect"]))
 	for wall: Rect2 in ROOM_WALL_RECTS:
@@ -452,7 +456,10 @@ static func _loot_position_for(instance_id: String, room_type: StringName, event
 	var solids := room_solid_rects(room_type)
 	if not event_room.is_empty():
 		solids.assign(ROOM_WALL_RECTS)
-		solids.append(Rect2(event_room["body_rect"]))
+		if event_room.has("model_path"):
+			solids.append_array(event_room.solids)
+		else:
+			solids.append(Rect2(event_room["body_rect"]))
 		var drop_anchor := Vector2(event_room["loot_anchor"])
 		var walkable_floor := room_floor_interior().grow(-G41RuntimeLayout.PLAYER_BODY_RADIUS)
 		for offset_y in [0.0, 0.067, -0.067]:

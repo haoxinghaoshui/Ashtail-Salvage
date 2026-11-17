@@ -73,6 +73,7 @@ const SOUTH_DOOR_PROMPT_LIFT_LOCAL := 0.13
 # back onto the authoritative attack origin instead of subtracting it twice.
 const SLASH_SOURCE_ORIGIN := Vector2(131.0, 95.0)
 const SLASH_SOURCE_RADIUS := 113.0
+var b_room_view: Node2D
 var room_key: String = ""
 var projection_room_key: String = ""
 var room_type: StringName = &"Unknown"
@@ -143,6 +144,8 @@ func configure_room(snapshot: Dictionary) -> void:
 
 func advance(delta: float, player_local_pos: Vector2, next_combat_snapshot: Dictionary = {}) -> void:
 	last_player_local_pos = player_local_pos
+	if b_room_view != null and b_room_view.visible:
+		b_room_view.call("update_player_depth", player_local_pos)
 	if chest != null:
 		chest.advance(delta)
 	_advance_special_visuals(delta)
@@ -390,6 +393,18 @@ func _rebuild_world_projection() -> void:
 
 
 func _sync_event_room_art(room: Dictionary) -> void:
+	if room.has("model_path"):
+		if b_room_view == null:
+			b_room_view = preload("res://scripts/presentation/B/B_event_room_view.gd").new()
+			b_room_view.name = "BModelRoom"
+			add_child(b_room_view)
+		b_room_view.call("configure", room)
+		var old_layer := get_node_or_null("EventRoomDecor") as CanvasItem
+		if old_layer != null:
+			old_layer.hide()
+		return
+	if b_room_view != null:
+		b_room_view.call("deactivate")
 	var layer := get_node_or_null("EventRoomDecor") as Node2D
 	if room.is_empty():
 		if layer != null:
@@ -449,6 +464,11 @@ func _sync_door_visuals() -> void:
 			get_node("DoorVisuals").add_child(sprite)
 			door_visuals[projection_id] = sprite
 		_apply_door_visual(sprite, door)
+		if b_room_view != null and b_room_view.visible:
+			sprite.hide()
+	if b_room_view != null and b_room_view.visible:
+		b_room_view.call("apply_snapshot", latest_room_snapshot, door_projections)
+		b_room_view.call("update_player_depth", last_player_local_pos)
 	for projection_id in door_visuals.keys():
 		if active_ids.has(projection_id):
 			continue
@@ -663,6 +683,9 @@ func _update_visual_depths(player_local_pos: Vector2) -> void:
 func _apply_actor_depth(actor: CanvasItem, local_pos: Vector2) -> void:
 	if actor == null:
 		return
+	if actor is Node2D:
+		var layer := get_parent() as Node2D
+		(actor as Node2D).scale.x = layer.scale.y / maxf(0.001, layer.scale.x) if layer != null else 1.0
 	# The mine grate and exit beacon are floor effects. Preserve their shared
 	# floor ordering; upright props and combat actors use the same foot depth.
 	actor.z_index = 0 if room_type in [&"Mine", &"Exit"] else PresentationDescriptor.ground_depth(local_pos.y)
@@ -790,6 +813,17 @@ func _apply_special_art(entity, projection: Dictionary) -> void:
 		visual_root.add_child(sprite)
 	var kind := StringName(projection.get("interaction_kind", &""))
 	var payload: Dictionary = projection.get("payload", {})
+	if payload.has("B_model_path"):
+		sprite.hide()
+		var old_readout := visual_root.get_node_or_null("DeviceReadout")
+		if old_readout != null:
+			old_readout.queue_free()
+		var old_placeholder := visual_root.get_node_or_null("ProgramPlaceholder") as CanvasItem
+		if old_placeholder != null:
+			old_placeholder.hide()
+		_apply_special_prompt_visibility(entity)
+		return
+	sprite.show()
 	var texture: Texture2D
 	var uses_projected_geometry := false
 	match kind:
@@ -1429,6 +1463,17 @@ func _remove_missing_views(views: Dictionary, active_ids: Dictionary) -> void:
 func _rebuild_obstacle_projection() -> void:
 	obstacle_descriptors.clear()
 	logical_obstacles.clear()
+	if b_room_view != null and b_room_view.visible:
+		var b_room: Dictionary = world_projection.get("event_room", {})
+		var rects := WorldObjectProjectionScript.room_solid_rects(room_type, StringName(latest_room_snapshot.get("event_state", {}).get("event_type", "")))
+		for i in rects.size():
+			var solid: Rect2 = rects[i]
+			var resolved := bool(b_room_view.call("debug_snapshot").get("model_loaded", false))
+			obstacle_descriptors.append({"obstacle_id": "B:%s:%d" % [room_key, i], "body_rect": solid, "visual_footprint": solid, "collision_enabled": resolved, "visual_visible": resolved, "model_resolved": resolved, "resolved_model_path": b_room.model_path, "disable_reason": &"none" if resolved else &"model_unresolved"})
+			if resolved:
+				logical_obstacles.append(solid)
+		world_projection["obstacle_descriptors"] = obstacle_descriptors.duplicate(true)
+		return
 	if room_type == &"Event" and not (world_projection.get("event_room", {}) as Dictionary).is_empty():
 		var station = special_entities.get("event:%s" % room_key)
 		if station != null:
