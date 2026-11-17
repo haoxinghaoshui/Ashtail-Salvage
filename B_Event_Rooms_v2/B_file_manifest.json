@@ -5,14 +5,54 @@
     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   {
+    "path": "B_Runtime_Integration/B_event_room_integration_runner.log",
+    "bytes": 128,
+    "sha256": "0311d0bb5794fb9680fd1faca56521192da1e18276cf9196063c96eb2d5137c8"
+  },
+  {
+    "path": "B_Runtime_Integration/README.md",
+    "bytes": 2450,
+    "sha256": "f589ffc65706f4854d263e707d33ed648e7ca0c311dfa308c31009c5b2bc1d26"
+  },
+  {
+    "path": "B_Runtime_Integration/screenshots/B-main-after-service.png",
+    "bytes": 179212,
+    "sha256": "f22edffca2bb589de20407566a65a58af1770184f2d66f651c6c71094149eb60"
+  },
+  {
+    "path": "B_Runtime_Integration/screenshots/B-main-exploration.png",
+    "bytes": 282654,
+    "sha256": "19ab86164b0575dd84c37e7920b0ca56cfddeadd1df1d86dbd2edfccd9e83bc3"
+  },
+  {
+    "path": "B_Runtime_Integration/screenshots/dialogue-accepted.png",
+    "bytes": 198915,
+    "sha256": "cca1b9e2525fed13b949fefd6d72e12c53441b677854e395370d1e23e9017c69"
+  },
+  {
+    "path": "B_Runtime_Integration/screenshots/dialogue-open.png",
+    "bytes": 179639,
+    "sha256": "5fbf704e5e20ed3b2f6cc4729270349edd0542f7728bbd1bd69022755b79e8be"
+  },
+  {
+    "path": "B_Runtime_Integration/z1_event_room_projection_runner.log",
+    "bytes": 207,
+    "sha256": "e69dedeca624f437ac2559e62d7c862206ee8ce9b22514ce5cc1740d4e1f97cf"
+  },
+  {
+    "path": "B_Runtime_Integration/z2_event_integration_runner.log",
+    "bytes": 113,
+    "sha256": "6400b40088a32a0db1b291458e54e2f16deb6340ed4779a684f0128b126fa250"
+  },
+  {
+    "path": "B_Runtime_Integration/z2_formal_event_overlay_runner.log",
+    "bytes": 361,
+    "sha256": "2f4ede32e6147317d6cc3b310a45afe953b71c4361afad5e115da426c1e9f1d3"
+  },
+  {
     "path": "B_逐间查看渲染.html",
     "bytes": 6579,
     "sha256": "fab70975afd5615e8f385da5d4510280d029e16c9d59a4317868bbce205d4f69"
-  },
-  {
-    "path": "README.md",
-    "bytes": 5504,
-    "sha256": "f736b559330d9ca532bd60411e34b6a1fb545e8425932e6df2d167984ccf2509"
   },
   {
     "path": "blend/B23_information_preview.blend",
@@ -243,6 +283,11 @@
     "path": "checks/source_reopen_check.json",
     "bytes": 8481,
     "sha256": "0cbe6ad398b55f7477a16a544c0d603a042d9476c1794c157ad1d22d5bbd4223"
+  },
+  {
+    "path": "README.md",
+    "bytes": 5696,
+    "sha256": "11a6291527e89c6384d6589d7789c60737d20f0bd5efc29a0499d1093a41800b"
   },
   {
     "path": "renders/B23_information.png",
