@@ -32,10 +32,14 @@ const ROOM_WALL_RECTS := [
 	Rect2(0.0, 0.15, 0.125, 0.22), Rect2(0.0, 0.63, 0.125, 0.24),
 	Rect2(0.875, 0.15, 0.125, 0.22), Rect2(0.875, 0.63, 0.125, 0.24),
 ]
-const NORMAL_PROP_RECTS := [
+const NORMAL_REAR_PROP_RECTS := [
 	Rect2(0.145, 0.18, 0.055, 0.035), Rect2(0.795, 0.19, 0.06, 0.04),
+]
+const NORMAL_FRONT_PROP_RECTS := [
 	Rect2(0.135, 0.81, 0.06, 0.04), Rect2(0.79, 0.80, 0.07, 0.05),
 ]
+# The raised voxel wall cap projects farther into the room than its floor footprint.
+const VOXEL_FRONT_PROP_INSET := 0.055
 const EVENT_PROP_RECTS := [
 	Rect2(0.36, 0.445, 0.28, 0.14),
 ]
@@ -374,13 +378,19 @@ static func room_floor_interior() -> Rect2:
 	return Rect2(top_left, bottom_right - top_left)
 
 
-static func room_solid_rects(room_type: StringName, event_type: StringName = &"") -> Array[Rect2]:
+static func room_solid_rects(
+	room_type: StringName, event_type: StringName = &"", generated_voxel: bool = false
+) -> Array[Rect2]:
 	var result: Array[Rect2] = []
 	match room_type:
 		&"Monster":
 			result.append(MONSTER_ALTAR_OCCLUDER_RECT)
 		&"Normal", &"Spawn", &"Chest":
-			result.assign(NORMAL_PROP_RECTS)
+			result.assign(NORMAL_REAR_PROP_RECTS)
+			for fixture: Rect2 in NORMAL_FRONT_PROP_RECTS:
+				if generated_voxel:
+					fixture.position.y -= VOXEL_FRONT_PROP_INSET
+				result.append(fixture)
 		&"Event":
 			var event_room := EventRoomCatalog.room(event_type)
 			if event_room.is_empty():
